@@ -5,10 +5,10 @@ const API_KEY = process.env.BOOKING_API_KEY || '';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const bookingId = params.id;
+    const { id: bookingId } = await params;
 
     const response = await fetch(
       `${BOOKING_API_URL}/api/bookings/${bookingId}`,
@@ -38,10 +38,10 @@ export async function GET(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const bookingId = params.id;
+    const { id: bookingId } = await params;
 
     const response = await fetch(
       `${BOOKING_API_URL}/api/bookings/${bookingId}`,
