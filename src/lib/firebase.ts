@@ -4,13 +4,13 @@ import { getFirestore } from "firebase/firestore";
 import { getAnalytics } from "firebase/analytics";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyBrhc2KFBKfSTGZa68rd4DBmogHrLySRpU",
-  authDomain: "lumeniq-platform.firebaseapp.com",
-  projectId: "lumeniq-platform",
-  storageBucket: "lumeniq-platform.firebasestorage.app",
-  messagingSenderId: "835957076126",
-  appId: "1:835957076126:web:09d5ea0e0f9a29e0190b8f",
-  measurementId: "G-BREWDKNFSV"
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
 };
 
 // Initialize Firebase
