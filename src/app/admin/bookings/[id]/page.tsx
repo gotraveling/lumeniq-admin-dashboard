@@ -53,8 +53,8 @@ export default function BookingDetailPage() {
   const fetchBookingDetail = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/bookings/${bookingId}`);
-      
+      const response = await fetch(`/api/bookings/${bookingId}`);
+
       if (response.ok) {
         const data = await response.json();
         if (data.success) {
@@ -131,7 +131,7 @@ export default function BookingDetailPage() {
     setCancelling(true);
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/bookings/${bookingId}`, {
+      const response = await fetch(`/api/bookings/${bookingId}`, {
         method: 'DELETE',
       });
 
