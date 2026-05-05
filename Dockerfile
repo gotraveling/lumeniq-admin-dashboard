@@ -1,5 +1,6 @@
 # Multi-stage build for production
-FROM node:18-alpine AS base
+# Node 20 LTS — Next.js 15 requires >=20.9
+FROM node:20-alpine AS base
 
 # Install dependencies only when needed
 FROM base AS deps
