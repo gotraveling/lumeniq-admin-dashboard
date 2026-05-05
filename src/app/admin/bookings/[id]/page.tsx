@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Calendar, Users, Phone, Mail, MapPin, CreditCard,
   Hotel, Clock, Edit, X, RefreshCw, CheckCircle, XCircle,
-  Send, History, DollarSign, AlertTriangle,
+  Send, History, DollarSign, AlertTriangle, ThumbsUp, ThumbsDown,
 } from 'lucide-react';
 
 interface PriceBreakdown {
@@ -96,6 +96,7 @@ export default function BookingDetailPage() {
       cancelled:    { border: 'border-red-600',    icon: XCircle,      label: 'Cancelled',  color: 'text-red-600' },
       pending:      { border: 'border-yellow-600', icon: Clock,        label: 'Pending',    color: 'text-yellow-600' },
       on_request:   { border: 'border-yellow-600', icon: Clock,        label: 'On request', color: 'text-yellow-600' },
+      awaiting_supplier_confirmation: { border: 'border-amber-600', icon: Clock, label: 'Awaiting supplier', color: 'text-amber-600' },
       failed:       { border: 'border-red-600',    icon: XCircle,      label: 'Failed',     color: 'text-red-600' },
       unknown:      { border: 'border-gray-400',   icon: AlertTriangle,label: 'Unknown',    color: 'text-gray-500' },
     };
@@ -154,6 +155,36 @@ export default function BookingDetailPage() {
         await fetchBookingDetail();
       } else {
         showToast({ kind: 'error', text: d.error || `Resend failed (${r.status})` });
+      }
+    } finally { setBusy(null); }
+  };
+
+  const handleSupplierDecision = async (decision: 'confirmed' | 'cancelled') => {
+    if (!booking) return;
+    const verb = decision === 'confirmed' ? 'confirm' : 'decline';
+    const confirmationNumber = decision === 'confirmed'
+      ? (prompt('Supplier confirmation number (optional, leave blank to keep existing):') || undefined)
+      : undefined;
+    const note = prompt(`Optional note for the audit log:`) || undefined;
+    if (!confirm(`Mark this on-request booking as ${decision}?\nGuest: ${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName}\nThis is irreversible.`)) return;
+    setBusy(`supplier-${verb}`);
+    try {
+      const r = await fetch(`/api/bookings/${bookingId}/supplier-confirmation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision, confirmationNumber, note }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) {
+        showToast({
+          kind: 'success',
+          text: decision === 'confirmed'
+            ? 'Booking confirmed and customer email sent.'
+            : 'Booking declined. Remember to contact the customer personally.',
+        });
+        await fetchBookingDetail();
+      } else {
+        showToast({ kind: 'error', text: d.error || `Action failed (${r.status})` });
       }
     } finally { setBusy(null); }
   };
@@ -246,7 +277,31 @@ export default function BookingDetailPage() {
               <RefreshCw className={`h-4 w-4 ${busy === 'sync' ? 'animate-spin' : ''}`} />
               <span>{busy === 'sync' ? 'Syncing…' : 'Sync from supplier'}</span>
             </button>
-            {booking.status !== 'cancelled' && (
+            {/* On-request approval buttons — only visible while the
+                booking is waiting on the supplier. After approval the
+                row flips to 'confirmed' and the standard cancel/sync
+                actions take over. */}
+            {booking.status === 'awaiting_supplier_confirmation' && (
+              <>
+                <button
+                  onClick={() => handleSupplierDecision('confirmed')}
+                  disabled={!!busy}
+                  className="flex items-center space-x-1 px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  <ThumbsUp className="h-4 w-4" />
+                  <span>{busy === 'supplier-confirm' ? 'Confirming…' : 'Mark Confirmed'}</span>
+                </button>
+                <button
+                  onClick={() => handleSupplierDecision('cancelled')}
+                  disabled={!!busy}
+                  className="flex items-center space-x-1 px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                >
+                  <ThumbsDown className="h-4 w-4" />
+                  <span>{busy === 'supplier-decline' ? 'Declining…' : 'Decline'}</span>
+                </button>
+              </>
+            )}
+            {booking.status !== 'cancelled' && booking.status !== 'awaiting_supplier_confirmation' && (
               <button
                 onClick={handleCancel}
                 disabled={!!busy}

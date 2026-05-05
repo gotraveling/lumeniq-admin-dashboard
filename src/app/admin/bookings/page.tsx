@@ -280,6 +280,13 @@ export default function BookingsPage() {
             <span>Pending</span>
           </div>
         );
+      case 'awaiting_supplier_confirmation':
+        return (
+          <div className="flex items-center space-x-1 px-2 py-1 bg-amber-50 border border-amber-600 text-amber-900 text-xs rounded-full">
+            <Clock className="h-3 w-3 text-amber-600" />
+            <span>Awaiting supplier</span>
+          </div>
+        );
       default:
         return <span className="text-gray-400">{status}</span>;
     }
@@ -381,6 +388,7 @@ export default function BookingsPage() {
           >
             <option value="all">All Status</option>
             <option value="confirmed">Confirmed</option>
+            <option value="awaiting_supplier_confirmation">Awaiting supplier</option>
             <option value="pending">Pending</option>
             <option value="cancelled">Cancelled</option>
           </select>
