@@ -8,7 +8,6 @@
 steps:
   # Step 1: Build with layer cache
   - name: 'gcr.io/cloud-builders/docker'
-    dir: 'admin-dashboard'
     args:
       - 'build'
       - '--cache-from'
