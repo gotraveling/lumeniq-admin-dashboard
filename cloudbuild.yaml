@@ -1,0 +1,94 @@
+# Cloud Build for the LumenIQ hotel-admin-dashboard.
+# Same shape as firstclass-next/cloudbuild.yaml so we run on Artifact
+# Registry in australia-southeast1 and stay consistent across the FC
+# Cloud Run estate. Service name is `hotel-admin-dashboard` (not the
+# generic `admin-dashboard`) to make it explicit that this is the hotel
+# back-office, separate from any other admin surface.
+
+steps:
+  # Step 1: Build with layer cache
+  - name: 'gcr.io/cloud-builders/docker'
+    dir: 'admin-dashboard'
+    args:
+      - 'build'
+      - '--cache-from'
+      - 'australia-southeast1-docker.pkg.dev/travelx-451306/firstclass/hotel-admin-dashboard:latest'
+      - '-t'
+      - 'australia-southeast1-docker.pkg.dev/travelx-451306/firstclass/hotel-admin-dashboard:$BUILD_ID'
+      - '-t'
+      - 'australia-southeast1-docker.pkg.dev/travelx-451306/firstclass/hotel-admin-dashboard:latest'
+      - '--build-arg'
+      - 'BUILDKIT_INLINE_CACHE=1'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_API_URL=https://booking-engine-api-91901273027.us-central1.run.app'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_HOTEL_API_URL=https://hotel-api-91901273027.us-central1.run.app'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_APP_NAME=LumenIQ'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_COMPANY=EquationX'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSyBrhc2KFBKfSTGZa68rd4DBmogHrLySRpU'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=lumeniq-platform.firebaseapp.com'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_FIREBASE_PROJECT_ID=lumeniq-platform'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=lumeniq-platform.firebasestorage.app'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=835957076126'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_FIREBASE_APP_ID=1:835957076126:web:09d5ea0e0f9a29e0190b8f'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=G-BREWDKNFSV'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_ENVIRONMENT=production'
+      - '.'
+    id: 'build-image'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'australia-southeast1-docker.pkg.dev/travelx-451306/firstclass/hotel-admin-dashboard:$BUILD_ID'
+    id: 'push-image'
+    waitFor: ['build-image']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'australia-southeast1-docker.pkg.dev/travelx-451306/firstclass/hotel-admin-dashboard:latest'
+    id: 'push-latest'
+    waitFor: ['build-image']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'hotel-admin-dashboard'
+      - '--image'
+      - 'australia-southeast1-docker.pkg.dev/travelx-451306/firstclass/hotel-admin-dashboard:$BUILD_ID'
+      - '--region=australia-southeast1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--port=3000'
+      - '--memory=512Mi'
+      - '--cpu=1'
+      - '--timeout=300'
+      - '--concurrency=80'
+      - '--max-instances=5'
+      - '--set-env-vars=NODE_ENV=production,NEXT_PUBLIC_API_URL=https://booking-engine-api-91901273027.us-central1.run.app,NEXT_PUBLIC_HOTEL_API_URL=https://hotel-api-91901273027.us-central1.run.app,HOTEL_API_URL=https://hotel-api-91901273027.us-central1.run.app'
+      - '--update-secrets=BOOKING_API_KEY=BOOKING_API_KEY:latest'
+    id: 'deploy-cloud-run'
+    waitFor: ['push-image']
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+  dynamicSubstitutions: true
+
+images:
+  - 'australia-southeast1-docker.pkg.dev/travelx-451306/firstclass/hotel-admin-dashboard:$BUILD_ID'
+  - 'australia-southeast1-docker.pkg.dev/travelx-451306/firstclass/hotel-admin-dashboard:latest'
+
+timeout: '900s'
