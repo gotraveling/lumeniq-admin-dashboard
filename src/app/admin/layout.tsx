@@ -86,6 +86,7 @@ export default function AdminLayout({
 
     const commonItems = [
       { name: 'My Bookings', href: '/admin/bookings', icon: Hotel, description: 'Tenant bookings' },
+      { name: 'Search Activity', href: '/admin/search-activity', icon: BarChart3, description: 'Live search log + per-supplier health' },
       { name: 'Browse Hotels', href: '/admin/inventory/browse', icon: BarChart3, description: 'Browse hotel inventory' },
       { name: 'Editorial Content', href: '/admin/hotels/editorial', icon: Sparkles, description: 'Manage hotel content, media & reviews' },
       { name: 'Hotel Visibility', href: '/admin/hotels/visibility', icon: EyeOff, description: 'Control hotel visibility & rules' },
