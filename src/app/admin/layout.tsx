@@ -8,7 +8,6 @@ import { auth } from '@/lib/firebase';
 import {
   LayoutDashboard,
   Hotel,
-  Users,
   Settings,
   Building2,
   BarChart3,
@@ -93,7 +92,6 @@ export default function AdminLayout({
       { name: 'Pricing Rules', href: '/admin/inventory/pricing', icon: Percent, description: 'Manage markup rules' },
       { name: 'Display Overrides', href: '/admin/inventory/display-overrides', icon: DollarSign, description: 'Manual "from prices"' },
       { name: 'Suppliers', href: '/admin/suppliers', icon: Globe, description: 'Manage API suppliers' },
-      // { name: 'Users', href: '/admin/users', icon: Users, description: 'Manage tenant users' }, // Hidden - mock data
       { name: 'Settings', href: '/admin/tenant-settings', icon: Settings, description: 'Tenant configuration' }
     ];
 

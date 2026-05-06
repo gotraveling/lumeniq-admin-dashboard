@@ -45,6 +45,9 @@ export default function BookingsPage() {
   const [tenantFilter, setTenantFilter] = useState('all');
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [cancellingBooking, setCancellingBooking] = useState<string | null>(null);
+  // Surface API failures explicitly instead of silently substituting mock
+  // data — silent fakery hides real outages from staff watching this page.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -155,95 +158,25 @@ export default function BookingsPage() {
             filteredData = transformedData.filter((booking: Booking) => booking.tenant_id === claims.tenant_id);
           }
           setBookings(filteredData);
+          setLoadError(null);
         } else {
-          console.log('Invalid API response structure, using mock data');
-          setBookings(getMockBookings(claims));
+          console.warn('[bookings] unexpected API response structure', apiResponse);
+          setBookings([]);
+          setLoadError('Bookings API returned an unexpected response. The backend may be misconfigured.');
         }
       } else {
-        console.log('API not available, using mock data');
-        setBookings(getMockBookings(claims));
+        const text = await response.text().catch(() => '');
+        console.error(`[bookings] API ${response.status}`, text.slice(0, 200));
+        setBookings([]);
+        setLoadError(`Couldn't reach the bookings API (HTTP ${response.status}). Refresh to retry, or check booking-engine status.`);
       }
     } catch (error) {
-      console.error('Error fetching bookings from API:', error);
-      console.log('Falling back to mock data');
-      setBookings(getMockBookings(claims));
+      console.error('[bookings] fetch error:', error);
+      setBookings([]);
+      setLoadError('Network error while loading bookings. Refresh to retry.');
     } finally {
       setLoading(false);
     }
-  };
-
-  const getMockBookings = (claims: UserClaims): Booking[] => {
-    const allBookings = [
-      {
-        id: '1',
-        tenant_id: 'firstclass',
-        tenant_name: 'FirstClass Travel',
-        guest_name: 'John Smith',
-        guest_email: 'john.smith@example.com',
-        guest_phone: '+61 400 123 456',
-        hotel_id: 'H001',
-        hotel_name: 'Conrad Maldives Rangali Island',
-        room_type: 'Beach Villa',
-        check_in_date: '2024-03-15',
-        check_out_date: '2024-03-20',
-        guests: 2,
-        total_amount: 4500.00,
-        currency: 'AUD',
-        status: 'confirmed' as const,
-        booking_reference: 'FC001234',
-        supplier_reference: 'SUP789012',
-        created_at: '2024-02-28T10:30:00Z',
-        updated_at: '2024-02-28T10:30:00Z'
-      },
-      {
-        id: '2',
-        tenant_id: 'firstclass',
-        tenant_name: 'FirstClass Travel',
-        guest_name: 'Sarah Johnson',
-        guest_email: 'sarah.j@email.com',
-        guest_phone: '+61 400 987 654',
-        hotel_id: 'H002',
-        hotel_name: 'One&Only Reethi Rah',
-        room_type: 'Water Villa',
-        check_in_date: '2024-04-10',
-        check_out_date: '2024-04-17',
-        guests: 2,
-        total_amount: 6200.00,
-        currency: 'AUD',
-        status: 'confirmed' as const,
-        booking_reference: 'FC001235',
-        supplier_reference: 'SUP789013',
-        created_at: '2024-03-01T14:15:00Z',
-        updated_at: '2024-03-01T14:15:00Z'
-      },
-      {
-        id: '3',
-        tenant_id: 'equationx',
-        tenant_name: 'EquationX',
-        guest_name: 'Michael Brown',
-        guest_email: 'mbrown@equationx.com',
-        guest_phone: '+1 555 123 4567',
-        hotel_id: 'H003',
-        hotel_name: 'St. Regis Maldives Vommuli Resort',
-        room_type: 'Overwater Villa',
-        check_in_date: '2024-05-22',
-        check_out_date: '2024-05-29',
-        guests: 4,
-        total_amount: 8900.00,
-        currency: 'USD',
-        status: 'pending' as const,
-        booking_reference: 'EQX000567',
-        created_at: '2024-03-05T09:20:00Z',
-        updated_at: '2024-03-05T09:20:00Z'
-      }
-    ];
-
-    // Filter based on user role
-    if (claims.role !== 'super_admin' && claims.tenant_id) {
-      return allBookings.filter(booking => booking.tenant_id === claims.tenant_id);
-    }
-    
-    return allBookings;
   };
 
   const filteredBookings = bookings.filter(booking => {
@@ -350,6 +283,16 @@ export default function BookingsPage() {
 
   return (
     <div className="p-8 space-y-6">
+      {loadError && (
+        <div className="rounded-lg border border-red-300 bg-red-50 p-4 flex items-start gap-3">
+          <div className="flex-shrink-0 mt-0.5 w-2 h-2 rounded-full bg-red-500" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-red-900">Couldn&apos;t load bookings</p>
+            <p className="text-xs text-red-800 mt-0.5">{loadError}</p>
+          </div>
+        </div>
+      )}
+
       {/* Stats Header */}
       <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
         <div className="flex items-center justify-between">
