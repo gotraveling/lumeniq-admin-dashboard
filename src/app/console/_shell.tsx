@@ -1,7 +1,8 @@
 'use client';
 
+import { useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
 import {
@@ -40,7 +41,30 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
 
 export function ConsoleShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const [user] = useAuthState(auth);
+  const router = useRouter();
+  const [user, loading] = useAuthState(auth);
+
+  // Same auth gate /admin uses — push the visitor to /auth/login the
+  // moment we know they're not signed in. Without this, /console/*
+  // pages were rendering shell + (possibly empty) content for anon
+  // visitors.
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/auth/login');
+    }
+  }, [loading, user, router]);
+
+  // Block render until firebase has answered. Otherwise the shell
+  // flashes briefly before the redirect on slow connections — that
+  // 'just enough to see' window is exactly what raised the question
+  // about why pages render without login.
+  if (loading || !user) {
+    return (
+      <div className="console-shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="c-loading">Checking sign-in…</div>
+      </div>
+    );
+  }
 
   const crumbs = buildCrumbs(pathname);
 
@@ -79,16 +103,14 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
             <Link href="/admin" className="c-nav-link">
               <Settings size={15} /> Legacy admin
             </Link>
-            {user && (
-              <button
-                type="button"
-                onClick={() => auth.signOut()}
-                className="c-nav-link"
-                style={{ background: 'transparent', border: 0, width: '100%', textAlign: 'left' }}
-              >
-                <LogOut size={15} /> Sign out
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => auth.signOut().then(() => router.push('/auth/login'))}
+              className="c-nav-link"
+              style={{ background: 'transparent', border: 0, width: '100%', textAlign: 'left' }}
+            >
+              <LogOut size={15} /> Sign out
+            </button>
           </div>
         </nav>
       </aside>
@@ -108,14 +130,8 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
           <div className="c-userbox">
-            {user ? (
-              <>
-                <span className="dot" />
-                <span>{user.email}</span>
-              </>
-            ) : (
-              <span style={{ color: 'var(--c-fg-muted)' }}>Not signed in</span>
-            )}
+            <span className="dot" />
+            <span>{user.email}</span>
           </div>
         </header>
         <main className="c-content">{children}</main>
