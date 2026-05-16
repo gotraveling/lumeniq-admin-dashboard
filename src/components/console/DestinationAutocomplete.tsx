@@ -80,14 +80,13 @@ export default function DestinationAutocomplete({ value, onChange, onSelectHotel
           borderRadius: 8, boxShadow: '0 12px 28px rgba(0,0,0,0.12)',
           maxHeight: 360, overflow: 'auto', zIndex: 100
         }}>
-          {hotels.length > 0 && (
-            <Group label="Hotels" icon={<Hotel size={11} />}>
-              {hotels.map((h: any) => (
-                <Row key={`h-${h.id}`} onClick={() => { onChange(h.name); onSelectHotel?.(h); setOpen(false); }}>
-                  <strong style={{ fontWeight: 600 }}>{h.name}</strong>
-                  <span style={{ color: 'var(--c-fg-muted)', marginLeft: 6, fontSize: 12 }}>
-                    {[h.city, h.country].filter(Boolean).join(', ')}
-                  </span>
+          {/* Destinations first — consultants overwhelmingly start with
+              a city or country, hotel-name searches are the minority. */}
+          {countries.length > 0 && (
+            <Group label="Countries" icon={<Globe2 size={11} />}>
+              {countries.map((c: any) => (
+                <Row key={`co-${c.id}`} onClick={() => { onChange(c.name); onSelectCountry?.(c.name); setOpen(false); }}>
+                  <strong style={{ fontWeight: 600 }}>{c.name}</strong>
                 </Row>
               ))}
             </Group>
@@ -102,11 +101,14 @@ export default function DestinationAutocomplete({ value, onChange, onSelectHotel
               ))}
             </Group>
           )}
-          {countries.length > 0 && (
-            <Group label="Countries" icon={<Globe2 size={11} />}>
-              {countries.map((c: any) => (
-                <Row key={`co-${c.id}`} onClick={() => { onChange(c.name); onSelectCountry?.(c.name); setOpen(false); }}>
-                  <strong style={{ fontWeight: 600 }}>{c.name}</strong>
+          {hotels.length > 0 && (
+            <Group label="Hotels" icon={<Hotel size={11} />}>
+              {hotels.map((h: any) => (
+                <Row key={`h-${h.id}`} onClick={() => { onChange(h.name); onSelectHotel?.(h); setOpen(false); }}>
+                  <strong style={{ fontWeight: 600 }}>{h.name}</strong>
+                  <span style={{ color: 'var(--c-fg-muted)', marginLeft: 6, fontSize: 12 }}>
+                    {[h.city, h.country].filter(Boolean).join(', ')}
+                  </span>
                 </Row>
               ))}
             </Group>

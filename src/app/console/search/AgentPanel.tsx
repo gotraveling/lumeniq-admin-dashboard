@@ -16,13 +16,17 @@ import { useState } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { Send, Sparkles, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 type Props = {
   /** Called when a tool returns a list of hotels so the canvas can hydrate. */
   onHotelsFound?: (hits: any[]) => void;
+  /** Click-to-open a specific hotel directly from inside an agent tool result. */
+  onHotelClick?:  (hotel: { id: number; name?: string; city?: string; country?: string; image?: string | null }) => void;
 };
 
-export default function AgentPanel({ onHotelsFound }: Props) {
+export default function AgentPanel({ onHotelsFound, onHotelClick }: Props) {
   const [input, setInput] = useState('');
   const { messages, sendMessage, status } = useChat({
     transport: new DefaultChatTransport({ api: '/api/console/agent/stream' }),
@@ -84,10 +88,14 @@ export default function AgentPanel({ onHotelsFound }: Props) {
             </div>
             {(m.parts || []).map((p: any, i: number) => {
               if (p.type === 'text') {
-                return <div key={i} style={{ whiteSpace: 'pre-wrap' }}>{p.text}</div>;
+                return (
+                  <div key={i} className="agent-md">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{p.text}</ReactMarkdown>
+                  </div>
+                );
               }
               if (typeof p.type === 'string' && p.type.startsWith('tool-')) {
-                return <ToolChip key={i} part={p} />;
+                return <ToolChip key={i} part={p} onHotelClick={onHotelClick} />;
               }
               return null;
             })}
@@ -139,10 +147,15 @@ export default function AgentPanel({ onHotelsFound }: Props) {
  * Collapsed tool-call chip — Perplexity-style. Single line by default
  * with a chevron; click to expand the full input + output JSON.
  */
-function ToolChip({ part }: { part: any }) {
+function ToolChip({ part, onHotelClick }: { part: any; onHotelClick?: Props['onHotelClick'] }) {
   const [open, setOpen] = useState(false);
   const toolName = String(part.type || '').replace('tool-', '');
   const out = part.output || {};
+  // Pull clickable hotels out of whichever shape the tool returned.
+  const hotelsFromOutput: Array<{ id: number; name?: string; city?: string; country?: string; image?: string | null; supplier?: string }> = [];
+  if (Array.isArray(out.hits))    hotelsFromOutput.push(...out.hits);
+  if (Array.isArray(out.results)) hotelsFromOutput.push(...out.results.map((r: any) => ({ id: r.hotelId, name: r.hotel?.name, city: r.hotel?.city, country: r.hotel?.country, supplier: r.supplier })));
+
   let summary = '';
   if (out.hits)    summary = `${out.hits.length} hotels`;
   if (out.rates)   summary = `${out.rates.length} rates`;
@@ -166,7 +179,32 @@ function ToolChip({ part }: { part: any }) {
         {!open && inputBrief && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>· {inputBrief}</span>}
         {summary && <span style={{ marginLeft: 'auto', color: out.error ? 'var(--c-danger)' : 'var(--c-fg-muted)' }}>{summary}</span>}
       </button>
-      {open && (
+
+      {open && hotelsFromOutput.length > 0 && (
+        <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4, fontFamily: 'var(--c-fg, sans-serif)' }}>
+          {hotelsFromOutput.slice(0, 10).map((h, i) => (
+            <button
+              key={`${h.id}-${i}`}
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onHotelClick?.(h); }}
+              style={{
+                textAlign: 'left', background: 'var(--c-bg-soft)', border: '1px solid var(--c-line-soft)',
+                borderRadius: 4, padding: '6px 8px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'inherit'
+              }}
+              title="Open in canvas"
+            >
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-fg)' }}>{h.name || `Hotel #${h.id}`}</span>
+              <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>
+                {[h.city, h.country].filter(Boolean).join(', ')}
+              </span>
+              <span style={{ marginLeft: 'auto', fontSize: 10.5, color: 'var(--c-accent)', fontWeight: 600 }}>Open →</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {open && hotelsFromOutput.length === 0 && (
         <pre style={{ marginTop: 6, marginBottom: 0, fontSize: 10.5, lineHeight: 1.45, whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 240, background: 'var(--c-bg-soft)', padding: 8, borderRadius: 4 }}>
 {JSON.stringify({ input: part.input, output: part.output }, null, 2)}
         </pre>

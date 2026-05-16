@@ -582,11 +582,23 @@ export default function ConsoleSearchPage() {
 
       {/* Right-column agent panel — always present, never overlapped by booking */}
       <div style={{ position: 'sticky', top: 52, alignSelf: 'start' }}>
-        <AgentPanel onHotelsFound={(found) => {
-          const ids = found.map((h: any) => h.id);
-          setHits(found.map((h: any) => ({ id: h.id, name: h.name, city: h.city, country: h.country, starRating: h.starRating, image: h.image, sources: h.sources || [] })));
-          void enrichPrices(ids);
-        }} />
+        <AgentPanel
+          onHotelsFound={(found) => {
+            const ids = found.map((h: any) => h.id);
+            setHits(found.map((h: any) => ({ id: h.id, name: h.name, city: h.city, country: h.country, starRating: h.starRating, image: h.image, sources: h.sources || [] })));
+            void enrichPrices(ids);
+          }}
+          onHotelClick={(h) => {
+            // Click-through from the agent's tool result directly into
+            // the canvas detail view. If the hotel isn't yet in `hits`
+            // (the agent may have surfaced something via compare we
+            // never put on the left), seed it before opening.
+            const existing = hits.find(x => x.id === h.id);
+            const hit = existing || { id: h.id, name: h.name || '', city: h.city, country: h.country, image: h.image || null, sources: [], starRating: undefined };
+            if (!existing) setHits(curr => [hit, ...curr]);
+            void openHotel(hit);
+          }}
+        />
       </div>
     </div>
   );
