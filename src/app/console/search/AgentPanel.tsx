@@ -14,6 +14,7 @@
 
 import { useState } from 'react';
 import { useChat } from '@ai-sdk/react';
+import { DefaultChatTransport } from 'ai';
 import { Send, Sparkles, Loader2 } from 'lucide-react';
 
 type Props = {
@@ -24,7 +25,7 @@ type Props = {
 export default function AgentPanel({ onHotelsFound }: Props) {
   const [input, setInput] = useState('');
   const { messages, sendMessage, status } = useChat({
-    api: '/api/console/agent/stream',
+    transport: new DefaultChatTransport({ api: '/api/console/agent/stream' }),
     onFinish: ({ message }: { message: any }) => {
       // If a search_hotels tool produced hits, propagate them to the canvas.
       const parts = message.parts || [];
