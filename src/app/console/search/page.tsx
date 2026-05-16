@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Search, Star, MapPin, Loader2, X, Sparkles } from 'lucide-react';
+import AgentPanel from './AgentPanel';
 
 // Prompt pills the consultant can tap to pre-fill the form. v1 is just
 // presets — once the MCP/LLM piece lands these become real prompts that
@@ -116,7 +117,8 @@ export default function ConsoleSearchPage() {
   }
 
   return (
-    <>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 380px', gap: 20, alignItems: 'start' }}>
+      <div>
       <div className="c-page-head">
         <div>
           <h1 className="c-page-title">B2B Search</h1>
@@ -377,7 +379,20 @@ export default function ConsoleSearchPage() {
           </div>
         </div>
       )}
-    </>
+      </div>
+
+      {/* Right-side agent chat. Stays out of the way until the consultant
+          asks something. When the agent runs search_hotels its hits
+          hydrate the canvas on the left via onHotelsFound. */}
+      <div style={{ position: 'sticky', top: 52, alignSelf: 'start' }}>
+        <AgentPanel onHotelsFound={(found) => {
+          setHits(found.map((h: any) => ({
+            id: h.id, name: h.name, city: h.city, country: h.country,
+            starRating: h.starRating, image: h.image, sources: h.sources || []
+          })));
+        }} />
+      </div>
+    </div>
   );
 }
 
