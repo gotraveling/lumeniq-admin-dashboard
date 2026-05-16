@@ -1,7 +1,9 @@
 'use client';
 
-import { useState } from 'react';
-import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { useAuthState } from 'react-firebase-hooks/auth';
+import { auth } from '@/lib/firebase';
+import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle } from 'lucide-react';
 import AgentPanel from './AgentPanel';
 import DestinationAutocomplete from '@/components/console/DestinationAutocomplete';
 import DateRangePicker from '@/components/console/DateRangePicker';
@@ -53,6 +55,8 @@ function todayPlus(days: number) {
 }
 
 export default function ConsoleSearchPage() {
+  const [user] = useAuthState(auth);
+
   // ─── Form state ─────────────────────────────────────────────
   const [q, setQ]               = useState('');
   const [checkIn, setCheckIn]   = useState(todayPlus(30));
@@ -65,12 +69,27 @@ export default function ConsoleSearchPage() {
   const [enrichingPrices, setEnriching] = useState(false);
   const [searchErr, setSearchErr]       = useState<string | null>(null);
 
+  // ─── Result filters ─────────────────────────────────────────
+  const [filterSupplier,   setFilterSupplier]   = useState<'all' | 'ratehawk' | 'hummingbird'>('all');
+  const [filterRefundable, setFilterRefundable] = useState(false);
+
   // ─── In-canvas detail view (Pattern A — no slide-out) ───────
   const [detailHotel, setDetailHotel]   = useState<HotelHit | null>(null);
   const [rates, setRates]               = useState<AdminRate[]>([]);
   const [ratesBusy, setRatesBusy]       = useState(false);
   const [ratesErr, setRatesErr]         = useState<string | null>(null);
   const [chosenRate, setChosenRate]     = useState<AdminRate | null>(null);
+  // Inline edit-search on the detail header.
+  const [editingSearch, setEditingSearch] = useState(false);
+
+  // ─── Book-on-behalf form ────────────────────────────────────
+  const [custFirst, setCustFirst] = useState('');
+  const [custLast,  setCustLast]  = useState('');
+  const [custEmail, setCustEmail] = useState('');
+  const [custPhone, setCustPhone] = useState('');
+  const [bookingBusy,   setBookingBusy]   = useState(false);
+  const [bookingErr,    setBookingErr]    = useState<string | null>(null);
+  const [bookingResult, setBookingResult] = useState<any>(null);
 
   // ───────────────────────────────────────────────────────────
   async function runSearch(qOverride?: string) {
@@ -149,6 +168,12 @@ export default function ConsoleSearchPage() {
   async function openHotel(h: HotelHit) {
     setDetailHotel(h);
     setChosenRate(null);
+    setBookingResult(null);
+    setBookingErr(null);
+    void loadRatesFor(h);
+  }
+
+  async function loadRatesFor(h: HotelHit) {
     setRatesBusy(true);
     setRatesErr(null);
     setRates([]);
@@ -166,6 +191,61 @@ export default function ConsoleSearchPage() {
       setRatesBusy(false);
     }
   }
+
+  async function confirmBooking() {
+    if (!detailHotel || !chosenRate) return;
+    if (!custFirst.trim() || !custLast.trim() || !custEmail.trim()) {
+      setBookingErr('Customer first name, last name and email are required.');
+      return;
+    }
+    setBookingBusy(true);
+    setBookingErr(null);
+    setBookingResult(null);
+    try {
+      const totalAdults = rooms.reduce((s, r) => s + r.adults, 0);
+      const allChildAges = rooms.flatMap(r => r.childrenAges);
+      const payload = {
+        hotelId: detailHotel.id,
+        rateKey: chosenRate.rateKey,
+        guestInfo:   { firstName: custFirst.trim(), lastName: custLast.trim(), email: custEmail.trim(), phone: custPhone.trim() || undefined },
+        contactInfo: { firstName: custFirst.trim(), lastName: custLast.trim(), email: custEmail.trim(), phone: custPhone.trim() || undefined },
+        searchParams: {
+          checkIn, checkOut,
+          adults:       totalAdults,
+          children:     allChildAges.length,
+          childrenAges: allChildAges,
+          rooms:        rooms.length,
+          guests:       rooms.map(r => ({ adults: r.adults, children: r.childrenAges })),
+          nationalityCode: 'AU'
+        },
+        specialRequests:     'B2B book-on-behalf via console',
+        expectedTotalAmount: chosenRate.pricing.sell?.totalAmount,
+        expectedCurrency:    chosenRate.pricing.currency,
+        availabilityType:    'free_sell'
+      };
+      const res = await fetch('/api/admin/bookings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-consultant-email': user?.email || '' },
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || json.details || 'Booking failed');
+      setBookingResult(json.data);
+    } catch (e: any) {
+      setBookingErr(e.message || 'Booking failed');
+    } finally {
+      setBookingBusy(false);
+    }
+  }
+
+  // ─── filter computation ─────────────────────────────────────
+  const filteredHits = useMemo(() => {
+    return hits.filter(h => {
+      if (filterSupplier !== 'all' && !h.sources.includes(filterSupplier)) return false;
+      if (filterRefundable && h.priced && h.priced.available && !h.priced.refundable) return false;
+      return true;
+    });
+  }, [hits, filterSupplier, filterRefundable]);
 
   // ───────────────────────────────────────────────────────────
   return (
@@ -195,7 +275,36 @@ export default function ConsoleSearchPage() {
                   {' · '}{checkIn} → {checkOut}{' · '}
                   {rooms.reduce((s, r) => s + r.adults, 0)} adult{rooms.reduce((s, r) => s + r.adults, 0) > 1 ? 's' : ''}
                   {' · '}{rooms.length} room{rooms.length > 1 ? 's' : ''}
+                  {' · '}
+                  <button
+                    onClick={() => setEditingSearch(s => !s)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--c-accent)', background: 'none', border: 0, cursor: 'pointer', padding: 0, fontWeight: 600 }}
+                  >
+                    <Pencil size={11} /> Edit
+                  </button>
                 </p>
+                {editingSearch && (
+                  <div className="c-card" style={{ padding: 14, marginTop: 12, maxWidth: 720 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.4fr auto', gap: 10, alignItems: 'end' }}>
+                      <div>
+                        <label style={labelStyle}>Dates</label>
+                        <DateRangePicker checkIn={checkIn} checkOut={checkOut} onChange={({ checkIn, checkOut }) => { setCheckIn(checkIn); setCheckOut(checkOut); }} />
+                      </div>
+                      <div>
+                        <label style={labelStyle}>Guests</label>
+                        <GuestSelector rooms={rooms} onChange={setRooms} />
+                      </div>
+                      <button
+                        className="c-btn c-btn-primary"
+                        onClick={() => { void loadRatesFor(detailHotel); setEditingSearch(false); }}
+                        disabled={ratesBusy}
+                      >
+                        {ratesBusy ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
+                        Re-check rates
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -271,13 +380,37 @@ export default function ConsoleSearchPage() {
         {/* Results list */}
         {!detailHotel && hits.length > 0 && (
           <>
-            {enrichingPrices && (
-              <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginBottom: 8, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <Loader2 size={12} className="animate-spin" /> Loading prices…
+            {/* Filter row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+              <Filter size={13} style={{ color: 'var(--c-fg-muted)' }} />
+              <div style={{ display: 'flex', gap: 4 }}>
+                {(['all','ratehawk','hummingbird'] as const).map(s => (
+                  <button
+                    key={s}
+                    onClick={() => setFilterSupplier(s)}
+                    style={{
+                      fontSize: 12, padding: '4px 12px', borderRadius: 999,
+                      border: '1px solid var(--c-line)', cursor: 'pointer',
+                      background: filterSupplier === s ? 'var(--c-accent-soft)' : 'var(--c-bg)',
+                      color: filterSupplier === s ? 'var(--c-fg)' : 'var(--c-fg-soft)',
+                      fontWeight: filterSupplier === s ? 600 : 500,
+                      textTransform: s === 'all' ? 'none' : 'capitalize'
+                    }}
+                  >{s === 'all' ? 'All suppliers' : s}</button>
+                ))}
               </div>
-            )}
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: 'var(--c-fg-soft)' }}>
+                <input type="checkbox" checked={filterRefundable} onChange={(e) => setFilterRefundable(e.target.checked)} />
+                Refundable only
+              </label>
+              <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginLeft: 'auto' }}>
+                {filteredHits.length} of {hits.length} hotels
+                {enrichingPrices && <span> · <Loader2 size={11} style={{ verticalAlign: 'middle' }} className="animate-spin" /> loading prices…</span>}
+              </span>
+            </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
-              {hits.map((h) => (
+              {filteredHits.map((h) => (
                 <button
                   key={h.id}
                   onClick={() => openHotel(h)}
@@ -377,23 +510,60 @@ export default function ConsoleSearchPage() {
               </div>
             )}
 
-            {chosenRate && (
+            {chosenRate && !bookingResult && (
               <div>
-                <button onClick={() => setChosenRate(null)} style={{ ...iconBtnStyle, marginBottom: 14, padding: '4px 10px', fontSize: 12 }}>
+                <button onClick={() => { setChosenRate(null); setBookingErr(null); }} style={{ ...iconBtnStyle, marginBottom: 14, padding: '4px 10px', fontSize: 12 }}>
                   ← Back to rates
                 </button>
                 <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Booking on behalf of customer</div>
                 <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', marginBottom: 14 }}>
                   {chosenRate.roomTypeName} · {chosenRate.ratePlan} · {fmtMoney(chosenRate.pricing.sell?.totalAmount)} {chosenRate.pricing.currency}
                 </div>
+                {bookingErr && (
+                  <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6, color: 'var(--c-danger)', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    <AlertTriangle size={14} /> {bookingErr}
+                  </div>
+                )}
                 <div style={{ display: 'grid', gap: 10, maxWidth: 480 }}>
-                  <div><label style={labelStyle}>Customer first name</label><input style={inputStyle} placeholder="First name" /></div>
-                  <div><label style={labelStyle}>Customer last name</label><input style={inputStyle} placeholder="Last name" /></div>
-                  <div><label style={labelStyle}>Customer email</label><input style={inputStyle} type="email" placeholder="customer@example.com" /></div>
-                  <div><label style={labelStyle}>Customer phone</label><input style={inputStyle} type="tel" placeholder="+61 ..." /></div>
-                  <button className="c-btn c-btn-primary" disabled title="POST /api/admin/bookings — coming next" style={{ marginTop: 6, justifyContent: 'center', opacity: 0.55 }}>
-                    Confirm booking (endpoint pending)
+                  <div><label style={labelStyle}>Customer first name</label><input style={inputStyle} value={custFirst} onChange={(e) => setCustFirst(e.target.value)} placeholder="First name" /></div>
+                  <div><label style={labelStyle}>Customer last name</label><input style={inputStyle} value={custLast} onChange={(e) => setCustLast(e.target.value)} placeholder="Last name" /></div>
+                  <div><label style={labelStyle}>Customer email</label><input style={inputStyle} type="email" value={custEmail} onChange={(e) => setCustEmail(e.target.value)} placeholder="customer@example.com" /></div>
+                  <div><label style={labelStyle}>Customer phone</label><input style={inputStyle} type="tel" value={custPhone} onChange={(e) => setCustPhone(e.target.value)} placeholder="+61 ..." /></div>
+                  <button
+                    className="c-btn c-btn-primary"
+                    onClick={confirmBooking}
+                    disabled={bookingBusy}
+                    style={{ marginTop: 6, justifyContent: 'center' }}
+                  >
+                    {bookingBusy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    {bookingBusy ? 'Booking…' : `Confirm booking · ${fmtMoney(chosenRate.pricing.sell?.totalAmount)} ${chosenRate.pricing.currency}`}
                   </button>
+                </div>
+              </div>
+            )}
+
+            {bookingResult && (
+              <div>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 6, color: 'var(--c-success)', fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
+                  <CheckCircle2 size={16} /> Booking confirmed
+                </div>
+                <div style={{ display: 'grid', gap: 6, maxWidth: 480, fontSize: 13 }}>
+                  <Row label="Status"             value={String(bookingResult.status || '—')} />
+                  <Row label="Supplier order"     value={String(bookingResult.bookingId || bookingResult.confirmationNumber || '—')} />
+                  <Row label="Partner order"      value={String(bookingResult.partnerOrderId || '—')} mono />
+                  <Row label="Internal booking"   value={String(bookingResult.internalBookingId || '—')} mono />
+                  <Row label="Total"              value={`${bookingResult.totalAmount || '—'} ${bookingResult.currency || ''}`} />
+                  <Row label="Guest"              value={`${bookingResult.guestInfo?.firstName || ''} ${bookingResult.guestInfo?.lastName || ''}`} />
+                </div>
+                <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
+                  <button
+                    className="c-btn"
+                    onClick={() => { setBookingResult(null); setChosenRate(null); setCustFirst(''); setCustLast(''); setCustEmail(''); setCustPhone(''); }}
+                  >Book another rate</button>
+                  <button
+                    className="c-btn"
+                    onClick={() => { setDetailHotel(null); setChosenRate(null); setBookingResult(null); }}
+                  >Back to results</button>
                 </div>
               </div>
             )}
@@ -440,4 +610,13 @@ function badgeStyle(supplier: string): React.CSSProperties {
 function fmtMoney(n?: number) {
   if (n === undefined || n === null || isNaN(n)) return '—';
   return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+function Row({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 12, alignItems: 'baseline' }}>
+      <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 700 }}>{label}</span>
+      <span style={{ fontFamily: mono ? 'var(--c-mono)' : undefined, fontSize: mono ? 12.5 : 13, color: 'var(--c-fg)' }}>{value}</span>
+    </div>
+  );
 }
