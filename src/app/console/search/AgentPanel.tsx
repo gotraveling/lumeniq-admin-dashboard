@@ -15,7 +15,7 @@
 import { useState } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import { Send, Sparkles, Loader2 } from 'lucide-react';
+import { Send, Sparkles, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 
 type Props = {
   /** Called when a tool returns a list of hotels so the canvas can hydrate. */
@@ -87,23 +87,7 @@ export default function AgentPanel({ onHotelsFound }: Props) {
                 return <div key={i} style={{ whiteSpace: 'pre-wrap' }}>{p.text}</div>;
               }
               if (typeof p.type === 'string' && p.type.startsWith('tool-')) {
-                const toolName = p.type.replace('tool-', '');
-                return (
-                  <div key={i} style={{
-                    marginTop: 8, padding: '6px 10px', borderRadius: 6,
-                    background: 'var(--c-bg)', border: '1px dashed var(--c-line)',
-                    fontSize: 11.5, fontFamily: 'var(--c-mono)', color: 'var(--c-fg-soft)'
-                  }}>
-                    <strong style={{ color: 'var(--c-accent)' }}>{toolName}</strong>
-                    {p.input && (
-                      <span> · {Object.entries(p.input).slice(0, 4).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}</span>
-                    )}
-                    {p.output?.hits && <span> · {p.output.hits.length} hotels</span>}
-                    {p.output?.rates && <span> · {p.output.rates.length} rates</span>}
-                    {p.output?.results && <span> · {p.output.results.length} compared</span>}
-                    {p.output?.error && <span style={{ color: 'var(--c-danger)' }}> · {p.output.error}</span>}
-                  </div>
-                );
+                return <ToolChip key={i} part={p} />;
               }
               return null;
             })}
@@ -117,6 +101,7 @@ export default function AgentPanel({ onHotelsFound }: Props) {
         )}
       </div>
 
+      {/* Tool-call chip helper at module scope below */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -146,6 +131,46 @@ export default function AgentPanel({ onHotelsFound }: Props) {
           <Send size={14} />
         </button>
       </form>
+    </div>
+  );
+}
+
+/**
+ * Collapsed tool-call chip — Perplexity-style. Single line by default
+ * with a chevron; click to expand the full input + output JSON.
+ */
+function ToolChip({ part }: { part: any }) {
+  const [open, setOpen] = useState(false);
+  const toolName = String(part.type || '').replace('tool-', '');
+  const out = part.output || {};
+  let summary = '';
+  if (out.hits)    summary = `${out.hits.length} hotels`;
+  if (out.rates)   summary = `${out.rates.length} rates`;
+  if (out.results) summary = `${out.results.length} compared`;
+  if (out.error)   summary = `error: ${out.error}`;
+  const inputBrief = part.input ? Object.entries(part.input).slice(0, 3).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ') : '';
+
+  return (
+    <div style={{
+      marginTop: 6, padding: '4px 8px', borderRadius: 6,
+      background: 'var(--c-bg)', border: '1px solid var(--c-line)',
+      fontSize: 11.5, fontFamily: 'var(--c-mono)', color: 'var(--c-fg-soft)'
+    }}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{ background: 'none', border: 0, padding: 0, color: 'inherit', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left' }}
+      >
+        {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        <strong style={{ color: 'var(--c-accent)' }}>{toolName}</strong>
+        {!open && inputBrief && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>· {inputBrief}</span>}
+        {summary && <span style={{ marginLeft: 'auto', color: out.error ? 'var(--c-danger)' : 'var(--c-fg-muted)' }}>{summary}</span>}
+      </button>
+      {open && (
+        <pre style={{ marginTop: 6, marginBottom: 0, fontSize: 10.5, lineHeight: 1.45, whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 240, background: 'var(--c-bg-soft)', padding: 8, borderRadius: 4 }}>
+{JSON.stringify({ input: part.input, output: part.output }, null, 2)}
+        </pre>
+      )}
     </div>
   );
 }

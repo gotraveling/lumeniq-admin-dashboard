@@ -70,8 +70,9 @@ export default function ConsoleSearchPage() {
   const [searchErr, setSearchErr]       = useState<string | null>(null);
 
   // ─── Result filters ─────────────────────────────────────────
-  const [filterSupplier,   setFilterSupplier]   = useState<'all' | 'ratehawk' | 'hummingbird'>('all');
-  const [filterRefundable, setFilterRefundable] = useState(false);
+  const [filterSupplier,    setFilterSupplier]    = useState<'all' | 'ratehawk' | 'hummingbird'>('all');
+  const [filterRefundable,  setFilterRefundable]  = useState(false);
+  const [showUnavailable,   setShowUnavailable]   = useState(false);
 
   // ─── In-canvas detail view (Pattern A — no slide-out) ───────
   const [detailHotel, setDetailHotel]   = useState<HotelHit | null>(null);
@@ -183,7 +184,7 @@ export default function ConsoleSearchPage() {
       if (ages.length) qs.set('childAges', JSON.stringify(ages));
       const res = await fetch(`/api/admin/search/rates/${h.id}?${qs.toString()}`);
       const json = await res.json();
-      if (!json.success) throw new Error(json.error || 'rates failed');
+      if (!json.success) throw new Error(json.details ? `${json.error}: ${json.details}` : (json.error || 'rates failed'));
       setRates(json.data.rates || []);
     } catch (e: any) {
       setRatesErr(e.message || 'rates failed');
@@ -242,10 +243,14 @@ export default function ConsoleSearchPage() {
   const filteredHits = useMemo(() => {
     return hits.filter(h => {
       if (filterSupplier !== 'all' && !h.sources.includes(filterSupplier)) return false;
+      // Hide unavailable by default — most consultants only care about
+      // bookable options. priced === undefined means prices are still
+      // loading, so don't hide those yet.
+      if (!showUnavailable && h.priced !== undefined && !h.priced.available) return false;
       if (filterRefundable && h.priced && h.priced.available && !h.priced.refundable) return false;
       return true;
     });
-  }, [hits, filterSupplier, filterRefundable]);
+  }, [hits, filterSupplier, filterRefundable, showUnavailable]);
 
   // ───────────────────────────────────────────────────────────
   return (
@@ -402,6 +407,10 @@ export default function ConsoleSearchPage() {
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: 'var(--c-fg-soft)' }}>
                 <input type="checkbox" checked={filterRefundable} onChange={(e) => setFilterRefundable(e.target.checked)} />
                 Refundable only
+              </label>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: 'var(--c-fg-soft)' }}>
+                <input type="checkbox" checked={showUnavailable} onChange={(e) => setShowUnavailable(e.target.checked)} />
+                Show unavailable
               </label>
               <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginLeft: 'auto' }}>
                 {filteredHits.length} of {hits.length} hotels

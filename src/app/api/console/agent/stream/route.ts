@@ -81,6 +81,12 @@ export async function POST(req: NextRequest) {
 
   const { messages } = await req.json();
 
+  // Inject today's date so the agent doesn't fall back to its training
+  // cutoff (was picking 2024 dates from October prompts — past). Now
+  // it always anchors against the real current date.
+  const today = new Date().toISOString().slice(0, 10);
+  const todayContext = `\n\nIMPORTANT — current date: ${today}. All dates you propose MUST be ${today} or later. Never pick a date in the past.`;
+
   // Pro for the first turn (vibe parsing, multi-tool orchestration,
   // ranked shortlist with rationale — where reasoning quality pays off).
   // Flash for every follow-up (refinement, "show me cheaper", "what's
@@ -95,7 +101,7 @@ export async function POST(req: NextRequest) {
   const modelMessages = await convertToModelMessages(messages);
   const result = await streamText({
     model,
-    system: SYSTEM,
+    system: SYSTEM + todayContext,
     messages: modelMessages,
     tools: agentTools,
     // Let the agent take up to 5 tool-call/respond cycles per turn so

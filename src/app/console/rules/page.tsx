@@ -10,7 +10,7 @@ interface PricingRule {
   target_value: string | null;
   markup_type: 'percentage' | 'fixed_amount';
   markup_value: number;
-  priority: number;
+  priority?: number;            // backend default = 5
   description: string;
   is_active: boolean;
 }
