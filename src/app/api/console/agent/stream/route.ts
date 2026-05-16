@@ -78,9 +78,19 @@ export async function POST(req: NextRequest) {
     project:  process.env.GOOGLE_VERTEX_PROJECT  || 'travelx-451306',
     location: process.env.GOOGLE_VERTEX_LOCATION || 'us-central1'
   });
-  const model = vertex('gemini-2.5-flash');
 
   const { messages } = await req.json();
+
+  // Pro for the first turn (vibe parsing, multi-tool orchestration,
+  // ranked shortlist with rationale — where reasoning quality pays off).
+  // Flash for every follow-up (refinement, "show me cheaper", "what's
+  // the cancellation deadline?" — fast and ~5× cheaper).
+  // Heuristic: count user messages. 1 = first turn, >1 = follow-up.
+  const userMessageCount = (messages || []).filter((m: any) => m.role === 'user').length;
+  const useProModel = userMessageCount <= 1;
+  const modelName = useProModel ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+  console.log(`[agent] turn=${userMessageCount} model=${modelName}`);
+  const model = vertex(modelName);
 
   const modelMessages = await convertToModelMessages(messages);
   const result = await streamText({
