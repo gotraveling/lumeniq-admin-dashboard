@@ -55,7 +55,9 @@ export default function DestinationAutocomplete({ value, onChange, onSelectHotel
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [value]);
 
-  const hasResults = hotels.length || cities.length || countries.length;
+  // Coerce to boolean — `length || length` returns 0 when all empty,
+  // and JSX renders the number 0 to the DOM. Bug, not feature.
+  const hasResults = (hotels.length + cities.length + countries.length) > 0;
 
   return (
     <div ref={rootRef} style={{ position: 'relative' }}>
@@ -75,8 +77,8 @@ export default function DestinationAutocomplete({ value, onChange, onSelectHotel
         <div style={{
           position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
           background: 'var(--c-bg)', border: '1px solid var(--c-line)',
-          borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
-          maxHeight: 360, overflow: 'auto', zIndex: 60
+          borderRadius: 8, boxShadow: '0 12px 28px rgba(0,0,0,0.12)',
+          maxHeight: 360, overflow: 'auto', zIndex: 100
         }}>
           {hotels.length > 0 && (
             <Group label="Hotels" icon={<Hotel size={11} />}>

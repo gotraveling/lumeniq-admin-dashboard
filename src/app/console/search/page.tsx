@@ -337,10 +337,10 @@ export default function ConsoleSearchPage() {
               </div>
             </div>
 
-            <div className="c-card" style={{ padding: 14, marginBottom: 20 }}>
+            <div className="c-card" style={{ padding: 14, marginBottom: 20, overflow: 'visible' }}>
               <form
                 onSubmit={(e) => { e.preventDefault(); runSearch(); }}
-                style={{ display: 'grid', gridTemplateColumns: '2fr 1.4fr 1.4fr 120px', gap: 10, alignItems: 'end' }}
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1.6fr) minmax(220px, 1.4fr) minmax(180px, 1.2fr) auto', gap: 10, alignItems: 'end' }}
               >
                 <div>
                   <label style={labelStyle}>Destination or hotel name</label>
