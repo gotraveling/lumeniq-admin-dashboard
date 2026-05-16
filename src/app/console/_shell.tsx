@@ -28,7 +28,8 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
     section: 'Operations',
     items: [
       { href: '/console/bookings', label: 'Bookings', icon: ClipboardList },
-      { href: '/console/search', label: 'B2B Search', icon: Search },
+      { href: '/console/search',   label: 'B2B Search', icon: Search },
+      { href: '/console/ai',       label: 'AI Agent',   icon: Sparkles },
     ],
   },
   {

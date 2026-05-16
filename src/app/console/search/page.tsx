@@ -1,10 +1,10 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
 import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle } from 'lucide-react';
-import AgentPanel from './AgentPanel';
 import DestinationAutocomplete from '@/components/console/DestinationAutocomplete';
 import DateRangePicker from '@/components/console/DateRangePicker';
 import GuestSelector, { type RoomGuests } from '@/components/console/GuestSelector';
@@ -56,12 +56,17 @@ function todayPlus(days: number) {
 
 export default function ConsoleSearchPage() {
   const [user] = useAuthState(auth);
+  const sp = useSearchParams();
 
   // ─── Form state ─────────────────────────────────────────────
   const [q, setQ]               = useState('');
   const [checkIn, setCheckIn]   = useState(todayPlus(30));
   const [checkOut, setCheckOut] = useState(todayPlus(33));
   const [rooms, setRooms]       = useState<RoomGuests[]>([{ adults: 2, childrenAges: [] }]);
+  // Citizenship of the GUEST — drives RateHawk's residency-based pricing.
+  // ETG cert spec §3.8 requires this, and FirstClass's main market is AU
+  // so default there.
+  const [citizenship, setCitizenship] = useState('AU');
 
   // ─── Results state ──────────────────────────────────────────
   const [hits, setHits]                 = useState<HotelHit[]>([]);
@@ -127,7 +132,8 @@ export default function ConsoleSearchPage() {
         hotelIds: ids,
         checkIn,
         checkOut,
-        guests: rooms.map(r => ({ adults: r.adults, children: r.childrenAges }))
+        guests: rooms.map(r => ({ adults: r.adults, children: r.childrenAges })),
+        nationalityCode: citizenship
       };
       const res = await fetch('/api/admin/search/rates/compare', {
         method: 'POST',
@@ -184,7 +190,7 @@ export default function ConsoleSearchPage() {
     setRatesErr(null);
     setRates([]);
     try {
-      const qs = new URLSearchParams({ checkIn, checkOut, adults: String(rooms.reduce((s, r) => s + r.adults, 0)), rooms: String(rooms.length) });
+      const qs = new URLSearchParams({ checkIn, checkOut, adults: String(rooms.reduce((s, r) => s + r.adults, 0)), rooms: String(rooms.length), nationalityCode: citizenship });
       const ages = rooms[0]?.childrenAges || [];
       if (ages.length) qs.set('childAges', JSON.stringify(ages));
       const res = await fetch(`/api/admin/search/rates/${h.id}?${qs.toString()}`);
@@ -248,6 +254,18 @@ export default function ConsoleSearchPage() {
     }
   }
 
+  // Deep-link from the AI agent page — /console/search?hotelId=N
+  // jumps the consultant straight to the detail view.
+  useEffect(() => {
+    const id = sp.get('hotelId');
+    if (!id || detailHotel) return;
+    const n = Number(id);
+    if (!Number.isFinite(n)) return;
+    const stub: HotelHit = { id: n, name: '', sources: [] };
+    void openHotel(stub);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sp]);
+
   // ─── filter computation ─────────────────────────────────────
   const filteredHits = useMemo(() => {
     return hits.filter(h => {
@@ -263,8 +281,8 @@ export default function ConsoleSearchPage() {
 
   // ───────────────────────────────────────────────────────────
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 380px', gap: 20, alignItems: 'start' }}>
-      <div style={{ minWidth: 0 }}>
+    <div style={{ minWidth: 0 }}>
+      <div>
         {/* Header swaps to a breadcrumb when in detail view */}
         <div className="c-page-head">
           <div>
@@ -354,7 +372,7 @@ export default function ConsoleSearchPage() {
             <div className="c-card" style={{ padding: 14, marginBottom: 20, overflow: 'visible' }}>
               <form
                 onSubmit={(e) => { e.preventDefault(); runSearch(); }}
-                style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1.6fr) minmax(220px, 1.4fr) minmax(180px, 1.2fr) auto', gap: 10, alignItems: 'end' }}
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1.6fr) minmax(200px, 1.3fr) minmax(160px, 1.1fr) minmax(120px, 0.7fr) auto', gap: 10, alignItems: 'end' }}
               >
                 <div>
                   <label style={labelStyle}>Destination or hotel name</label>
@@ -371,6 +389,28 @@ export default function ConsoleSearchPage() {
                 <div>
                   <label style={labelStyle}>Guests</label>
                   <GuestSelector rooms={rooms} onChange={setRooms} />
+                </div>
+                <div>
+                  <label style={labelStyle}>Citizenship</label>
+                  <select
+                    value={citizenship}
+                    onChange={(e) => setCitizenship(e.target.value)}
+                    style={{ width: '100%', padding: '8px 10px', fontSize: 14, border: '1px solid var(--c-line)', borderRadius: 6, background: 'var(--c-bg)', color: 'var(--c-fg)' }}
+                  >
+                    <option value="AU">Australia</option>
+                    <option value="NZ">New Zealand</option>
+                    <option value="GB">United Kingdom</option>
+                    <option value="US">United States</option>
+                    <option value="CA">Canada</option>
+                    <option value="IN">India</option>
+                    <option value="SG">Singapore</option>
+                    <option value="AE">UAE</option>
+                    <option value="UZ">Uzbekistan</option>
+                    <option value="FR">France</option>
+                    <option value="DE">Germany</option>
+                    <option value="JP">Japan</option>
+                    <option value="CN">China</option>
+                  </select>
                 </div>
                 <button type="submit" className="c-btn c-btn-primary" disabled={searching}>
                   {searching ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
@@ -505,37 +545,11 @@ export default function ConsoleSearchPage() {
             )}
 
             {!chosenRate && rates.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: detailContent ? 18 : 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg)', marginBottom: 4 }}>
-                  Available rates ({rates.length})
-                </div>
-                {rates.map((r, i) => (
-                  <div key={i} className="c-card" style={{ padding: 12, display: 'grid', gridTemplateColumns: '120px 1fr auto', gap: 16, alignItems: 'center' }}>
-                    <div style={{ width: 120, height: 80, borderRadius: 6, overflow: 'hidden', background: 'var(--c-bg-soft)', backgroundImage: r.roomImage ? `url(${r.roomImage})` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>{r.roomTypeName}</div>
-                      <div style={{ fontSize: 11, color: 'var(--c-fg-soft)', marginBottom: 8 }}>
-                        {r.ratePlan} · {r.refundable ? <span style={{ color: 'var(--c-success)' }}>Refundable</span> : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>} · {r.supplier}
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, max-content)', gap: 18, fontSize: 11, fontFamily: 'var(--c-mono)' }}>
-                        <div>
-                          <div style={priceLabelStyle}>NET</div>
-                          <div style={{ fontWeight: 600 }}>{fmtMoney(r.pricing.net?.totalAmount)} {r.pricing.currency}</div>
-                        </div>
-                        <div>
-                          <div style={priceLabelStyle}>+ MARKUP</div>
-                          <div style={{ fontWeight: 600 }}>{fmtMoney(r.pricing.markup?.amount)} ({r.pricing.markup?.value ?? 0}%)</div>
-                        </div>
-                        <div>
-                          <div style={priceLabelStyle}>SELL</div>
-                          <div style={{ fontWeight: 700, color: 'var(--c-accent)' }}>{fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency}</div>
-                        </div>
-                      </div>
-                    </div>
-                    <button className="c-btn c-btn-primary" style={{ whiteSpace: 'nowrap' }} onClick={() => setChosenRate(r)}>Book on behalf</button>
-                  </div>
-                ))}
-              </div>
+              <RoomGroupedRates
+                rates={rates}
+                onChoose={(r) => setChosenRate(r)}
+                marginTop={detailContent ? 18 : 0}
+              />
             )}
 
             {chosenRate && !bookingResult && (
@@ -599,26 +613,7 @@ export default function ConsoleSearchPage() {
         )}
       </div>
 
-      {/* Right-column agent panel — always present, never overlapped by booking */}
-      <div style={{ position: 'sticky', top: 52, alignSelf: 'start' }}>
-        <AgentPanel
-          onHotelsFound={(found) => {
-            const ids = found.map((h: any) => h.id);
-            setHits(found.map((h: any) => ({ id: h.id, name: h.name, city: h.city, country: h.country, starRating: h.starRating, image: h.image, sources: h.sources || [] })));
-            void enrichPrices(ids);
-          }}
-          onHotelClick={(h) => {
-            // Click-through from the agent's tool result directly into
-            // the canvas detail view. If the hotel isn't yet in `hits`
-            // (the agent may have surfaced something via compare we
-            // never put on the left), seed it before opening.
-            const existing = hits.find(x => x.id === h.id);
-            const hit = existing || { id: h.id, name: h.name || '', city: h.city, country: h.country, image: h.image || null, sources: [], starRating: undefined };
-            if (!existing) setHits(curr => [hit, ...curr]);
-            void openHotel(hit);
-          }}
-        />
-      </div>
+      {/* Agent lives on its own page now — /console/ai */}
     </div>
   );
 }
@@ -737,6 +732,101 @@ function HotelInfo({ content }: { content: any }) {
     </div>
   );
 }
+
+/**
+ * Rates grouped by room type — RateHawk-style. Each unique
+ * roomTypeName becomes a card with its image + amenities,
+ * then a small table of rates inside (meals, cancellation,
+ * NET, markup, sell, Choose).
+ */
+function RoomGroupedRates({
+  rates, onChoose, marginTop = 0
+}: {
+  rates: AdminRate[];
+  onChoose: (r: AdminRate) => void;
+  marginTop?: number;
+}) {
+  // Group while preserving the cheapest-first order the backend sent.
+  const groups = useMemo(() => {
+    const m = new Map<string, AdminRate[]>();
+    for (const r of rates) {
+      const k = r.roomTypeName || r.rateKey || 'Room';
+      if (!m.has(k)) m.set(k, []);
+      m.get(k)!.push(r);
+    }
+    return Array.from(m.entries()).map(([name, list]) => ({ name, rates: list }));
+  }, [rates]);
+
+  return (
+    <div style={{ marginTop, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg)' }}>
+        Available rooms ({groups.length})
+      </div>
+      {groups.map((g) => {
+        const cover = g.rates.find(r => r.roomImage)?.roomImage || null;
+        return (
+          <div key={g.name} className="c-card" style={{ overflow: 'hidden' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 0 }}>
+              <div style={{
+                width: 160, minHeight: 120,
+                background: 'var(--c-bg-soft)',
+                backgroundImage: cover ? `url(${cover})` : undefined,
+                backgroundSize: 'cover', backgroundPosition: 'center'
+              }} />
+              <div style={{ padding: '12px 14px' }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{g.name}</div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', color: 'var(--c-fg-muted)' }}>
+                      <th style={thStyle}>Plan</th>
+                      <th style={thStyle}>Cancellation</th>
+                      <th style={thStyle}>NET</th>
+                      <th style={thStyle}>Markup</th>
+                      <th style={thStyle}>Sell</th>
+                      <th style={thStyle}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {g.rates.map((r, i) => (
+                      <tr key={i} style={{ borderTop: '1px solid var(--c-line-soft)' }}>
+                        <td style={tdStyle}>{r.ratePlan || 'nomeal'}</td>
+                        <td style={tdStyle}>
+                          {r.refundable
+                            ? <span style={{ color: 'var(--c-success)', fontWeight: 600 }}>Refundable</span>
+                            : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>}
+                        </td>
+                        <td style={tdStyle}>
+                          <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(r.pricing.net?.totalAmount)}</span>
+                        </td>
+                        <td style={tdStyle}>
+                          <span style={{ fontFamily: 'var(--c-mono)', color: 'var(--c-fg-soft)' }}>
+                            {fmtMoney(r.pricing.markup?.amount)} ({r.pricing.markup?.value ?? 0}%)
+                          </span>
+                        </td>
+                        <td style={tdStyle}>
+                          <span style={{ fontFamily: 'var(--c-mono)', fontWeight: 700, color: 'var(--c-accent)' }}>
+                            {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency}
+                          </span>
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: 'right' }}>
+                          <button className="c-btn c-btn-primary" onClick={() => onChoose(r)} style={{ padding: '5px 12px', fontSize: 12 }}>
+                            Choose
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+const thStyle: React.CSSProperties = { fontWeight: 700, fontSize: 11, letterSpacing: 0.05, textTransform: 'uppercase', padding: '6px 8px', color: 'var(--c-fg-muted)' };
+const tdStyle: React.CSSProperties = { padding: '8px 8px', verticalAlign: 'middle', color: 'var(--c-fg)' };
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
