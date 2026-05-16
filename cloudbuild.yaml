@@ -76,7 +76,10 @@ steps:
       - '--timeout=300'
       - '--concurrency=80'
       - '--max-instances=5'
-      - '--set-env-vars=NODE_ENV=production,NEXT_PUBLIC_API_URL=https://booking-engine-api-91901273027.us-central1.run.app,NEXT_PUBLIC_HOTEL_API_URL=https://hotel-api-91901273027.us-central1.run.app,HOTEL_API_URL=https://hotel-api-91901273027.us-central1.run.app'
+      # NOTE: --set-env-vars REPLACES the full env-var set on every
+      # deploy. Anything not listed here gets wiped. Add new env vars
+      # here, not via gcloud run services update.
+      - '--set-env-vars=NODE_ENV=production,NEXT_PUBLIC_API_URL=https://booking-engine-api-91901273027.us-central1.run.app,NEXT_PUBLIC_HOTEL_API_URL=https://hotel-api-91901273027.us-central1.run.app,HOTEL_API_URL=https://hotel-api-91901273027.us-central1.run.app,GOOGLE_VERTEX_PROJECT=travelx-451306,GOOGLE_VERTEX_LOCATION=us-central1'
       - '--update-secrets=BOOKING_API_KEY=BOOKING_API_KEY:latest'
     id: 'deploy-cloud-run'
     waitFor: ['push-image']
