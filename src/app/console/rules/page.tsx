@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2, AlertTriangle } from 'lucide-react';
+import { HotelAutocomplete } from '@/components/ui/HotelAutocomplete';
 
 interface PricingRule {
   id: number;
@@ -9,6 +10,7 @@ interface PricingRule {
   target_value: string | null;
   markup_type: 'percentage' | 'fixed_amount';
   markup_value: number;
+  priority: number;
   description: string;
   is_active: boolean;
 }
