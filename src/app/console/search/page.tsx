@@ -166,8 +166,13 @@ export default function ConsoleSearchPage() {
     }
   }
 
+  // Detail-view hotel content (description / amenities / metapolicy)
+  // surfaced by the admin rates endpoint alongside the rate list.
+  const [detailContent, setDetailContent] = useState<any>(null);
+
   async function openHotel(h: HotelHit) {
     setDetailHotel(h);
+    setDetailContent(null);
     setChosenRate(null);
     setBookingResult(null);
     setBookingErr(null);
@@ -184,8 +189,12 @@ export default function ConsoleSearchPage() {
       if (ages.length) qs.set('childAges', JSON.stringify(ages));
       const res = await fetch(`/api/admin/search/rates/${h.id}?${qs.toString()}`);
       const json = await res.json();
+      if (res.status === 429) {
+        throw new Error(json.message || 'Supplier rate limit — wait ~30 seconds and try again.');
+      }
       if (!json.success) throw new Error(json.details ? `${json.error}: ${json.details}` : (json.error || 'rates failed'));
       setRates(json.data.rates || []);
+      setDetailContent(json.data.hotel || null);
     } catch (e: any) {
       setRatesErr(e.message || 'rates failed');
     } finally {
@@ -488,8 +497,18 @@ export default function ConsoleSearchPage() {
               <div style={{ color: 'var(--c-fg-muted)', fontSize: 13 }}>No rates returned for these dates.</div>
             )}
 
+            {/* Hotel info section — appears above the rate list so the
+                consultant has context (description, amenities, policies)
+                while picking a rate to book. */}
+            {!chosenRate && detailContent && (
+              <HotelInfo content={detailContent} />
+            )}
+
             {!chosenRate && rates.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: detailContent ? 18 : 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg)', marginBottom: 4 }}>
+                  Available rates ({rates.length})
+                </div>
                 {rates.map((r, i) => (
                   <div key={i} className="c-card" style={{ padding: 12, display: 'grid', gridTemplateColumns: '120px 1fr auto', gap: 16, alignItems: 'center' }}>
                     <div style={{ width: 120, height: 80, borderRadius: 6, overflow: 'hidden', background: 'var(--c-bg-soft)', backgroundImage: r.roomImage ? `url(${r.roomImage})` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
@@ -638,6 +657,99 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
     <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 12, alignItems: 'baseline' }}>
       <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 700 }}>{label}</span>
       <span style={{ fontFamily: mono ? 'var(--c-mono)' : undefined, fontSize: mono ? 12.5 : 13, color: 'var(--c-fg)' }}>{value}</span>
+    </div>
+  );
+}
+
+/**
+ * Compact hotel detail card — description, top amenities, key policies
+ * (check-in / check-out / metapolicy snapshot). Renders above the
+ * rate list so the consultant has context while picking a rate.
+ */
+function HotelInfo({ content }: { content: any }) {
+  const desc = typeof content.description === 'string'
+    ? content.description
+    : (Array.isArray(content.description) ? content.description.map((s: any) => s.paragraphs?.join(' ') || '').join('\n\n').trim() : null);
+  const ag: any[] = Array.isArray(content.amenity_groups) ? content.amenity_groups : [];
+  const topAmenities = ag.flatMap(g => Array.isArray(g.amenities) ? g.amenities : []).slice(0, 12);
+  const mp = content.metapolicy_struct || {};
+  const mpItems: Array<{ k: string; v: string }> = [];
+  if (mp.deposit) mpItems.push({ k: 'Deposit', v: 'Required' });
+  if (mp.no_show) mpItems.push({ k: 'No-show', v: 'Penalty' });
+  if (mp.cot && Array.isArray(mp.cot) && mp.cot.length) mpItems.push({ k: 'Cots', v: 'Available' });
+  if (mp.pets && Array.isArray(mp.pets) && mp.pets.length) mpItems.push({ k: 'Pets', v: 'Conditional' });
+  if (mp.parking && Array.isArray(mp.parking) && mp.parking.length) mpItems.push({ k: 'Parking', v: 'Available' });
+  if (mp.smoking_policy && Array.isArray(mp.smoking_policy) && mp.smoking_policy.length) mpItems.push({ k: 'Smoking', v: 'See policy' });
+  if (mp.shuttle && Array.isArray(mp.shuttle) && mp.shuttle.length) mpItems.push({ k: 'Shuttle', v: 'Available' });
+
+  const [descExpanded, setDescExpanded] = useState(false);
+  const trimmedDesc = desc && desc.length > 320 && !descExpanded ? desc.slice(0, 320) + '…' : desc;
+
+  return (
+    <div style={{ display: 'grid', gap: 14, marginBottom: 12 }}>
+      {desc && (
+        <div>
+          <SectionLabel>About the property</SectionLabel>
+          <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--c-fg)', whiteSpace: 'pre-wrap' }}>{trimmedDesc}</div>
+          {desc.length > 320 && (
+            <button onClick={() => setDescExpanded(x => !x)} style={{ marginTop: 4, fontSize: 12, color: 'var(--c-accent)', background: 'none', border: 0, cursor: 'pointer', padding: 0, fontWeight: 600 }}>
+              {descExpanded ? 'Show less' : 'Read more'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {(content.check_in_time || content.check_out_time || content.phone || content.email) && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+          {content.check_in_time && <FactCell label="Check-in"  value={content.check_in_time} />}
+          {content.check_out_time && <FactCell label="Check-out" value={content.check_out_time} />}
+          {content.phone &&        <FactCell label="Phone"      value={content.phone} />}
+          {content.email &&        <FactCell label="Email"      value={content.email} />}
+        </div>
+      )}
+
+      {topAmenities.length > 0 && (
+        <div>
+          <SectionLabel>Top amenities</SectionLabel>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {topAmenities.map((a, i) => (
+              <span key={i} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 999, background: 'var(--c-bg-soft)', border: '1px solid var(--c-line)', color: 'var(--c-fg-soft)' }}>{a}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {mpItems.length > 0 && (
+        <div>
+          <SectionLabel>Policies snapshot</SectionLabel>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {mpItems.map((m, i) => (
+              <span key={i} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 999, background: 'var(--c-bg)', border: '1px dashed var(--c-line)', color: 'var(--c-fg-soft)' }}>
+                <strong style={{ color: 'var(--c-fg)' }}>{m.k}:</strong> {m.v}
+              </span>
+            ))}
+          </div>
+          {content.metapolicy_extra_info && (
+            <div style={{ marginTop: 6, fontSize: 12, color: 'var(--c-fg-muted)', whiteSpace: 'pre-wrap' }}>{content.metapolicy_extra_info}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.06, textTransform: 'uppercase', color: 'var(--c-fg-muted)', marginBottom: 6 }}>
+      {children}
+    </div>
+  );
+}
+function FactCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ background: 'var(--c-bg-soft)', border: '1px solid var(--c-line-soft)', borderRadius: 6, padding: '8px 10px' }}>
+      <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 700, marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 13, color: 'var(--c-fg)' }}>{value}</div>
     </div>
   );
 }
