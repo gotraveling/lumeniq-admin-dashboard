@@ -42,12 +42,19 @@ export default function AgentPanel({ onHotelsFound }: Props) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
-      height: 'calc(100vh - 52px)', // minus topbar
-      borderLeft: '1px solid var(--c-line)',
-      background: 'var(--c-bg)'
+      // Capped so the whole panel (header + scrollable history + input)
+      // fits inside the viewport on 13" laptops. The parent is `position:
+      // sticky; top: 52` so the panel scrolls with the page until it
+      // pins, then stays in view — input always reachable.
+      height: 'min(calc(100vh - 80px), 640px)',
+      border: '1px solid var(--c-line)',
+      borderRadius: 10,
+      background: 'var(--c-bg)',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+      overflow: 'hidden'
     }}>
-      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--c-line)', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Sparkles size={15} style={{ color: 'var(--c-accent)' }} />
+      <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--c-line)', display: 'flex', alignItems: 'center', gap: 8, background: 'var(--c-bg-soft)' }}>
+        <Sparkles size={14} style={{ color: 'var(--c-accent)' }} />
         <span style={{ fontSize: 13, fontWeight: 700 }}>Agent</span>
       </div>
 
