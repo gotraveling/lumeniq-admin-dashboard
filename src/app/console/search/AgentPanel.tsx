@@ -48,7 +48,6 @@ export default function AgentPanel({ onHotelsFound }: Props) {
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--c-line)', display: 'flex', alignItems: 'center', gap: 8 }}>
         <Sparkles size={15} style={{ color: 'var(--c-accent)' }} />
         <span style={{ fontSize: 13, fontWeight: 700 }}>Agent</span>
-        <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginLeft: 'auto' }}>Gemini 2.5 Flash</span>
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
