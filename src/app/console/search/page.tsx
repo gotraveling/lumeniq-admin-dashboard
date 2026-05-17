@@ -544,7 +544,7 @@ export default function ConsoleSearchPage() {
               <HotelInfo content={detailContent} />
             )}
 
-            {!chosenRate && rates.length > 0 && (
+            {rates.length > 0 && (
               <RoomGroupedRates
                 rates={rates}
                 onChoose={(r) => setChosenRate(r)}
@@ -552,66 +552,35 @@ export default function ConsoleSearchPage() {
               />
             )}
 
-            {chosenRate && !bookingResult && (
-              <div>
-                <button onClick={() => { setChosenRate(null); setBookingErr(null); }} style={{ ...iconBtnStyle, marginBottom: 14, padding: '4px 10px', fontSize: 12 }}>
-                  ← Back to rates
-                </button>
-                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Booking on behalf of customer</div>
-                <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', marginBottom: 14 }}>
-                  {chosenRate.roomTypeName} · {chosenRate.ratePlan} · {fmtMoney(chosenRate.pricing.sell?.totalAmount)} {chosenRate.pricing.currency}
-                </div>
-                {bookingErr && (
-                  <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6, color: 'var(--c-danger)', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <AlertTriangle size={14} /> {bookingErr}
-                  </div>
-                )}
-                <div style={{ display: 'grid', gap: 10, maxWidth: 480 }}>
-                  <div><label style={labelStyle}>Customer first name</label><input style={inputStyle} value={custFirst} onChange={(e) => setCustFirst(e.target.value)} placeholder="First name" /></div>
-                  <div><label style={labelStyle}>Customer last name</label><input style={inputStyle} value={custLast} onChange={(e) => setCustLast(e.target.value)} placeholder="Last name" /></div>
-                  <div><label style={labelStyle}>Customer email</label><input style={inputStyle} type="email" value={custEmail} onChange={(e) => setCustEmail(e.target.value)} placeholder="customer@example.com" /></div>
-                  <div><label style={labelStyle}>Customer phone</label><input style={inputStyle} type="tel" value={custPhone} onChange={(e) => setCustPhone(e.target.value)} placeholder="+61 ..." /></div>
-                  <button
-                    className="c-btn c-btn-primary"
-                    onClick={confirmBooking}
-                    disabled={bookingBusy}
-                    style={{ marginTop: 6, justifyContent: 'center' }}
-                  >
-                    {bookingBusy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                    {bookingBusy ? 'Booking…' : `Confirm booking · ${fmtMoney(chosenRate.pricing.sell?.totalAmount)} ${chosenRate.pricing.currency}`}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {bookingResult && (
-              <div>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 6, color: 'var(--c-success)', fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
-                  <CheckCircle2 size={16} /> Booking confirmed
-                </div>
-                <div style={{ display: 'grid', gap: 6, maxWidth: 480, fontSize: 13 }}>
-                  <Row label="Status"             value={String(bookingResult.status || '—')} />
-                  <Row label="Supplier order"     value={String(bookingResult.bookingId || bookingResult.confirmationNumber || '—')} />
-                  <Row label="Partner order"      value={String(bookingResult.partnerOrderId || '—')} mono />
-                  <Row label="Internal booking"   value={String(bookingResult.internalBookingId || '—')} mono />
-                  <Row label="Total"              value={`${bookingResult.totalAmount || '—'} ${bookingResult.currency || ''}`} />
-                  <Row label="Guest"              value={`${bookingResult.guestInfo?.firstName || ''} ${bookingResult.guestInfo?.lastName || ''}`} />
-                </div>
-                <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
-                  <button
-                    className="c-btn"
-                    onClick={() => { setBookingResult(null); setChosenRate(null); setCustFirst(''); setCustLast(''); setCustEmail(''); setCustPhone(''); }}
-                  >Book another rate</button>
-                  <button
-                    className="c-btn"
-                    onClick={() => { setDetailHotel(null); setChosenRate(null); setBookingResult(null); }}
-                  >Back to results</button>
-                </div>
-              </div>
-            )}
+            {/* Booking is in a slide-out sidebar (BookingSidebar)
+                rendered at the end of the page, outside this card. */}
           </div>
         )}
       </div>
+
+      {/* Booking sidebar — slides in from the right when consultant
+          clicks 'Choose' on a rate. Keeps the hotel info + rate
+          table visible on the left while they fill customer details. */}
+      {chosenRate && (
+        <BookingSidebar
+          hotel={detailHotel}
+          rate={chosenRate}
+          checkIn={checkIn}
+          checkOut={checkOut}
+          rooms={rooms}
+          citizenship={citizenship}
+          custFirst={custFirst}  setCustFirst={setCustFirst}
+          custLast={custLast}    setCustLast={setCustLast}
+          custEmail={custEmail}  setCustEmail={setCustEmail}
+          custPhone={custPhone}  setCustPhone={setCustPhone}
+          busy={bookingBusy}
+          error={bookingErr}
+          result={bookingResult}
+          onClose={() => { setChosenRate(null); setBookingErr(null); setBookingResult(null); }}
+          onConfirm={confirmBooking}
+          onBookAnother={() => { setBookingResult(null); setChosenRate(null); setCustFirst(''); setCustLast(''); setCustEmail(''); setCustPhone(''); }}
+        />
+      )}
 
       {/* Agent lives on its own page now — /console/ai */}
     </div>
@@ -835,6 +804,174 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+/**
+ * Right-side slide-out booking form. Hotel info + rate table stay
+ * visible on the left while the consultant fills customer details.
+ * Width capped at 480px on desktop, full width on mobile.
+ */
+function BookingSidebar(props: {
+  hotel: HotelHit | null;
+  rate: AdminRate;
+  checkIn: string;
+  checkOut: string;
+  rooms: RoomGuests[];
+  citizenship: string;
+  custFirst: string; setCustFirst: (s: string) => void;
+  custLast:  string; setCustLast:  (s: string) => void;
+  custEmail: string; setCustEmail: (s: string) => void;
+  custPhone: string; setCustPhone: (s: string) => void;
+  busy: boolean;
+  error: string | null;
+  result: any;
+  onClose: () => void;
+  onConfirm: () => void;
+  onBookAnother: () => void;
+}) {
+  const r = props.rate;
+  const totalAdults = props.rooms.reduce((s, x) => s + x.adults, 0);
+  const totalChildren = props.rooms.reduce((s, x) => s + x.childrenAges.length, 0);
+  return (
+    <>
+      {/* dimmed backdrop */}
+      <div
+        onClick={props.onClose}
+        style={{
+          position: 'fixed', inset: 0,
+          background: 'rgba(15, 15, 15, 0.34)',
+          zIndex: 70
+        }}
+      />
+      <aside
+        style={{
+          position: 'fixed', top: 0, right: 0, bottom: 0,
+          width: 'min(480px, 100vw)',
+          background: 'var(--c-bg)',
+          borderLeft: '1px solid var(--c-line)',
+          boxShadow: '-16px 0 36px rgba(0,0,0,0.10)',
+          display: 'flex', flexDirection: 'column',
+          zIndex: 80
+        }}
+      >
+        {/* header */}
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--c-line)', background: 'var(--c-bg-soft)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>
+              {props.result ? 'Booking confirmed' : 'Book on behalf of customer'}
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {props.hotel?.name} · {props.checkIn} → {props.checkOut}
+            </div>
+          </div>
+          <button onClick={props.onClose} style={{ ...iconBtnStyle, padding: 6 }} aria-label="Close">
+            <ArrowLeft size={14} />
+          </button>
+        </div>
+
+        {/* body */}
+        <div style={{ flex: 1, overflow: 'auto', padding: 18 }}>
+          {/* rate summary */}
+          <div className="c-card" style={{ padding: 12, marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{r.roomTypeName}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', marginBottom: 10 }}>
+              {r.ratePlan} · {r.refundable ? <span style={{ color: 'var(--c-success)' }}>Refundable</span> : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>} · {r.supplier}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>Total payable</span>
+              <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)' }}>
+                {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency}
+              </span>
+            </div>
+            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--c-fg-muted)', display: 'flex', justifyContent: 'space-between' }}>
+              <span>Net {fmtMoney(r.pricing.net?.totalAmount)} · +Markup {fmtMoney(r.pricing.markup?.amount)} ({r.pricing.markup?.value ?? 0}%)</span>
+              <span>{totalAdults} adult{totalAdults !== 1 ? 's' : ''}{totalChildren ? ` · ${totalChildren} child${totalChildren !== 1 ? 'ren' : ''}` : ''}</span>
+            </div>
+          </div>
+
+          {/* SUCCESS view */}
+          {props.result && (
+            <div>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 6, color: 'var(--c-success)', fontSize: 13.5, fontWeight: 700, marginBottom: 14 }}>
+                <CheckCircle2 size={16} /> Booking confirmed
+              </div>
+              <div style={{ display: 'grid', gap: 8, fontSize: 13 }}>
+                <Row label="Status"           value={String(props.result.status || '—')} />
+                <Row label="Supplier order"   value={String(props.result.bookingId || props.result.confirmationNumber || '—')} />
+                <Row label="Partner order"    value={String(props.result.partnerOrderId || '—')} mono />
+                <Row label="Internal booking" value={String(props.result.internalBookingId || '—')} mono />
+                <Row label="Total"            value={`${props.result.totalAmount || '—'} ${props.result.currency || ''}`} />
+                <Row label="Guest"            value={`${props.result.guestInfo?.firstName || ''} ${props.result.guestInfo?.lastName || ''}`} />
+              </div>
+            </div>
+          )}
+
+          {/* FORM view */}
+          {!props.result && (
+            <>
+              {props.error && (
+                <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6, color: 'var(--c-danger)', fontSize: 13, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <AlertTriangle size={14} style={{ marginTop: 2, flexShrink: 0 }} />
+                  <span>{props.error}</span>
+                </div>
+              )}
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-fg-soft)', textTransform: 'uppercase', letterSpacing: 0.05, marginBottom: 10 }}>
+                Customer details
+              </div>
+              <div style={{ display: 'grid', gap: 10, gridTemplateColumns: '1fr 1fr' }}>
+                <div>
+                  <label style={labelStyle}>First name</label>
+                  <input style={inputStyle} value={props.custFirst} onChange={(e) => props.setCustFirst(e.target.value)} placeholder="First" />
+                </div>
+                <div>
+                  <label style={labelStyle}>Last name</label>
+                  <input style={inputStyle} value={props.custLast} onChange={(e) => props.setCustLast(e.target.value)} placeholder="Last" />
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={labelStyle}>Email</label>
+                  <input style={inputStyle} type="email" value={props.custEmail} onChange={(e) => props.setCustEmail(e.target.value)} placeholder="customer@example.com" />
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={labelStyle}>Phone</label>
+                  <input style={inputStyle} type="tel" value={props.custPhone} onChange={(e) => props.setCustPhone(e.target.value)} placeholder="+61 ..." />
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={labelStyle}>Citizenship</label>
+                  <div style={{ ...inputStyle, background: 'var(--c-bg-soft)', color: 'var(--c-fg-soft)' }}>
+                    {props.citizenship} (set on search)
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* footer / action */}
+        <div style={{ padding: 14, borderTop: '1px solid var(--c-line)', display: 'flex', gap: 8 }}>
+          {props.result ? (
+            <>
+              <button className="c-btn" onClick={props.onBookAnother} style={{ flex: 1, justifyContent: 'center' }}>
+                Book another rate
+              </button>
+              <button className="c-btn c-btn-primary" onClick={props.onClose} style={{ flex: 1, justifyContent: 'center' }}>
+                Done
+              </button>
+            </>
+          ) : (
+            <button
+              className="c-btn c-btn-primary"
+              onClick={props.onConfirm}
+              disabled={props.busy}
+              style={{ flex: 1, justifyContent: 'center' }}
+            >
+              {props.busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+              {props.busy ? 'Booking…' : `Confirm · ${fmtMoney(r.pricing.sell?.totalAmount)} ${r.pricing.currency}`}
+            </button>
+          )}
+        </div>
+      </aside>
+    </>
+  );
+}
+
 function FactCell({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ background: 'var(--c-bg-soft)', border: '1px solid var(--c-line-soft)', borderRadius: 6, padding: '8px 10px' }}>
