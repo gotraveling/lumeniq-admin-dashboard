@@ -1,11 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
 import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle } from 'lucide-react';
-import DestinationAutocomplete from '@/components/console/DestinationAutocomplete';
+import DestinationAutocomplete, { type DestinationAutocompleteHandle } from '@/components/console/DestinationAutocomplete';
+import CountryPicker from '@/components/console/CountryPicker';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import DateRangePicker from '@/components/console/DateRangePicker';
 import GuestSelector, { type RoomGuests } from '@/components/console/GuestSelector';
 
@@ -26,6 +29,13 @@ type HotelHit = {
   starRating?: number;
   image?: string | null;
   sources: string[];
+  // Canonical-merge metadata (server-side dedupe): when the same
+  // physical property has records under multiple suppliers, the
+  // backend collapses them into one hit. linkedHotelIds names every
+  // supplier id mapped to the canonical so the rates fan-out can
+  // call each supplier.
+  canonicalId?: number | null;
+  linkedHotelIds?: number[];
   // Enriched after the compare call:
   priced?: { available: boolean; sellNightly?: number; sellTotal?: number; currency?: string; ratePlan?: string; refundable?: boolean };
 };
@@ -34,6 +44,12 @@ type AdminRate = {
   supplier: string;
   rateKey: string;
   roomTypeName: string;
+  // Precise sub-variant from static content (room_groups[].name on
+  // RateHawk, room_types[].name on Hummingbird). RateHawk often
+  // refines "Ocean Villa" → "Ocean Villa, 1 king bed, ocean view".
+  // Frontend groups by this so view/bedding/floor variations become
+  // separate cards instead of getting flattened.
+  roomGroupName?: string | null;
   ratePlan: string;
   refundable: boolean;
   breakfastIncluded: boolean;
@@ -60,6 +76,7 @@ export default function ConsoleSearchPage() {
 
   // ─── Form state ─────────────────────────────────────────────
   const [q, setQ]               = useState('');
+  const destRef                 = useRef<DestinationAutocompleteHandle>(null);
   const [checkIn, setCheckIn]   = useState(todayPlus(30));
   const [checkOut, setCheckOut] = useState(todayPlus(33));
   const [rooms, setRooms]       = useState<RoomGuests[]>([{ adults: 2, childrenAges: [] }]);
@@ -85,6 +102,24 @@ export default function ConsoleSearchPage() {
   const [ratesBusy, setRatesBusy]       = useState(false);
   const [ratesErr, setRatesErr]         = useState<string | null>(null);
   const [chosenRate, setChosenRate]     = useState<AdminRate | null>(null);
+  // Prebook state — set when the consultant picks a rate. We verify
+  // availability + price BEFORE they fill the form. Per ETG cert §1.1
+  // ("Moving prebook to the separate step is also highly recommended").
+  type PrebookInfo = {
+    prebookHash: string;
+    priceChanged: boolean;
+    originalPrice?: number | null;
+    newPrice?: number | null;
+    currency?: string | null;
+    isFreeCancellation?: boolean | null;
+    partnerOrderId?: string;
+    supplier?: string;
+    skipped?: string;
+  };
+  const [prebook, setPrebook]               = useState<PrebookInfo | null>(null);
+  const [prebookBusy, setPrebookBusy]       = useState(false);
+  const [prebookErr, setPrebookErr]         = useState<string | null>(null);
+  const [acceptedNewPrice, setAcceptedNewPrice] = useState(false);
   // Inline edit-search on the detail header.
   const [editingSearch, setEditingSearch] = useState(false);
 
@@ -180,6 +215,9 @@ export default function ConsoleSearchPage() {
     setDetailHotel(h);
     setDetailContent(null);
     setChosenRate(null);
+    setPrebook(null);
+    setPrebookErr(null);
+    setAcceptedNewPrice(false);
     setBookingResult(null);
     setBookingErr(null);
     void loadRatesFor(h);
@@ -190,9 +228,14 @@ export default function ConsoleSearchPage() {
     setRatesErr(null);
     setRates([]);
     try {
-      const qs = new URLSearchParams({ checkIn, checkOut, adults: String(rooms.reduce((s, r) => s + r.adults, 0)), rooms: String(rooms.length), nationalityCode: citizenship });
-      const ages = rooms[0]?.childrenAges || [];
-      if (ages.length) qs.set('childAges', JSON.stringify(ages));
+      // ETG cert §4: send per-room guests so the backend doesn't have
+      // to floor-distribute adults or shove all children into room 1.
+      // Equivalent fix to the B2C HotelSearchForm.
+      const qs = new URLSearchParams({ checkIn, checkOut, nationalityCode: citizenship });
+      qs.set('guests', JSON.stringify(rooms.map(r => ({
+        adults: r.adults,
+        children: r.childrenAges || []
+      }))));
       const res = await fetch(`/api/admin/search/rates/${h.id}?${qs.toString()}`);
       const json = await res.json();
       if (res.status === 429) {
@@ -208,6 +251,58 @@ export default function ConsoleSearchPage() {
     }
   }
 
+  // When the consultant picks a rate, immediately fire a prebook
+  // so we verify availability + price BEFORE they fill the form.
+  // Skipped if there's already a prebook for this rateKey (consultant
+  // re-opening the same sidebar). The supplier holds the rate for a
+  // short window after prebook — consultant has minutes, not hours,
+  // to complete the form. That's fine for a B2B console.
+  useEffect(() => {
+    if (!chosenRate || !detailHotel) return;
+    if (prebook?.prebookHash && (prebook as any)._forKey === chosenRate.rateKey) return;
+    setPrebookBusy(true);
+    setPrebookErr(null);
+    setPrebook(null);
+    setAcceptedNewPrice(false);
+    (async () => {
+      try {
+        const totalAdults = rooms.reduce((s, r) => s + r.adults, 0);
+        const allChildAges = rooms.flatMap(r => r.childrenAges);
+        const r = await fetch('/api/admin/prebook', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            hotelId: detailHotel.id,
+            rateKey: chosenRate.rateKey,
+            searchParams: {
+              checkIn, checkOut,
+              adults: totalAdults,
+              childrenAges: allChildAges,
+              rooms: rooms.length,
+              guests: rooms.map(r => ({ adults: r.adults, children: r.childrenAges })),
+              nationalityCode: citizenship
+            },
+            expectedTotalAmount: chosenRate.pricing.sell?.totalAmount,
+            expectedCurrency:    chosenRate.pricing.currency
+          })
+        });
+        const json = await r.json();
+        if (!r.ok || !json.success) throw new Error(json.error || 'Prebook failed');
+        const info: PrebookInfo & { _forKey?: string } = { ...json.data, _forKey: chosenRate.rateKey };
+        setPrebook(info);
+        // If supplier reports no price change (or skipped), consultant
+        // can submit immediately. If priceChanged, we lock submit
+        // until the banner is acknowledged.
+        if (!info.priceChanged) setAcceptedNewPrice(true);
+      } catch (e: any) {
+        setPrebookErr(e?.message || 'Could not verify rate');
+      } finally {
+        setPrebookBusy(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chosenRate?.rateKey, detailHotel?.id]);
+
   async function confirmBooking() {
     if (!detailHotel || !chosenRate) return;
     if (!custFirst.trim() || !custLast.trim() || !custEmail.trim()) {
@@ -216,13 +311,72 @@ export default function ConsoleSearchPage() {
     }
     setBookingBusy(true);
     setBookingErr(null);
+
+    // Two-checkpoint cert pattern: re-verify the rate right before
+    // posting the booking. The Choose-time prebook may have run
+    // minutes ago while the consultant filled the form. If the
+    // supplier's price has moved since, we surface the banner again
+    // — consultant must re-accept before the actual booking submit.
+    try {
+      const totalAdults = rooms.reduce((s, r) => s + r.adults, 0);
+      const allChildAges = rooms.flatMap(r => r.childrenAges);
+      const verify = await fetch('/api/admin/prebook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hotelId: detailHotel.id,
+          // IMPORTANT: re-verify with the ORIGINAL h-* rateKey, not
+          // the p-* prebookHash. RateHawk's prebook on an existing
+          // p-hash isn't supported; we need a fresh round.
+          rateKey: chosenRate.rateKey,
+          expectedTotalAmount: prebook?.newPrice || chosenRate.pricing.sell?.totalAmount,
+          expectedCurrency:    chosenRate.pricing.currency,
+          searchParams: {
+            checkIn, checkOut,
+            adults: totalAdults,
+            childrenAges: allChildAges,
+            rooms: rooms.length,
+            guests: rooms.map(r => ({ adults: r.adults, children: r.childrenAges })),
+            nationalityCode: citizenship
+          }
+        })
+      });
+      const verifyJson = await verify.json();
+      if (verify.ok && verifyJson?.success && verifyJson.data) {
+        if (verifyJson.data.priceChanged) {
+          // Price moved between Choose and Submit. Replace the prebook
+          // state with the new figures, lock submit, force re-accept.
+          const info: PrebookInfo & { _forKey?: string } = {
+            ...verifyJson.data,
+            _forKey: chosenRate.rateKey
+          };
+          setPrebook(info);
+          setAcceptedNewPrice(false);
+          setBookingBusy(false);
+          setBookingErr('Price changed since rate was picked. Review the new total and accept again to continue.');
+          return;
+        }
+        // Same price; latch onto the fresh prebookHash so finish uses
+        // the freshest p-hash (RateHawk holds it for a short window).
+        setPrebook((prev) => prev ? { ...prev, prebookHash: verifyJson.data.prebookHash, partnerOrderId: verifyJson.data.partnerOrderId } : prev);
+      }
+    } catch (e) {
+      // Don't block on verify failure — backend's inline prebook is
+      // the final guard. Log and continue.
+      console.warn('[confirmBooking] submit-time prebook check failed:', e);
+    }
     setBookingResult(null);
     try {
       const totalAdults = rooms.reduce((s, r) => s + r.adults, 0);
       const allChildAges = rooms.flatMap(r => r.childrenAges);
       const payload = {
         hotelId: detailHotel.id,
-        rateKey: chosenRate.rateKey,
+        // Use the prebooked p-* hash when available — createBooking
+        // skips its inline prebook step and goes straight to the
+        // booking form. Falls back to the search-time rateKey for
+        // suppliers where prebook was skipped (Hummingbird).
+        rateKey: prebook?.prebookHash || chosenRate.rateKey,
+        partnerOrderIdOverride: prebook?.partnerOrderId,
         guestInfo:   { firstName: custFirst.trim(), lastName: custLast.trim(), email: custEmail.trim(), phone: custPhone.trim() || undefined },
         contactInfo: { firstName: custFirst.trim(), lastName: custLast.trim(), email: custEmail.trim(), phone: custPhone.trim() || undefined },
         searchParams: {
@@ -254,13 +408,30 @@ export default function ConsoleSearchPage() {
     }
   }
 
-  // Deep-link from the AI agent page — /console/search?hotelId=N
-  // jumps the consultant straight to the detail view.
+  // Deep-link from the AI agent page —
+  //   /console/search?hotelId=N&checkIn=…&checkOut=…&adults=…&rooms=…
+  // Carries whatever date/guest context the agent was reasoning about
+  // so the consultant doesn't re-enter them. Falls back to the
+  // existing form defaults for anything missing.
   useEffect(() => {
     const id = sp.get('hotelId');
     if (!id || detailHotel) return;
     const n = Number(id);
     if (!Number.isFinite(n)) return;
+    const ci = sp.get('checkIn');
+    const co = sp.get('checkOut');
+    if (ci && /^\d{4}-\d{2}-\d{2}$/.test(ci)) setCheckIn(ci);
+    if (co && /^\d{4}-\d{2}-\d{2}$/.test(co)) setCheckOut(co);
+    const adultsParam = Number(sp.get('adults'));
+    const roomsParam  = Number(sp.get('rooms')) || 1;
+    if (Number.isFinite(adultsParam) && adultsParam > 0) {
+      const perRoom = Math.floor(adultsParam / roomsParam);
+      const extra   = adultsParam % roomsParam;
+      setRooms(Array.from({ length: roomsParam }, (_, i) => ({
+        adults: perRoom + (i < extra ? 1 : 0),
+        childrenAges: []
+      })));
+    }
     const stub: HotelHit = { id: n, name: '', sources: [] };
     void openHotel(stub);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -316,13 +487,18 @@ export default function ConsoleSearchPage() {
                   </button>
                 </p>
                 {editingSearch && (
-                  <div className="c-card" style={{ padding: 14, marginTop: 12, maxWidth: 720 }}>
+                  // overflow: visible so the date-picker popover and
+                  // guest dropdown can break out of the card — same
+                  // pattern as the main search form on this page.
+                  // position: relative isolates the stacking context
+                  // so z-index works inside the popovers.
+                  <div className="c-card" style={{ padding: 14, marginTop: 12, maxWidth: 720, overflow: 'visible', position: 'relative', zIndex: 10 }}>
                     <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.4fr auto', gap: 10, alignItems: 'end' }}>
-                      <div>
+                      <div style={{ position: 'relative' }}>
                         <label style={labelStyle}>Dates</label>
                         <DateRangePicker checkIn={checkIn} checkOut={checkOut} onChange={({ checkIn, checkOut }) => { setCheckIn(checkIn); setCheckOut(checkOut); }} />
                       </div>
-                      <div>
+                      <div style={{ position: 'relative' }}>
                         <label style={labelStyle}>Guests</label>
                         <GuestSelector rooms={rooms} onChange={setRooms} />
                       </div>
@@ -357,7 +533,11 @@ export default function ConsoleSearchPage() {
                   <button
                     key={i}
                     onClick={() => {
-                      setQ(p.q);
+                      // Use the silent setter so the autocomplete
+                      // doesn't pop the dropdown after a programmatic
+                      // fill (otherwise the consultant has to click
+                      // the suggestion to dismiss it).
+                      destRef.current?.setSilent(p.q);
                       setCheckIn(todayPlus(30));
                       setCheckOut(todayPlus(30 + p.nights));
                       setRooms(p.rooms);
@@ -377,6 +557,7 @@ export default function ConsoleSearchPage() {
                 <div>
                   <label style={labelStyle}>Destination or hotel name</label>
                   <DestinationAutocomplete
+                    ref={destRef}
                     value={q}
                     onChange={setQ}
                     onSelectHotel={(h) => setQ(h.name || '')}
@@ -391,26 +572,16 @@ export default function ConsoleSearchPage() {
                   <GuestSelector rooms={rooms} onChange={setRooms} />
                 </div>
                 <div>
-                  <label style={labelStyle}>Citizenship</label>
-                  <select
+                  {/* Country picker with flags + typeahead search.
+                      Same component used in B2C ReserveSidebar — keeps
+                      input consistent across audiences. Consultants
+                      type a lot of citizenship values; typeahead beats
+                      a 12-option <select>. */}
+                  <CountryPicker
                     value={citizenship}
-                    onChange={(e) => setCitizenship(e.target.value)}
-                    style={{ width: '100%', padding: '8px 10px', fontSize: 14, border: '1px solid var(--c-line)', borderRadius: 6, background: 'var(--c-bg)', color: 'var(--c-fg)' }}
-                  >
-                    <option value="AU">Australia</option>
-                    <option value="NZ">New Zealand</option>
-                    <option value="GB">United Kingdom</option>
-                    <option value="US">United States</option>
-                    <option value="CA">Canada</option>
-                    <option value="IN">India</option>
-                    <option value="SG">Singapore</option>
-                    <option value="AE">UAE</option>
-                    <option value="UZ">Uzbekistan</option>
-                    <option value="FR">France</option>
-                    <option value="DE">Germany</option>
-                    <option value="JP">Japan</option>
-                    <option value="CN">China</option>
-                  </select>
+                    onChange={setCitizenship}
+                    label="Citizenship"
+                  />
                 </div>
                 <button type="submit" className="c-btn c-btn-primary" disabled={searching}>
                   {searching ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
@@ -576,6 +747,15 @@ export default function ConsoleSearchPage() {
           busy={bookingBusy}
           error={bookingErr}
           result={bookingResult}
+          // Prebook state — sidebar shows "Verifying rate…" until done
+          // and surfaces the price-change banner / cancellation-policy
+          // confirmation before unlocking the submit button.
+          prebookBusy={prebookBusy}
+          prebookErr={prebookErr}
+          prebook={prebook}
+          acceptedNewPrice={acceptedNewPrice}
+          onAcceptNewPrice={() => setAcceptedNewPrice(true)}
+          canSubmit={!!prebook?.prebookHash && acceptedNewPrice}
           onClose={() => { setChosenRate(null); setBookingErr(null); setBookingResult(null); }}
           onConfirm={confirmBooking}
           onBookAnother={() => { setBookingResult(null); setChosenRate(null); setCustFirst(''); setCustLast(''); setCustEmail(''); setCustPhone(''); }}
@@ -654,7 +834,12 @@ function HotelInfo({ content }: { content: any }) {
       {desc && (
         <div>
           <SectionLabel>About the property</SectionLabel>
-          <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--c-fg)', whiteSpace: 'pre-wrap' }}>{trimmedDesc}</div>
+          {/* RateHawk descriptions contain markdown — bold section
+              headers (**Location**, **At the hotel**) and bulleted
+              lists. Render as markdown not raw text. */}
+          <div className="agent-md" style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--c-fg)' }}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{trimmedDesc}</ReactMarkdown>
+          </div>
           {desc.length > 320 && (
             <button onClick={() => setDescExpanded(x => !x)} style={{ marginTop: 4, fontSize: 12, color: 'var(--c-accent)', background: 'none', border: 0, cursor: 'pointer', padding: 0, fontWeight: 600 }}>
               {descExpanded ? 'Show less' : 'Read more'}
@@ -715,11 +900,15 @@ function RoomGroupedRates({
   onChoose: (r: AdminRate) => void;
   marginTop?: number;
 }) {
-  // Group while preserving the cheapest-first order the backend sent.
+  // Group by the precise sub-variant name. roomGroupName is the
+  // backend's resolved name from static content — for RateHawk it
+  // refines "Ocean Villa" → "Ocean Villa, 1 king bed, ocean view"
+  // so each view/bedding/floor combo becomes its own card. Falls
+  // back to roomTypeName when no static-content match exists.
   const groups = useMemo(() => {
     const m = new Map<string, AdminRate[]>();
     for (const r of rates) {
-      const k = r.roomTypeName || r.rateKey || 'Room';
+      const k = r.roomGroupName || r.roomTypeName || r.rateKey || 'Room';
       if (!m.has(k)) m.set(k, []);
       m.get(k)!.push(r);
     }
@@ -732,16 +921,25 @@ function RoomGroupedRates({
         Available rooms ({groups.length})
       </div>
       {groups.map((g) => {
+        // Mirror B2C RoomGrid behaviour: show the thumbnail only when
+        // an image actually exists. Empty grey boxes look broken in a
+        // long room list, especially when most rooms don't have an
+        // image (rg_ext match miss). When no image, collapse to a
+        // single-column card.
         const cover = g.rates.find(r => r.roomImage)?.roomImage || null;
         return (
           <div key={g.name} className="c-card" style={{ overflow: 'hidden' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 0 }}>
-              <div style={{
-                width: 160, minHeight: 120,
-                background: 'var(--c-bg-soft)',
-                backgroundImage: cover ? `url(${cover})` : undefined,
-                backgroundSize: 'cover', backgroundPosition: 'center'
-              }} />
+            <div style={{ display: 'grid', gridTemplateColumns: cover ? '160px 1fr' : '1fr', gap: 0 }}>
+              {cover && (
+                <div style={{
+                  width: 160, minHeight: 120,
+                  backgroundColor: 'var(--c-bg-soft)',
+                  backgroundImage: `url(${cover})`,
+                  backgroundSize: 'contain',
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'center'
+                }} />
+              )}
               <div style={{ padding: '12px 14px' }}>
                 <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{g.name}</div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
@@ -823,6 +1021,22 @@ function BookingSidebar(props: {
   busy: boolean;
   error: string | null;
   result: any;
+  prebookBusy: boolean;
+  prebookErr: string | null;
+  prebook: {
+    prebookHash: string;
+    priceChanged: boolean;
+    originalPrice?: number | null;
+    newPrice?: number | null;
+    currency?: string | null;
+    isFreeCancellation?: boolean | null;
+    partnerOrderId?: string;
+    supplier?: string;
+    skipped?: string;
+  } | null;
+  acceptedNewPrice: boolean;
+  onAcceptNewPrice: () => void;
+  canSubmit: boolean;
   onClose: () => void;
   onConfirm: () => void;
   onBookAnother: () => void;
@@ -886,6 +1100,88 @@ function BookingSidebar(props: {
               <span>{totalAdults} adult{totalAdults !== 1 ? 's' : ''}{totalChildren ? ` · ${totalChildren} child${totalChildren !== 1 ? 'ren' : ''}` : ''}</span>
             </div>
           </div>
+
+          {/* Prebook status — ETG cert §1.1 ─────────────────────────
+              Verifying availability + surfacing any price change
+              BEFORE the consultant fills the form. */}
+          {props.prebookBusy && (
+            <div style={{ padding: '10px 14px', background: 'var(--c-bg-soft)', border: '1px solid var(--c-line)', borderRadius: 6, fontSize: 13, color: 'var(--c-fg-soft)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Loader2 size={14} className="animate-spin" />
+              Verifying rate with supplier…
+            </div>
+          )}
+          {props.prebookErr && (
+            <div style={{ padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 13, color: 'var(--c-danger)', marginBottom: 12 }}>
+              Rate verification failed: {props.prebookErr}. <button onClick={props.onClose} style={{ background: 'none', border: 0, color: 'var(--c-danger)', textDecoration: 'underline', cursor: 'pointer', padding: 0 }}>Pick another</button>
+            </div>
+          )}
+          {props.prebook?.priceChanged && !props.acceptedNewPrice && (
+            // Premium price-change banner — ported from B2C ReserveSidebar
+            // for consistency across audiences. Same cert evidence on
+            // both flows. Brand-gold accent, serif numbers, single
+            // primary CTA.
+            <div style={{
+              marginBottom: 14,
+              borderRadius: 10,
+              border: '1px solid #E8DCC4',
+              background: 'linear-gradient(180deg, #FDFAF0 0%, #FAF4E2 100%)',
+              padding: '16px 16px 14px',
+              boxShadow: '0 1px 2px rgba(155, 123, 51, 0.08)'
+            }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                fontSize: 10.5, fontWeight: 700, letterSpacing: '0.08em',
+                color: '#9B7B33', textTransform: 'uppercase', marginBottom: 10
+              }}>
+                <AlertTriangle size={12} /> Rate updated by supplier
+              </div>
+              <div style={{
+                display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+                paddingBottom: 10, marginBottom: 10, borderBottom: '1px solid #E8DCC4'
+              }}>
+                <span style={{ fontSize: 12.5, color: '#7A6635' }}>Previous total</span>
+                <span style={{
+                  fontSize: 13.5, color: '#9C8B5D',
+                  textDecoration: 'line-through', fontFamily: 'Georgia, serif'
+                }}>
+                  {fmtMoney(props.prebook.originalPrice ?? undefined)} {props.prebook.currency}
+                </span>
+              </div>
+              <div style={{
+                display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+                marginBottom: 12
+              }}>
+                <span style={{ fontSize: 13, color: '#3F2F0E', fontWeight: 600 }}>New total</span>
+                <span style={{
+                  fontSize: 22, color: '#3F2F0E', fontWeight: 600,
+                  fontFamily: 'Georgia, serif', letterSpacing: '-0.01em'
+                }}>
+                  {fmtMoney(props.prebook.newPrice ?? undefined)} {props.prebook.currency}
+                </span>
+              </div>
+              <button
+                onClick={props.onAcceptNewPrice}
+                style={{
+                  width: '100%', padding: '10px 14px', borderRadius: 8,
+                  background: '#9B7B33', color: 'white', border: 0,
+                  fontWeight: 600, fontSize: 13, cursor: 'pointer'
+                }}
+              >
+                Accept new total of {fmtMoney(props.prebook.newPrice ?? undefined)} {props.prebook.currency}
+              </button>
+            </div>
+          )}
+          {props.prebook && !props.prebook.priceChanged && !props.prebook.skipped && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '8px 12px', borderRadius: 6, marginBottom: 12,
+              background: '#FAF7EE', borderLeft: '3px solid #9B7B33',
+              fontSize: 12, color: '#5C4A1F'
+            }}>
+              <CheckCircle2 size={13} style={{ color: '#9B7B33' }} />
+              Rate held at <strong style={{ color: '#3F2F0E' }}>{fmtMoney((props.prebook.newPrice ?? props.prebook.originalPrice) ?? undefined)} {props.prebook.currency}</strong>
+            </div>
+          )}
 
           {/* SUCCESS view */}
           {props.result && (
@@ -959,11 +1255,16 @@ function BookingSidebar(props: {
             <button
               className="c-btn c-btn-primary"
               onClick={props.onConfirm}
-              disabled={props.busy}
-              style={{ flex: 1, justifyContent: 'center' }}
+              // Gated on canSubmit: must have a prebookHash AND the
+              // consultant must have accepted any price change. Without
+              // a hash the booking would 400 at the supplier; without
+              // accepting price change ETG §1.1 would flag the booking.
+              disabled={props.busy || !props.canSubmit}
+              title={!props.canSubmit ? 'Verifying rate or awaiting price-change confirmation' : ''}
+              style={{ flex: 1, justifyContent: 'center', opacity: props.canSubmit ? 1 : 0.6 }}
             >
               {props.busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-              {props.busy ? 'Booking…' : `Confirm · ${fmtMoney(r.pricing.sell?.totalAmount)} ${r.pricing.currency}`}
+              {props.busy ? 'Booking…' : `Confirm · ${fmtMoney((props.prebook?.priceChanged && props.prebook?.newPrice) || r.pricing.sell?.totalAmount)} ${r.pricing.currency}`}
             </button>
           )}
         </div>
