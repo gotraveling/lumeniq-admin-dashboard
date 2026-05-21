@@ -56,6 +56,14 @@ type AdminRate = {
   roomImage?: string | null;
   cancellationPolicy?: string | null;
   cancellationDeadlineUtc?: string | null;
+  // ETG cert §6 — included/excluded split from supplier. Sidebar
+  // itemises excluded taxes on top of the rate; included taxes are
+  // already in pricing.sell.totalAmount and must never be re-summed.
+  taxes?: {
+    included?: Array<{ name?: string; type?: string; amount: number; currency?: string }>;
+    excluded?: Array<{ name?: string; type?: string; amount: number; currency?: string }>;
+    excludedTotal?: number;
+  } | null;
   pricing: {
     currency: string;
     net?: { totalAmount: number; nightlyAmount: number };
@@ -1115,12 +1123,47 @@ function BookingSidebar(props: {
             <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', marginBottom: 10 }}>
               {r.ratePlan} · {r.refundable ? <span style={{ color: 'var(--c-success)' }}>Refundable</span> : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>} · {r.supplier}
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>Total payable</span>
-              <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)' }}>
-                {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency}
-              </span>
-            </div>
+            {/* ETG cert §6 — itemised tax breakdown.
+                Sell total already contains supplier-included taxes
+                (included_by_supplier:true). Excluded taxes are
+                surfaced as separate line items and summed on top
+                so the consultant + customer see the real payable. */}
+            {(() => {
+              const sellTotal = r.pricing.sell?.totalAmount || 0;
+              const excluded = r.taxes?.excluded || [];
+              const excludedTotal = r.taxes?.excludedTotal || 0;
+              const hasExcluded = excluded.length > 0 && excludedTotal > 0;
+              const grandTotal = sellTotal + excludedTotal;
+              return (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {hasExcluded && (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
+                        <span>Room rate</span>
+                        <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(sellTotal)} {r.pricing.currency}</span>
+                      </div>
+                      {excluded.map((t, i) => {
+                        const label = String(t.name || t.type || 'Tax')
+                          .replace(/_/g, ' ')
+                          .replace(/\b\w/g, c => c.toUpperCase());
+                        return (
+                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
+                            <span>{label}</span>
+                            <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(t.amount)} {t.currency || r.pricing.currency}</span>
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: hasExcluded ? 6 : 0, borderTop: hasExcluded ? '1px solid var(--c-line-soft)' : 'none' }}>
+                    <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>Total payable</span>
+                    <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)' }}>
+                      {fmtMoney(grandTotal)} {r.pricing.currency}
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
             <div style={{ marginTop: 6, fontSize: 11, color: 'var(--c-fg-muted)', display: 'flex', justifyContent: 'space-between' }}>
               <span>Net {fmtMoney(r.pricing.net?.totalAmount)} · +Markup {fmtMoney(r.pricing.markup?.amount)} ({r.pricing.markup?.value ?? 0}%)</span>
               <span>{totalAdults} adult{totalAdults !== 1 ? 's' : ''}{totalChildren ? ` · ${totalChildren} child${totalChildren !== 1 ? 'ren' : ''}` : ''}</span>
@@ -1328,7 +1371,11 @@ function BookingSidebar(props: {
               style={{ flex: 1, justifyContent: 'center', opacity: props.canSubmit ? 1 : 0.6 }}
             >
               {props.busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-              {props.busy ? 'Booking…' : `Confirm · ${fmtMoney((props.prebook?.priceChanged && props.prebook?.newPrice) || r.pricing.sell?.totalAmount)} ${r.pricing.currency}`}
+              {props.busy ? 'Booking…' : (() => {
+                const base = (props.prebook?.priceChanged && props.prebook?.newPrice) || r.pricing.sell?.totalAmount || 0;
+                const grand = base + (r.taxes?.excludedTotal || 0);
+                return `Confirm · ${fmtMoney(grand)} ${r.pricing.currency}`;
+              })()}
             </button>
           )}
         </div>
