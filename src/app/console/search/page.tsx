@@ -37,7 +37,7 @@ type HotelHit = {
   canonicalId?: number | null;
   linkedHotelIds?: number[];
   // Enriched after the compare call:
-  priced?: { available: boolean; sellNightly?: number; sellTotal?: number; currency?: string; ratePlan?: string; refundable?: boolean };
+  priced?: { available: boolean; sellNightly?: number; sellTotal?: number; currency?: string; ratePlan?: string; refundable?: boolean; onRequest?: boolean };
 };
 
 type AdminRate = {
@@ -201,6 +201,13 @@ export default function ConsoleSearchPage() {
       setHits(curr => curr.map(h => {
         const r = byId.get(h.id);
         if (!r || !r.available) return { ...h, priced: { available: false } };
+        // ETG cert §10 — hotel may be available without a quotable
+        // headline price (all rates on-request, supplier echoed
+        // null amounts). Card surfaces "Price on request" so it
+        // stays visible instead of getting bucketed as sold out.
+        if (!r.cheapestRate) {
+          return { ...h, priced: { available: true, onRequest: true } };
+        }
         const sell = r.cheapestRate?.pricing?.sell;
         return {
           ...h,
@@ -705,6 +712,9 @@ export default function ConsoleSearchPage() {
                       <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>—</span>
                     ) : !h.priced.available ? (
                       <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>Unavailable</span>
+                    ) : h.priced.onRequest ? (
+                      // ETG cert §10 — available without headline price
+                      <span style={{ fontSize: 12, color: 'var(--c-fg-soft)', fontStyle: 'italic' }}>Price on request</span>
                     ) : (
                       <div>
                         <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', letterSpacing: 0.04, textTransform: 'uppercase', fontWeight: 700 }}>From</div>
