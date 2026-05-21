@@ -128,6 +128,17 @@ export default function ConsoleSearchPage() {
   const [custLast,  setCustLast]  = useState('');
   const [custEmail, setCustEmail] = useState('');
   const [custPhone, setCustPhone] = useState('');
+  // ETG cert §5 — per-room lead-guest names for multi-room bookings.
+  // Indexes 0…N-2 hold names for rooms 2…N. Room 1 uses custFirst /
+  // custLast (the main customer block).
+  const [extraRoomGuests, setExtraRoomGuests] = useState<Array<{ firstName: string; lastName: string }>>([]);
+  useEffect(() => {
+    const extras = Math.max(0, rooms.length - 1);
+    setExtraRoomGuests(prev => {
+      if (prev.length === extras) return prev;
+      return Array.from({ length: extras }, (_, i) => prev[i] || { firstName: '', lastName: '' });
+    });
+  }, [rooms.length]);
   const [bookingBusy,   setBookingBusy]   = useState(false);
   const [bookingErr,    setBookingErr]    = useState<string | null>(null);
   const [bookingResult, setBookingResult] = useState<any>(null);
@@ -305,6 +316,11 @@ export default function ConsoleSearchPage() {
 
   async function confirmBooking() {
     if (!detailHotel || !chosenRate) return;
+    const missingExtra = extraRoomGuests.findIndex(g => !g.firstName.trim() || !g.lastName.trim());
+    if (missingExtra !== -1) {
+      setBookingErr(`Lead guest for Room ${missingExtra + 2} is required (ETG cert §5).`);
+      return;
+    }
     if (!custFirst.trim() || !custLast.trim() || !custEmail.trim()) {
       setBookingErr('Customer first name, last name and email are required.');
       return;
@@ -386,6 +402,12 @@ export default function ConsoleSearchPage() {
           childrenAges: allChildAges,
           rooms:        rooms.length,
           guests:       rooms.map(r => ({ adults: r.adults, children: r.childrenAges })),
+          // ETG cert §5: per-room lead-guest names so the backend
+          // doesn't book the same person into every room.
+          roomGuests: [
+            { firstName: custFirst.trim(), lastName: custLast.trim() },
+            ...extraRoomGuests.map(g => ({ firstName: g.firstName.trim(), lastName: g.lastName.trim() }))
+          ],
           nationalityCode: 'AU'
         },
         specialRequests:     'B2B book-on-behalf via console',
@@ -742,6 +764,8 @@ export default function ConsoleSearchPage() {
           citizenship={citizenship}
           custFirst={custFirst}  setCustFirst={setCustFirst}
           custLast={custLast}    setCustLast={setCustLast}
+          extraRoomGuests={extraRoomGuests}
+          setExtraRoomGuests={setExtraRoomGuests}
           custEmail={custEmail}  setCustEmail={setCustEmail}
           custPhone={custPhone}  setCustPhone={setCustPhone}
           busy={bookingBusy}
@@ -1018,6 +1042,8 @@ function BookingSidebar(props: {
   custLast:  string; setCustLast:  (s: string) => void;
   custEmail: string; setCustEmail: (s: string) => void;
   custPhone: string; setCustPhone: (s: string) => void;
+  extraRoomGuests: Array<{ firstName: string; lastName: string }>;
+  setExtraRoomGuests: (g: Array<{ firstName: string; lastName: string }>) => void;
   busy: boolean;
   error: string | null;
   result: any;
@@ -1236,6 +1262,44 @@ function BookingSidebar(props: {
                   </div>
                 </div>
               </div>
+
+              {/* ETG cert §5 — per-room lead-guest names. Only shown
+                  for multi-room bookings. */}
+              {props.extraRoomGuests.length > 0 && (
+                <>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-fg-soft)', textTransform: 'uppercase', letterSpacing: 0.05, marginTop: 16, marginBottom: 6 }}>
+                    Lead guest in each additional room
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginBottom: 10, lineHeight: 1.5 }}>
+                    Hotels require a real name for the lead guest in each room. The customer above is the lead guest in Room 1.
+                  </div>
+                  {props.extraRoomGuests.map((rg, i) => (
+                    <div key={i} style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-soft)', marginBottom: 6 }}>Room {i + 2}</div>
+                      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: '1fr 1fr' }}>
+                        <div>
+                          <label style={labelStyle}>First name</label>
+                          <input
+                            style={inputStyle}
+                            value={rg.firstName}
+                            onChange={(e) => props.setExtraRoomGuests(props.extraRoomGuests.map((x, j) => j === i ? { ...x, firstName: e.target.value } : x))}
+                            placeholder="First"
+                          />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Last name</label>
+                          <input
+                            style={inputStyle}
+                            value={rg.lastName}
+                            onChange={(e) => props.setExtraRoomGuests(props.extraRoomGuests.map((x, j) => j === i ? { ...x, lastName: e.target.value } : x))}
+                            placeholder="Last"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
             </>
           )}
         </div>
