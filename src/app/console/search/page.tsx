@@ -1265,6 +1265,20 @@ function BookingSidebar(props: {
                 <Row label="Internal booking" value={String(props.result.internalBookingId || '—')} mono />
                 <Row label="Total"            value={`${props.result.totalAmount || '—'} ${props.result.currency || ''}`} />
                 <Row label="Guest"            value={`${props.result.guestInfo?.firstName || ''} ${props.result.guestInfo?.lastName || ''}`} />
+                {/* ETG cert §9 — multi-room composition. Read from
+                    the rooms[] state (true per-room) rather than the
+                    supplier echo, which only carries the lead-guest
+                    block. Matches what the consultant entered. */}
+                {(() => {
+                  const totalAdults   = props.rooms.reduce((s, r) => s + (r.adults || 0), 0);
+                  const totalChildren = props.rooms.reduce((s, r) => s + ((r.childrenAges || []).length), 0);
+                  const composition = [
+                    `${totalAdults}A`,
+                    totalChildren > 0 ? `${totalChildren}C` : null,
+                    `${props.rooms.length} room${props.rooms.length === 1 ? '' : 's'}`
+                  ].filter(Boolean).join(' · ');
+                  return <Row label="Guests & rooms" value={composition} />;
+                })()}
               </div>
             </div>
           )}
