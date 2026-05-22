@@ -1133,44 +1133,52 @@ function BookingSidebar(props: {
             <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', marginBottom: 10 }}>
               {r.ratePlan} · {r.refundable ? <span style={{ color: 'var(--c-success)' }}>Refundable</span> : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>} · {r.supplier}
             </div>
-            {/* ETG cert §6 — itemised tax breakdown.
+            {/* ETG cert §6 — full tax transparency for B2B.
                 Sell total already contains supplier-included taxes
-                (included_by_supplier:true). Excluded taxes are
-                surfaced as separate line items and summed on top
-                so the consultant + customer see the real payable. */}
+                (included_by_supplier:true). We show those inline as
+                "of which" rows for consultant transparency, then
+                excluded taxes as separate line items added on top. */}
             {(() => {
               const sellTotal = r.pricing.sell?.totalAmount || 0;
+              const included = r.taxes?.included || [];
               const excluded = r.taxes?.excluded || [];
               const excludedTotal = r.taxes?.excludedTotal || 0;
+              const hasIncluded = included.length > 0;
               const hasExcluded = excluded.length > 0 && excludedTotal > 0;
               const grandTotal = sellTotal + excludedTotal;
+              const prettify = (t: { name?: string; type?: string }) =>
+                String(t.name || t.type || 'Tax').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
               return (
                 <div style={{ display: 'grid', gap: 6 }}>
-                  {hasExcluded && (
-                    <>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
-                        <span>Room rate</span>
-                        <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(sellTotal)} {r.pricing.currency}</span>
-                      </div>
-                      {excluded.map((t, i) => {
-                        const label = String(t.name || t.type || 'Tax')
-                          .replace(/_/g, ' ')
-                          .replace(/\b\w/g, c => c.toUpperCase());
-                        return (
-                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
-                            <span>{label}</span>
-                            <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(t.amount)} {t.currency || r.pricing.currency}</span>
-                          </div>
-                        );
-                      })}
-                    </>
+                  {(hasIncluded || hasExcluded) && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
+                      <span>Room rate</span>
+                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(sellTotal)} {r.pricing.currency}</span>
+                    </div>
                   )}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: hasExcluded ? 6 : 0, borderTop: hasExcluded ? '1px solid var(--c-line-soft)' : 'none' }}>
+                  {hasIncluded && included.map((t, i) => (
+                    <div key={`inc-${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--c-fg-muted)', paddingLeft: 12 }}>
+                      <span>↳ {prettify(t)} <span style={{ fontStyle: 'italic' }}>(included)</span></span>
+                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(t.amount)} {t.currency || r.pricing.currency}</span>
+                    </div>
+                  ))}
+                  {hasExcluded && excluded.map((t, i) => (
+                    <div key={`exc-${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
+                      <span>{prettify(t)}</span>
+                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(t.amount)} {t.currency || r.pricing.currency}</span>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: (hasIncluded || hasExcluded) ? 6 : 0, borderTop: (hasIncluded || hasExcluded) ? '1px solid var(--c-line-soft)' : 'none' }}>
                     <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>Total payable</span>
                     <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)' }}>
                       {fmtMoney(grandTotal)} {r.pricing.currency}
                     </span>
                   </div>
+                  {!hasIncluded && !hasExcluded && (
+                    <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', textAlign: 'right' }}>
+                      Includes taxes & fees (supplier did not return a breakdown)
+                    </div>
+                  )}
                 </div>
               );
             })()}
