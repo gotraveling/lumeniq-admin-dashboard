@@ -115,7 +115,15 @@ export default function ConsoleSearchPage() {
   // ("Moving prebook to the separate step is also highly recommended").
   type PrebookInfo = {
     prebookHash: string;
+    // Truthful: did the supplier-locked sell price differ from the
+    // search-time quote? Used for informational rendering and as the
+    // LLM-readable signal in MCP responses.
     priceChanged: boolean;
+    // Strict: did the supplier flip changes.price_changed=true? Per
+    // ETG cert, this is the ONLY signal that gates the "Accept new
+    // total" banner — silent shifts inside RH's own tolerance band
+    // must not interrupt the consultant.
+    supplierFlaggedChange: boolean;
     originalPrice?: number | null;
     newPrice?: number | null;
     currency?: string | null;
@@ -318,12 +326,20 @@ export default function ConsoleSearchPage() {
         });
         const json = await r.json();
         if (!r.ok || !json.success) throw new Error(json.error || 'Prebook failed');
-        const info: PrebookInfo & { _forKey?: string } = { ...json.data, _forKey: chosenRate.rateKey };
+        // Default supplierFlaggedChange to priceChanged on older API
+        // responses that don't carry the strict flag yet.
+        const info: PrebookInfo & { _forKey?: string } = {
+          ...json.data,
+          supplierFlaggedChange: json.data.supplierFlaggedChange ?? json.data.priceChanged,
+          _forKey: chosenRate.rateKey
+        };
         setPrebook(info);
-        // If supplier reports no price change (or skipped), consultant
-        // can submit immediately. If priceChanged, we lock submit
-        // until the banner is acknowledged.
-        if (!info.priceChanged) setAcceptedNewPrice(true);
+        // Auto-accept when the SUPPLIER didn't flag a change (cert-
+        // compliant banner gate). Silent shifts within RateHawk's
+        // own tolerance still let the consultant submit without an
+        // explicit confirm — the rate panel pill shows the new total
+        // unconditionally so they can see what they're locking in.
+        if (!info.supplierFlaggedChange) setAcceptedNewPrice(true);
       } catch (e: any) {
         setPrebookErr(e?.message || 'Could not verify rate');
       } finally {
@@ -379,7 +395,7 @@ export default function ConsoleSearchPage() {
       });
       const verifyJson = await verify.json();
       if (verify.ok && verifyJson?.success && verifyJson.data) {
-        if (verifyJson.data.priceChanged) {
+        if (verifyJson.data.supplierFlaggedChange ?? verifyJson.data.priceChanged) {
           // Price moved between Choose and Submit. Replace the prebook
           // state with the new figures, lock submit, force re-accept.
           const info: PrebookInfo & { _forKey?: string } = {
@@ -1080,7 +1096,8 @@ function BookingSidebar(props: {
   prebookErr: string | null;
   prebook: {
     prebookHash: string;
-    priceChanged: boolean;
+    priceChanged: boolean;            // truthful delta — informational
+    supplierFlaggedChange: boolean;   // strict — gates the banner
     originalPrice?: number | null;
     newPrice?: number | null;
     currency?: string | null;
@@ -1213,7 +1230,7 @@ function BookingSidebar(props: {
               Rate verification failed: {props.prebookErr}. <button onClick={props.onClose} style={{ background: 'none', border: 0, color: 'var(--c-danger)', textDecoration: 'underline', cursor: 'pointer', padding: 0 }}>Pick another</button>
             </div>
           )}
-          {props.prebook?.priceChanged && !props.acceptedNewPrice && (
+          {props.prebook?.supplierFlaggedChange && !props.acceptedNewPrice && (
             // Premium price-change banner — ported from B2C ReserveSidebar
             // for consistency across audiences. Same cert evidence on
             // both flows. Brand-gold accent, serif numbers, single
@@ -1269,7 +1286,7 @@ function BookingSidebar(props: {
               </button>
             </div>
           )}
-          {props.prebook && !props.prebook.priceChanged && !props.prebook.skipped && (
+          {props.prebook && !props.prebook.supplierFlaggedChange && !props.prebook.skipped && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8,
               padding: '8px 12px', borderRadius: 6, marginBottom: 12,
@@ -1415,7 +1432,12 @@ function BookingSidebar(props: {
             >
               {props.busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
               {props.busy ? 'Booking…' : (() => {
-                const base = (props.prebook?.priceChanged && props.prebook?.newPrice) || r.pricing.sell?.totalAmount || 0;
+                // Use the prebook-locked newPrice whenever it's
+                // present — silent shifts must show on the Confirm
+                // button so the consultant sees the real total. Was
+                // gated on priceChanged before, which hid moves
+                // RateHawk didn't flip the banner flag for.
+                const base = props.prebook?.newPrice || r.pricing.sell?.totalAmount || 0;
                 const grand = base + (r.taxes?.excludedTotal || 0);
                 return `Confirm · ${fmtMoney(grand)} ${r.pricing.currency}`;
               })()}
