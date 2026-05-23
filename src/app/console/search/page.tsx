@@ -431,8 +431,14 @@ export default function ConsoleSearchPage() {
           nationalityCode: 'AU'
         },
         specialRequests:     'B2B book-on-behalf via console',
-        expectedTotalAmount: chosenRate.pricing.sell?.totalAmount,
-        expectedCurrency:    chosenRate.pricing.currency,
+        // Prefer the prebook-locked supplier sell price. priceChanged=false
+        // just means RateHawk didn't flip its banner flag — the supplier
+        // can still silently raise within our 10% tolerance, and the
+        // booking row + audit + email must record what the customer is
+        // actually charged, not the stale search-time quote. Falls back
+        // to chosenRate when prebook never ran (e.g. Hummingbird).
+        expectedTotalAmount: prebook?.newPrice || chosenRate.pricing.sell?.totalAmount,
+        expectedCurrency:    prebook?.currency || chosenRate.pricing.currency,
         availabilityType:    'free_sell'
       };
       const res = await fetch('/api/admin/bookings', {
