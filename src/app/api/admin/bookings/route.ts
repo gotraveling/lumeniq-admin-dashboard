@@ -24,6 +24,11 @@ export async function POST(request: NextRequest) {
     if (consultantEmail) {
       body.specialRequests = `[Booked on behalf by ${consultantEmail}] ${body.specialRequests || ''}`.trim();
     }
+    // Admin console is the B2B channel — pin every booking to the cug
+    // credentials unless the caller already chose. Must match the
+    // accountType used at prebook (the p-* hash is credential-scoped on
+    // RateHawk's side).
+    if (!body.accountType) body.accountType = 'cug';
     const res = await fetch(`${BOOKING_API_URL}/api/bookings`, {
       method: 'POST',
       headers: {

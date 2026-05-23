@@ -309,7 +309,11 @@ export default function ConsoleSearchPage() {
               nationalityCode: citizenship
             },
             expectedTotalAmount: chosenRate.pricing.sell?.totalAmount,
-            expectedCurrency:    chosenRate.pricing.currency
+            expectedCurrency:    chosenRate.pricing.currency,
+            // Admin console is the B2B/CUG channel — pick the cug
+            // credentials on the supplier side so margins and rate
+            // visibility match the B2B API key ETG issues us.
+            accountType: 'cug'
           })
         });
         const json = await r.json();
@@ -362,6 +366,7 @@ export default function ConsoleSearchPage() {
           rateKey: chosenRate.rateKey,
           expectedTotalAmount: prebook?.newPrice || chosenRate.pricing.sell?.totalAmount,
           expectedCurrency:    chosenRate.pricing.currency,
+          accountType: 'cug',
           searchParams: {
             checkIn, checkOut,
             adults: totalAdults,
