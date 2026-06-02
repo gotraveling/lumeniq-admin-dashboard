@@ -850,7 +850,7 @@ export default function ConsoleSearchPage() {
                 // density they had before, no wasted vertical space.
                 const multi = (h.priced?.quotes?.length || 0) > 1;
                 if (multi) {
-                  return <MultiSupplierCard key={h.id} h={h} onOpen={(supplier) => openHotel(h, supplier)} />;
+                  return <MultiSupplierCard key={h.id} h={h} onOpen={(supplier) => openHotel(h, supplier)} showUnavailable={showUnavailable} />;
                 }
                 return (
                 <button
@@ -1347,7 +1347,7 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
  * Used only when h.priced.quotes.length > 1. Singletons stay on the
  * compact stacked layout — see filteredHits.map for the dispatch.
  */
-function MultiSupplierCard({ h, onOpen }: { h: HotelHit; onOpen: (supplier: string | null) => void }) {
+function MultiSupplierCard({ h, onOpen, showUnavailable }: { h: HotelHit; onOpen: (supplier: string | null) => void; showUnavailable: boolean }) {
   const quotes: Quote[] = h.priced?.quotes || [];
   // Score the quotes so the highest-scored gets the Recommended border.
   const minSell = Math.min(...quotes
@@ -1360,119 +1360,82 @@ function MultiSupplierCard({ h, onOpen }: { h: HotelHit; onOpen: (supplier: stri
       refundable: q.refundable, cancellationDeadlineUtc: q.cancellationDeadlineUtc
     }, minSell, { isB2B: true })
   }));
-  const recommended = scored.filter(s => s.q.available).sort((a, b) => b.score - a.score)[0];
+  const avail = quotes.filter(q => q.available);
+  const best = scored.filter(s => s.q.available).sort((a, b) => b.score - a.score)[0]?.q;
 
   return (
-    <div className="c-card" style={{ background: 'var(--c-bg)', border: '1px solid var(--c-line)', overflow: 'hidden' }}>
-      {/* Hotel header — click opens detail with both suppliers visible */}
-      <button
-        onClick={() => onOpen(null)}
-        style={{
-          display: 'grid', gridTemplateColumns: '120px 1fr', gap: 16, alignItems: 'center',
-          padding: 12, width: '100%', textAlign: 'left', cursor: 'pointer',
-          background: 'transparent', border: 0, borderBottom: '1px solid var(--c-line-soft)'
-        }}
-      >
-        <div style={{ width: 120, height: 80, borderRadius: 6, overflow: 'hidden', background: 'var(--c-bg-soft)', backgroundImage: h.image ? `url(${h.image})` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{h.name}</div>
-          <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <MapPin size={12} /> {[h.city, h.country].filter(Boolean).join(', ')}
+    <button
+      onClick={() => onOpen(null)}
+      className="c-card"
+      style={{
+        display: 'grid', gridTemplateColumns: '150px 1fr auto', gap: 16, alignItems: 'stretch',
+        padding: 12, width: '100%', textAlign: 'left', cursor: 'pointer',
+        background: 'var(--c-bg)', border: '1px solid var(--c-line)',
+        opacity: best ? 1 : 0.6
+      }}
+    >
+      {/* Image */}
+      <div style={{ width: 150, height: 104, borderRadius: 8, overflow: 'hidden', background: 'var(--c-bg-soft)', backgroundImage: h.image ? `url(${h.image})` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+
+      {/* Hotel info */}
+      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.2 }}>{h.name}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--c-fg-soft)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <MapPin size={12} /> {[h.city, h.country].filter(Boolean).join(', ')}
+          </span>
+          {!!h.starRating && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+              {Array.from({ length: Math.round(h.starRating) }).map((_, i) => (
+                <Star key={i} size={11} fill="var(--c-accent)" style={{ color: 'var(--c-accent)' }} />
+              ))}
             </span>
-            {!!h.starRating && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                {Array.from({ length: Math.round(h.starRating) }).map((_, i) => (
-                  <Star key={i} size={11} fill="var(--c-accent)" style={{ color: 'var(--c-accent)' }} />
-                ))}
-              </span>
-            )}
-            <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>{quotes.length} suppliers</span>
-          </div>
+          )}
         </div>
-      </button>
-
-      {/* One row per supplier */}
-      <div>
-        {quotes.map((q, i) => {
-          const isRec = recommended && q === recommended.q;
-          const muted = !q.available;
-          return (
-            <button
-              key={i}
-              onClick={() => onOpen(q.supplier || null)}
-              disabled={muted}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '120px 1fr auto',
-                gap: 12, alignItems: 'center',
-                width: '100%', padding: '10px 14px', textAlign: 'left',
-                background: isRec ? 'rgba(155,123,51,0.05)' : 'var(--c-bg)',
-                border: 0,
-                borderTop: i === 0 ? 0 : '1px solid var(--c-line-soft)',
-                boxShadow: isRec ? 'inset 3px 0 0 var(--c-accent)' : undefined,
-                cursor: muted ? 'default' : 'pointer',
-                opacity: muted ? 0.5 : 1
-              }}
-            >
-              {/* Supplier badge + Recommended chip */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {q.supplier && <span style={badgeStyle(q.supplier)}>{q.supplier}</span>}
-                {isRec && (
-                  <span style={{
-                    fontSize: 9.5, fontWeight: 700, letterSpacing: 0.04, textTransform: 'uppercase',
-                    color: 'var(--c-accent)', alignSelf: 'flex-start',
-                    padding: '1px 5px', borderRadius: 3,
-                    background: 'rgba(155,123,51,0.12)', border: '1px solid var(--c-accent)'
-                  }}>★ Recommended</span>
-                )}
-              </div>
-
-              {/* Inline pricing summary */}
-              {!q.available ? (
-                <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
-                  {q.reason === 'no_rates' ? 'No rates for these dates' :
-                   q.reason === 'supplier_error' ? 'Supplier error' : (q.reason || 'Unavailable')}
-                </div>
-              ) : q.sellNightly == null ? (
-                <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', fontStyle: 'italic' }}>Price on request</div>
-              ) : (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'baseline', fontSize: 12.5 }}>
-                  {q.netNightly != null && (
-                    <span style={{ fontFamily: 'var(--c-mono)', color: 'var(--c-fg-soft)' }}>
-                      NET ${fmtMoney(q.netNightly)}/nt
-                      {q.markupPct != null && <span style={{ color: 'var(--c-fg-muted)' }}> · +{q.markupPct}%</span>}
-                    </span>
-                  )}
-                  <span style={{ fontFamily: 'var(--c-mono)', fontWeight: 700, color: 'var(--c-accent)' }}>
-                    SELL ${fmtMoney(q.sellNightly)}/nt
-                  </span>
-                  {q.sellTotal != null && q.sellTotal !== q.sellNightly && (
-                    <span style={{ fontFamily: 'var(--c-mono)', color: 'var(--c-fg-soft)' }}>
-                      ${fmtMoney(q.sellTotal)} total{q.currency ? ` ${q.currency}` : ''}
-                    </span>
-                  )}
-                  <span style={{ fontSize: 11.5 }}>
-                    {q.refundable
-                      ? <span style={{ color: 'var(--c-success)' }}>
-                          {q.cancellationDeadlineUtc
-                            ? `Free cancel to ${fmtCancelDate(q.cancellationDeadlineUtc)}`
-                            : 'Refundable'}
-                        </span>
-                      : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>}
-                  </span>
-                  {q.breakfastIncluded && <span style={{ color: 'var(--c-success)', fontSize: 11.5 }}>· Breakfast</span>}
-                </div>
-              )}
-
-              <div style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>
-                {muted ? '' : 'Open →'}
-              </div>
-            </button>
-          );
-        })}
+        {/* Supplier-count chip + best-rate badges (per-supplier breakdown is in the drawer) */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 'auto' }}>
+          {quotes.length > 1 && (
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-soft)', background: 'var(--c-bg-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '2px 9px' }}>
+              {showUnavailable
+                ? `${avail.length} of ${quotes.length} suppliers`
+                : (avail.length > 1 ? `${avail.length} suppliers` : '1 supplier')}
+            </span>
+          )}
+          {best?.roomTypeName && <span style={{ fontSize: 11.5, color: 'var(--c-fg)' }}>{best.roomTypeName}</span>}
+          {best && (best.refundable
+            ? <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>{best.cancellationDeadlineUtc ? `Free cancel to ${fmtCancelDate(best.cancellationDeadlineUtc)}` : 'Refundable'}</span>
+            : <span style={{ fontSize: 11.5, color: 'var(--c-danger)' }}>Non-refundable</span>)}
+          {best?.breakfastIncluded && <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>· Breakfast</span>}
+        </div>
       </div>
-    </div>
+
+      {/* Headline price — cheapest/recommended across suppliers */}
+      <div style={{ textAlign: 'right', minWidth: 168, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2 }}>
+        {!best ? (
+          <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>No rates for these dates</span>
+        ) : best.sellNightly == null ? (
+          <span style={{ fontSize: 13, color: 'var(--c-fg-soft)', fontStyle: 'italic' }}>Price on request</span>
+        ) : (
+          <>
+            <div style={{ fontSize: 10, color: 'var(--c-fg-muted)', letterSpacing: '0.04em', fontWeight: 700 }}>FROM</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
+              {fmtMoney(best.sellNightly)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> / nt</span>
+            </div>
+            {best.sellTotal != null && best.sellTotal !== best.sellNightly && (
+              <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
+                {fmtMoney(best.sellTotal)} total{best.currency ? ` ${best.currency}` : ''}
+              </div>
+            )}
+            {best.netNightly != null && (
+              <div style={{ fontSize: 11, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
+                NET {fmtMoney(best.netNightly)}{best.markupPct != null ? ` · +${best.markupPct}%` : ''}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: 'var(--c-accent)', fontWeight: 600, marginTop: 4 }}>Open →</div>
+          </>
+        )}
+      </div>
+    </button>
   );
 }
 
@@ -1533,20 +1496,35 @@ function HotelInfo({ content }: { content: any }) {
 
       {(content.check_in_time || content.check_out_time || content.phone || content.email || content.address || content.hotel_chain || content.property_type) && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-          {content.address && (
-            <FactCell
-              label="Address"
-              value={
-                content.latitude && content.longitude ? (
-                  <a
-                    href={`https://www.google.com/maps?q=${content.latitude},${content.longitude}`}
-                    target="_blank" rel="noreferrer"
-                    style={{ color: 'var(--c-accent)', textDecoration: 'none', borderBottom: '1px dashed var(--c-line)' }}
-                  >{content.address}</a>
-                ) : content.address
-              }
-            />
-          )}
+          {content.address && (() => {
+            // Address shape varies by supplier: RateHawk = string or { text },
+            // Hummingbird = object { addressLine1, addressLine2, city, state,
+            // zipCode, country, ... }. Always render a STRING — never the raw
+            // object (that throws React error #31 and blanks the page).
+            const a = content.address;
+            const addr = typeof a === 'string'
+              ? a
+              : (a && typeof a === 'object'
+                  ? (typeof a.text === 'string' && a.text
+                      ? a.text
+                      : [a.addressLine1, a.addressLine2, a.city, a.state, a.zipCode, a.country].filter(Boolean).join(', '))
+                  : '');
+            if (!addr) return null;
+            return (
+              <FactCell
+                label="Address"
+                value={
+                  content.latitude && content.longitude ? (
+                    <a
+                      href={`https://www.google.com/maps?q=${content.latitude},${content.longitude}`}
+                      target="_blank" rel="noreferrer"
+                      style={{ color: 'var(--c-accent)', textDecoration: 'none', borderBottom: '1px dashed var(--c-line)' }}
+                    >{addr}</a>
+                  ) : addr
+                }
+              />
+            );
+          })()}
           {content.check_in_time && <FactCell label="Check-in"  value={content.check_in_time} />}
           {content.check_out_time && <FactCell label="Check-out" value={content.check_out_time} />}
           {content.phone &&        <FactCell label="Phone"      value={content.phone} />}
