@@ -449,6 +449,9 @@ export default function ConsoleSearchPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             hotelId: detailHotel.id,
+            // Route prebook to the chosen rate's supplier (multi-supplier
+            // fan-out) — not the hotel's default supplier.
+            supplier: chosenRate.supplier,
             rateKey: chosenRate.rateKey,
             searchParams: {
               checkIn, checkOut,
@@ -518,6 +521,7 @@ export default function ConsoleSearchPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           hotelId: detailHotel.id,
+          supplier: chosenRate.supplier,
           // IMPORTANT: re-verify with the ORIGINAL h-* rateKey, not
           // the p-* prebookHash. RateHawk's prebook on an existing
           // p-hash isn't supported; we need a fresh round.
@@ -565,6 +569,9 @@ export default function ConsoleSearchPage() {
       const allChildAges = rooms.flatMap(r => r.childrenAges);
       const payload = {
         hotelId: detailHotel.id,
+        // Route the booking to the chosen rate's supplier (multi-supplier
+        // fan-out) so it doesn't default to the hotel's surface supplier.
+        supplier: chosenRate.supplier,
         // Use the prebooked p-* hash when available — createBooking
         // skips its inline prebook step and goes straight to the
         // booking form. Falls back to the search-time rateKey for
@@ -1574,9 +1581,11 @@ function RoomGroupedRates({
                         </td>
                         <td style={tdStyle}>
                           <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.3 }}>
-                            <div>{fmtMoney(r.pricing.net?.nightlyAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>/nt</span></div>
+                            <div style={{ fontWeight: 600 }}>
+                              {fmtMoney(r.pricing.net?.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>total</span>
+                            </div>
                             <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
-                              {fmtMoney(r.pricing.net?.totalAmount)} total
+                              {fmtMoney(r.pricing.net?.nightlyAmount)} /nt
                             </div>
                           </div>
                         </td>
@@ -1586,10 +1595,12 @@ function RoomGroupedRates({
                           </span>
                         </td>
                         <td style={tdStyle}>
-                          <div style={{ fontFamily: 'var(--c-mono)', fontWeight: 700, color: 'var(--c-accent)', lineHeight: 1.3 }}>
-                            <div>{fmtMoney(r.pricing.sell?.nightlyAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>/nt</span></div>
+                          <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.3 }}>
+                            <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
+                              {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>total</span>
+                            </div>
                             <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
-                              {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency} total
+                              {fmtMoney(r.pricing.sell?.nightlyAmount)} /nt
                             </div>
                           </div>
                         </td>
