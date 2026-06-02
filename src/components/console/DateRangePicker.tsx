@@ -13,6 +13,7 @@ type Props = {
 };
 
 const NIGHT_SHORTCUTS = [2, 3, 5, 7, 10] as const;
+const iso = (d: Date) => format(d, 'yyyy-MM-dd');
 
 export default function DateRangePicker({ checkIn, checkOut, onChange }: Props) {
   const [open, setOpen] = useState(false);
@@ -20,6 +21,13 @@ export default function DateRangePicker({ checkIn, checkOut, onChange }: Props) 
   const fromDate = checkIn  ? new Date(checkIn + 'T00:00:00')  : undefined;
   const toDate   = checkOut ? new Date(checkOut + 'T00:00:00') : undefined;
   const nights   = fromDate && toDate ? Math.max(1, differenceInCalendarDays(toDate, fromDate)) : 0;
+
+  // Two-step draft so a single click sets check-in (picker stays open) and
+  // the next click sets check-out (then closes). The committed checkIn/
+  // checkOut only change once a full range is picked — no surprise giant
+  // range or one-click close.
+  const [draftFrom, setDraftFrom] = useState<Date | undefined>(fromDate);
+  const [draftTo, setDraftTo]     = useState<Date | undefined>(toDate);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
@@ -29,12 +37,37 @@ export default function DateRangePicker({ checkIn, checkOut, onChange }: Props) 
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
+  // Re-sync the draft to the committed range each time the popover opens.
+  useEffect(() => {
+    if (open) { setDraftFrom(fromDate); setDraftTo(toDate); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  function pickDay(day: Date) {
+    // Fresh start: no check-in yet, OR a complete range already exists →
+    // begin a new range at the clicked day and wait for the check-out click.
+    if (!draftFrom || (draftFrom && draftTo)) {
+      setDraftFrom(day);
+      setDraftTo(undefined);
+      return; // keep the popover open
+    }
+    // Second click → complete the range (swap if they picked an earlier day).
+    let from = draftFrom;
+    let to = day;
+    if (to.getTime() < from.getTime()) { const t = from; from = to; to = t; }
+    if (to.getTime() === from.getTime()) { to = addDays(from, 1); } // min 1 night
+    setDraftFrom(from);
+    setDraftTo(to);
+    onChange({ checkIn: iso(from), checkOut: iso(to) });
+    setOpen(false);
+  }
+
   function setNights(n: number) {
-    const base = fromDate || new Date();
-    onChange({
-      checkIn:  format(base, 'yyyy-MM-dd'),
-      checkOut: format(addDays(base, n), 'yyyy-MM-dd')
-    });
+    const base = draftFrom || fromDate || new Date();
+    const co = addDays(base, n);
+    setDraftFrom(base); setDraftTo(co);
+    onChange({ checkIn: iso(base), checkOut: iso(co) });
+    setOpen(false);
   }
 
   function display() {
@@ -43,6 +76,8 @@ export default function DateRangePicker({ checkIn, checkOut, onChange }: Props) 
     const toTxt   = toDate ? format(toDate, 'd MMM yyyy') : '…';
     return `${fromTxt} → ${toTxt}${nights ? ` · ${nights}n` : ''}`;
   }
+
+  const pickingTo = !!draftFrom && !draftTo;
 
   return (
     <div ref={rootRef} style={{ position: 'relative' }}>
@@ -67,6 +102,9 @@ export default function DateRangePicker({ checkIn, checkOut, onChange }: Props) 
           borderRadius: 8, boxShadow: '0 12px 28px rgba(0,0,0,0.10)',
           padding: 12, zIndex: 60
         }}>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginBottom: 8, fontWeight: 600 }}>
+            {pickingTo ? 'Now pick the check-out date →' : 'Pick the check-in date'}
+          </div>
           <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
             {NIGHT_SHORTCUTS.map(n => (
               <button
@@ -85,14 +123,9 @@ export default function DateRangePicker({ checkIn, checkOut, onChange }: Props) 
           <DayPicker
             mode="range"
             numberOfMonths={2}
-            selected={{ from: fromDate, to: toDate }}
-            onSelect={(r) => {
-              if (!r?.from) return;
-              const ci = format(r.from, 'yyyy-MM-dd');
-              const co = format(r.to || addDays(r.from, 1), 'yyyy-MM-dd');
-              onChange({ checkIn: ci, checkOut: co });
-              if (r.from && r.to) setOpen(false);
-            }}
+            defaultMonth={fromDate || new Date()}
+            selected={draftFrom ? { from: draftFrom, to: draftTo } : undefined}
+            onDayClick={pickDay}
             disabled={{ before: new Date() }}
             styles={{
               caption_label: { fontWeight: 600 },
