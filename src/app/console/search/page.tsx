@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
-import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle, X, Maximize2, Minimize2 } from 'lucide-react';
 import DestinationAutocomplete, { type DestinationAutocompleteHandle } from '@/components/console/DestinationAutocomplete';
 import CountryPicker from '@/components/console/CountryPicker';
 import ReactMarkdown from 'react-markdown';
@@ -37,7 +37,44 @@ type HotelHit = {
   canonicalId?: number | null;
   linkedHotelIds?: number[];
   // Enriched after the compare call:
-  priced?: { available: boolean; sellNightly?: number; sellTotal?: number; currency?: string; ratePlan?: string; refundable?: boolean; onRequest?: boolean };
+  priced?: {
+    available: boolean;
+    supplier?: string;          // cheapest-supplier surfaced on the card (= cheapestSupplier from compare)
+    sellNightly?: number;
+    sellTotal?: number;
+    netNightly?: number;
+    netTotal?: number;
+    markupPct?: number;
+    currency?: string;
+    roomTypeName?: string;
+    ratePlan?: string;
+    refundable?: boolean;
+    breakfastIncluded?: boolean | null;
+    cancellationDeadlineUtc?: string | null;
+    ratesCount?: number;
+    onRequest?: boolean;
+    // Multi-supplier quotes (one per linked supplier). When length > 1
+    // we render stacked quote rows on the card so consultant can
+    // compare and pick. The recommended-by-score gets a gold border.
+    quotes?: Quote[];
+  };
+};
+
+type Quote = {
+  supplier: string | null;
+  available: boolean;
+  reason?: string;
+  sellNightly?: number;
+  sellTotal?: number;
+  netNightly?: number;
+  markupPct?: number;
+  markupAmount?: number;
+  currency?: string;
+  ratePlan?: string;
+  refundable?: boolean | null;
+  breakfastIncluded?: boolean | null;
+  cancellationDeadlineUtc?: string | null;
+  ratesCount?: number;
 };
 
 type AdminRate = {
@@ -54,6 +91,11 @@ type AdminRate = {
   refundable: boolean;
   breakfastIncluded: boolean;
   roomImage?: string | null;
+  // Tier of rg_ext / name match that resolved roomImage + roomGroupName.
+  // 'strict' = ETG §2.4 (all 12 rg_ext fields). Degraded tiers
+  // (class_bedding / class) cover sandbox rg_ext drift on luxury cert
+  // hotels — Valentin, ETG 2026-05-27. Surfaced behind ?debug=rgmatch.
+  matchTier?: 'strict' | 'class_bedding' | 'class' | 'name' | 'none' | null;
   cancellationPolicy?: string | null;
   cancellationDeadlineUtc?: string | null;
   // ETG cert §6 — included/excluded split from supplier. Sidebar
@@ -81,6 +123,21 @@ function todayPlus(days: number) {
 export default function ConsoleSearchPage() {
   const [user] = useAuthState(auth);
   const sp = useSearchParams();
+  const router = useRouter();
+
+  // Push current search/detail context into the URL so refresh, share,
+  // and back-button preserve state. Uses router.replace (not push) so
+  // a long search session doesn't pollute browser history with every
+  // edit. Mirrors only durable state — pending price enrichment and
+  // transient UI flags stay in React.
+  const syncUrl = (patch: Record<string, string | number | null | undefined>) => {
+    const next = new URLSearchParams(sp.toString());
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null || v === undefined || v === '') next.delete(k);
+      else next.set(k, String(v));
+    }
+    router.replace(next.toString() ? `/console/search?${next}` : '/console/search');
+  };
 
   // ─── Form state ─────────────────────────────────────────────
   const [q, setQ]               = useState('');
@@ -104,12 +161,21 @@ export default function ConsoleSearchPage() {
   const [filterRefundable,  setFilterRefundable]  = useState(false);
   const [showUnavailable,   setShowUnavailable]   = useState(false);
 
-  // ─── In-canvas detail view (Pattern A — no slide-out) ───────
+  // ─── Detail view: right slide-over drawer over the (dimmed) results
+  // list, so the consultant keeps the search results + scroll position
+  // and can bounce between hotels. `detailExpanded` widens the drawer to
+  // near-full-width for the form-heavy booking step. ─────────────────
   const [detailHotel, setDetailHotel]   = useState<HotelHit | null>(null);
+  const [detailExpanded, setDetailExpanded] = useState(false);
   const [rates, setRates]               = useState<AdminRate[]>([]);
   const [ratesBusy, setRatesBusy]       = useState(false);
   const [ratesErr, setRatesErr]         = useState<string | null>(null);
   const [chosenRate, setChosenRate]     = useState<AdminRate | null>(null);
+  // rate_decisions audit-trail identifiers. Set once when rates land,
+  // re-used on /choose POST and forwarded into /api/bookings so the
+  // backend can stamp the row with the booking id later.
+  const [searchId, setSearchId]                       = useState<string | null>(null);
+  const [recommendedRateKey, setRecommendedRateKey]   = useState<string | null>(null);
   // Prebook state — set when the consultant picks a rate. We verify
   // availability + price BEFORE they fill the form. Per ETG cert §1.1
   // ("Moving prebook to the separate step is also highly recommended").
@@ -163,6 +229,26 @@ export default function ConsoleSearchPage() {
   async function runSearch(qOverride?: string) {
     const query = (qOverride !== undefined ? qOverride : q).trim();
     if (!query) return;
+    // Encode the full per-room composition (adults + children ages
+    // per room). URL form: r=2|3&r=4|5,8  → room 1 has 2 adults + 1
+    // child age 3, room 2 has 4 adults + 2 children (ages 5 and 8).
+    // Round-trips losslessly via paramsToRooms() on read. We keep
+    // the legacy adults/rooms shorthand so AI-agent deep-links (which
+    // only carry totals) still work.
+    const r = rooms.map(rm =>
+      `${rm.adults}${(rm.childrenAges && rm.childrenAges.length) ? '|' + rm.childrenAges.join(',') : ''}`
+    );
+    const next = new URLSearchParams(sp.toString());
+    next.delete('r');
+    r.forEach(v => next.append('r', v));
+    next.delete('adults');
+    next.delete('rooms');
+    next.set('q', query);
+    next.set('checkIn', checkIn);
+    next.set('checkOut', checkOut);
+    next.set('citizenship', citizenship);
+    next.delete('hotelId');
+    router.replace(`/console/search?${next.toString()}`);
     setSearching(true);
     setSearchErr(null);
     setHits([]);
@@ -213,19 +299,60 @@ export default function ConsoleSearchPage() {
         // headline price (all rates on-request, supplier echoed
         // null amounts). Card surfaces "Price on request" so it
         // stays visible instead of getting bucketed as sold out.
+        // Multi-supplier compare returns quotes[]. When absent, the
+        // single-supplier path still populates the legacy fields, so
+        // downstream readers fall back cleanly.
+        const apiQuotes: any[] = Array.isArray(r.quotes) ? r.quotes : [];
+        const quotes: Quote[] = apiQuotes.map(q => {
+          const sell = q.cheapestRate?.pricing?.sell;
+          const net  = q.cheapestRate?.pricing?.net;
+          return {
+            supplier:                q.supplier,
+            available:               !!q.available,
+            reason:                  q.reason,
+            sellNightly:             sell?.nightlyAmount,
+            sellTotal:               sell?.totalAmount,
+            netNightly:              net?.nightlyAmount,
+            markupPct:               q.cheapestRate?.pricing?.markup?.value,
+            markupAmount:            q.cheapestRate?.pricing?.markup?.amount,
+            currency:                sell?.currency,
+            ratePlan:                q.cheapestRate?.ratePlan,
+            refundable:              q.cheapestRate?.refundable,
+            breakfastIncluded:       q.cheapestRate?.breakfastIncluded,
+            cancellationDeadlineUtc: q.cheapestRate?.cancellationDeadlineUtc,
+            ratesCount:              q.ratesCount
+          };
+        });
         if (!r.cheapestRate) {
-          return { ...h, priced: { available: true, onRequest: true } };
+          return {
+            ...h,
+            priced: {
+              available: true, supplier: r.cheapestSupplier || r.supplier, onRequest: true,
+              ratesCount: r.ratesCount,
+              quotes: quotes.length ? quotes : undefined
+            }
+          };
         }
         const sell = r.cheapestRate?.pricing?.sell;
+        const net  = r.cheapestRate?.pricing?.net;
         return {
           ...h,
           priced: {
             available: true,
-            sellNightly: sell?.nightlyAmount,
-            sellTotal:   sell?.totalAmount,
-            currency:    sell?.currency,
-            ratePlan:    r.cheapestRate?.ratePlan,
-            refundable:  r.cheapestRate?.refundable
+            supplier:                r.cheapestSupplier || r.supplier,
+            sellNightly:             sell?.nightlyAmount,
+            sellTotal:               sell?.totalAmount,
+            netNightly:              net?.nightlyAmount,
+            netTotal:                net?.totalAmount,
+            markupPct:               r.cheapestRate?.pricing?.markup?.value,
+            currency:                sell?.currency,
+            roomTypeName:            r.cheapestRate?.roomTypeName,
+            ratePlan:                r.cheapestRate?.ratePlan,
+            refundable:              r.cheapestRate?.refundable,
+            breakfastIncluded:       r.cheapestRate?.breakfastIncluded,
+            cancellationDeadlineUtc: r.cheapestRate?.cancellationDeadlineUtc,
+            ratesCount:              r.ratesCount,
+            quotes:                  quotes.length ? quotes : undefined
           }
         };
       }).sort((a, b) => {
@@ -245,7 +372,13 @@ export default function ConsoleSearchPage() {
   // surfaced by the admin rates endpoint alongside the rate list.
   const [detailContent, setDetailContent] = useState<any>(null);
 
-  async function openHotel(h: HotelHit) {
+  // Detail view supports an optional supplier filter so clicking a
+  // specific supplier row on the list opens the rate table pre-filtered
+  // to that supplier's quotes. Null filter = show both. The filter
+  // lives in URL state via `&supplier=…` so refresh/share round-trip
+  // correctly.
+  const [supplierFocus, setSupplierFocus] = useState<string | null>(null);
+  async function openHotel(h: HotelHit, supplier?: string | null) {
     setDetailHotel(h);
     setDetailContent(null);
     setChosenRate(null);
@@ -254,6 +387,8 @@ export default function ConsoleSearchPage() {
     setAcceptedNewPrice(false);
     setBookingResult(null);
     setBookingErr(null);
+    setSupplierFocus(supplier || null);
+    syncUrl({ hotelId: h.id, supplier: supplier || null });
     void loadRatesFor(h);
   }
 
@@ -278,6 +413,13 @@ export default function ConsoleSearchPage() {
       if (!json.success) throw new Error(json.details ? `${json.error}: ${json.details}` : (json.error || 'rates failed'));
       setRates(json.data.rates || []);
       setDetailContent(json.data.hotel || null);
+      // Persist the rate_decisions audit trail id so /choose and
+      // /api/bookings can stamp the same row when the consultant
+      // progresses through the funnel. Backend recommendedRateKey is
+      // already reflected in each rate's `score` field for the UI
+      // border, but we keep it here for the future override-rate dashboard.
+      setSearchId(json.data.searchId || null);
+      setRecommendedRateKey(json.data.recommendedRateKey || null);
     } catch (e: any) {
       setRatesErr(e.message || 'rates failed');
     } finally {
@@ -455,7 +597,10 @@ export default function ConsoleSearchPage() {
         // to chosenRate when prebook never ran (e.g. Hummingbird).
         expectedTotalAmount: prebook?.newPrice || chosenRate.pricing.sell?.totalAmount,
         expectedCurrency:    prebook?.currency || chosenRate.pricing.currency,
-        availabilityType:    'free_sell'
+        availabilityType:    'free_sell',
+        // Audit-trail handoff: stamp the rate_decisions row with this
+        // booking's internalBookingId once it's created.
+        searchId:            searchId || undefined
       };
       const res = await fetch('/api/admin/bookings', {
         method: 'POST',
@@ -472,47 +617,91 @@ export default function ConsoleSearchPage() {
     }
   }
 
-  // Deep-link from the AI agent page —
-  //   /console/search?hotelId=N&checkIn=…&checkOut=…&adults=…&rooms=…
-  // Carries whatever date/guest context the agent was reasoning about
-  // so the consultant doesn't re-enter them. Falls back to the
-  // existing form defaults for anything missing.
+  // Restore state from URL on initial mount. Two entry shapes:
+  //   1. Deep-link from AI agent or shared link →
+  //      ?q=Dubai&checkIn=…&checkOut=…&adults=2&rooms=1&citizenship=AU[&hotelId=N]
+  //      Re-runs the search; opens the detail view if hotelId is set.
+  //   2. Legacy deep-link from the agent with only hotelId (no q) →
+  //      opens the detail directly, no list re-run.
+  //
+  // Form-state writes back to the URL via syncUrl() on search submit
+  // and on detail open/close so refresh, share, and back-button all
+  // round-trip cleanly.
   useEffect(() => {
-    const id = sp.get('hotelId');
-    if (!id || detailHotel) return;
-    const n = Number(id);
-    if (!Number.isFinite(n)) return;
     const ci = sp.get('checkIn');
     const co = sp.get('checkOut');
     if (ci && /^\d{4}-\d{2}-\d{2}$/.test(ci)) setCheckIn(ci);
     if (co && /^\d{4}-\d{2}-\d{2}$/.test(co)) setCheckOut(co);
-    const adultsParam = Number(sp.get('adults'));
-    const roomsParam  = Number(sp.get('rooms')) || 1;
-    if (Number.isFinite(adultsParam) && adultsParam > 0) {
-      const perRoom = Math.floor(adultsParam / roomsParam);
-      const extra   = adultsParam % roomsParam;
-      setRooms(Array.from({ length: roomsParam }, (_, i) => ({
-        adults: perRoom + (i < extra ? 1 : 0),
-        childrenAges: []
-      })));
+    // Primary: r=2|3&r=4|5,8 per-room composition (lossless).
+    const rParams = sp.getAll('r');
+    if (rParams.length > 0) {
+      const parsed: RoomGuests[] = rParams.map(v => {
+        const [aStr, kStr] = v.split('|');
+        const a = Math.max(1, Math.min(10, Number(aStr) || 2));
+        const kids = (kStr || '')
+          .split(',')
+          .map(s => Number(s))
+          .filter(n => Number.isFinite(n) && n >= 0 && n <= 17);
+        return { adults: a, childrenAges: kids };
+      });
+      if (parsed.length) setRooms(parsed);
+    } else {
+      // Legacy: ?adults=N&rooms=M (no children) — kept for AI-agent
+      // deep-links that only know totals.
+      const adultsParam = Number(sp.get('adults'));
+      const roomsParam  = Number(sp.get('rooms')) || 1;
+      if (Number.isFinite(adultsParam) && adultsParam > 0) {
+        const perRoom = Math.floor(adultsParam / roomsParam);
+        const extra   = adultsParam % roomsParam;
+        setRooms(Array.from({ length: roomsParam }, (_, i) => ({
+          adults: perRoom + (i < extra ? 1 : 0),
+          childrenAges: []
+        })));
+      }
     }
-    const stub: HotelHit = { id: n, name: '', sources: [] };
-    void openHotel(stub);
+    const cit = sp.get('citizenship');
+    if (cit && /^[A-Z]{2}$/.test(cit)) setCitizenship(cit);
+    const qParam = sp.get('q');
+    if (qParam) setQ(qParam);
+
+    const id = sp.get('hotelId');
+    if (id) {
+      const n = Number(id);
+      if (Number.isFinite(n) && !detailHotel) {
+        const stub: HotelHit = { id: n, name: '', sources: [] };
+        const sup = sp.get('supplier');
+        void openHotel(stub, sup || null);
+        return;
+      }
+    }
+    if (qParam) {
+      // Re-run the search so the list rehydrates on refresh.
+      void runSearch(qParam);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sp]);
+  }, []);
 
   // ─── filter computation ─────────────────────────────────────
+  // Default behaviour: only reveal hotels that have come back priced
+  // and available. While compare() is enriching, pending hits stay
+  // hidden and we render N skeleton rows for them instead — avoids
+  // the "list pops in with junk, then prices dribble in" effect the
+  // user flagged on /console/search.
   const filteredHits = useMemo(() => {
     return hits.filter(h => {
       if (filterSupplier !== 'all' && !h.sources.includes(filterSupplier)) return false;
-      // Hide unavailable by default — most consultants only care about
-      // bookable options. priced === undefined means prices are still
-      // loading, so don't hide those yet.
+      // Still loading prices on this hit — hide unless the user has
+      // explicitly asked to see everything.
+      if (!showUnavailable && h.priced === undefined) return false;
       if (!showUnavailable && h.priced !== undefined && !h.priced.available) return false;
       if (filterRefundable && h.priced && h.priced.available && !h.priced.refundable) return false;
       return true;
     });
   }, [hits, filterSupplier, filterRefundable, showUnavailable]);
+
+  // Count of hits still resolving — drives skeleton row count.
+  const pendingCount = useMemo(() => hits.filter(h => h.priced === undefined).length, [hits]);
+  const unavailableCount = useMemo(() => hits.filter(h => h.priced && !h.priced.available).length, [hits]);
 
   // ───────────────────────────────────────────────────────────
   return (
@@ -521,69 +710,15 @@ export default function ConsoleSearchPage() {
         {/* Header swaps to a breadcrumb when in detail view */}
         <div className="c-page-head">
           <div>
-            {!detailHotel ? (
-              <>
-                <h1 className="c-page-title">B2B Search</h1>
-                <p className="c-page-sub">
-                  Find hotels, see net cost + markup + sell price per rate, book on behalf of the customer.
-                </p>
-              </>
-            ) : (
-              <>
-                <button
-                  onClick={() => setDetailHotel(null)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--c-fg-soft)', background: 'none', border: 0, cursor: 'pointer', marginBottom: 4 }}
-                >
-                  <ArrowLeft size={12} /> Back to results
-                </button>
-                <h1 className="c-page-title">{detailHotel.name}</h1>
-                <p className="c-page-sub">
-                  {[detailHotel.city, detailHotel.country].filter(Boolean).join(', ')}
-                  {' · '}{checkIn} → {checkOut}{' · '}
-                  {rooms.reduce((s, r) => s + r.adults, 0)} adult{rooms.reduce((s, r) => s + r.adults, 0) > 1 ? 's' : ''}
-                  {' · '}{rooms.length} room{rooms.length > 1 ? 's' : ''}
-                  {' · '}
-                  <button
-                    onClick={() => setEditingSearch(s => !s)}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--c-accent)', background: 'none', border: 0, cursor: 'pointer', padding: 0, fontWeight: 600 }}
-                  >
-                    <Pencil size={11} /> Edit
-                  </button>
-                </p>
-                {editingSearch && (
-                  // overflow: visible so the date-picker popover and
-                  // guest dropdown can break out of the card — same
-                  // pattern as the main search form on this page.
-                  // position: relative isolates the stacking context
-                  // so z-index works inside the popovers.
-                  <div className="c-card" style={{ padding: 14, marginTop: 12, maxWidth: 720, overflow: 'visible', position: 'relative', zIndex: 10 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.4fr auto', gap: 10, alignItems: 'end' }}>
-                      <div style={{ position: 'relative' }}>
-                        <label style={labelStyle}>Dates</label>
-                        <DateRangePicker checkIn={checkIn} checkOut={checkOut} onChange={({ checkIn, checkOut }) => { setCheckIn(checkIn); setCheckOut(checkOut); }} />
-                      </div>
-                      <div style={{ position: 'relative' }}>
-                        <label style={labelStyle}>Guests</label>
-                        <GuestSelector rooms={rooms} onChange={setRooms} />
-                      </div>
-                      <button
-                        className="c-btn c-btn-primary"
-                        onClick={() => { void loadRatesFor(detailHotel); setEditingSearch(false); }}
-                        disabled={ratesBusy}
-                      >
-                        {ratesBusy ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
-                        Re-check rates
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
+            <h1 className="c-page-title">B2B Search</h1>
+            <p className="c-page-sub">
+              Find hotels, see net cost + markup + sell price per rate, book on behalf of the customer.
+            </p>
           </div>
         </div>
 
-        {/* Quick prompts + search form — hidden when viewing detail */}
-        {!detailHotel && (
+        {/* Quick prompts + search form — stays mounted; detail opens as a drawer */}
+        {(
           <>
             <div style={{ marginBottom: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -660,14 +795,14 @@ export default function ConsoleSearchPage() {
         {searchErr && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 14 }}>Error: {searchErr}</div>}
 
         {/* Empty state */}
-        {!detailHotel && hits.length === 0 && !searching && (
+        {hits.length === 0 && !searching && (
           <div className="c-card" style={{ padding: 32, textAlign: 'center', color: 'var(--c-fg-muted)', fontSize: 13 }}>
             Type a destination or hotel name above, or ask the agent on the right.
           </div>
         )}
 
-        {/* Results list */}
-        {!detailHotel && hits.length > 0 && (
+        {/* Results list — stays mounted behind the detail drawer */}
+        {hits.length > 0 && (
           <>
             {/* Filter row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -697,13 +832,27 @@ export default function ConsoleSearchPage() {
                 Show unavailable
               </label>
               <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginLeft: 'auto' }}>
-                {filteredHits.length} of {hits.length} hotels
-                {enrichingPrices && <span> · <Loader2 size={11} style={{ verticalAlign: 'middle' }} className="animate-spin" /> loading prices…</span>}
+                {filteredHits.length} bookable
+                {pendingCount > 0 && <span> · {pendingCount} loading</span>}
+                {!enrichingPrices && unavailableCount > 0 && !showUnavailable && (
+                  <span> · {unavailableCount} unavailable hidden</span>
+                )}
+                {enrichingPrices && <span> · <Loader2 size={11} style={{ verticalAlign: 'middle' }} className="animate-spin" /> </span>}
               </span>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
-              {filteredHits.map((h) => (
+              {filteredHits.map((h) => {
+                // Layout decision: hotels with >1 supplier quote get the
+                // expanded per-supplier-row layout so consultants can
+                // compare RH vs HB side by side. Single-supplier hotels
+                // stay in the compact stacked-column layout — same
+                // density they had before, no wasted vertical space.
+                const multi = (h.priced?.quotes?.length || 0) > 1;
+                if (multi) {
+                  return <MultiSupplierCard key={h.id} h={h} onOpen={(supplier) => openHotel(h, supplier)} />;
+                }
+                return (
                 <button
                   key={h.id}
                   onClick={() => openHotel(h)}
@@ -718,9 +867,9 @@ export default function ConsoleSearchPage() {
                   }}
                 >
                   <div style={{ width: 120, height: 80, borderRadius: 6, overflow: 'hidden', background: 'var(--c-bg-soft)', backgroundImage: h.image ? `url(${h.image})` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
-                  <div>
+                  <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{h.name}</div>
-                    <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', display: 'flex', gap: 12, alignItems: 'center' }}>
+                    <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                         <MapPin size={12} /> {[h.city, h.country].filter(Boolean).join(', ')}
                       </span>
@@ -733,38 +882,255 @@ export default function ConsoleSearchPage() {
                       )}
                       {h.sources.map((s) => <span key={s} style={badgeStyle(s)}>{s}</span>)}
                     </div>
+                    {/* Sub-line: what we'd actually quote — cheapest
+                        room type + rate count. Hidden until priced so
+                        it doesn't jitter in mid-load. */}
+                    {h.priced && h.priced.available && (
+                      <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                        {h.priced.roomTypeName && (
+                          <span style={{ color: 'var(--c-fg)' }}>{h.priced.roomTypeName}</span>
+                        )}
+                        {!!h.priced.ratesCount && h.priced.ratesCount > 1 && (
+                          <span>· {h.priced.ratesCount} rate options</span>
+                        )}
+                        {h.priced.breakfastIncluded && (
+                          <span style={{ color: 'var(--c-success)' }}>· Breakfast included</span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div style={{ textAlign: 'right' }}>
+                  <div style={{ textAlign: 'right', minWidth: 200 }}>
                     {h.priced === undefined ? (
                       <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>—</span>
                     ) : !h.priced.available ? (
                       <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>Unavailable</span>
-                    ) : h.priced.onRequest ? (
-                      // ETG cert §10 — available without headline price
-                      <span style={{ fontSize: 12, color: 'var(--c-fg-soft)', fontStyle: 'italic' }}>Price on request</span>
                     ) : (
-                      <div>
-                        <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', letterSpacing: 0.04, textTransform: 'uppercase', fontWeight: 700 }}>From</div>
-                        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-accent)' }}>
-                          {fmtMoney(h.priced.sellNightly)} <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>/ night</span>
-                        </div>
-                        <div style={{ fontSize: 11, color: 'var(--c-fg-soft)' }}>
-                          {h.priced.refundable ? <span style={{ color: 'var(--c-success)' }}>Refundable</span> : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>}
-                          {h.priced.ratePlan ? ` · ${h.priced.ratePlan}` : ''}
-                        </div>
-                      </div>
+                      (() => {
+                        // Pick which quote list to render. When the
+                        // compare response delivered explicit per-supplier
+                        // quotes, show them stacked; otherwise build a
+                        // single synthetic quote from the legacy fields.
+                        const quotes: Quote[] = (h.priced.quotes && h.priced.quotes.length > 0)
+                          ? h.priced.quotes
+                          : [{
+                              supplier: h.priced.supplier || null,
+                              available: true,
+                              sellNightly: h.priced.sellNightly,
+                              sellTotal: h.priced.sellTotal,
+                              netNightly: h.priced.netNightly,
+                              markupPct: h.priced.markupPct,
+                              currency: h.priced.currency,
+                              ratePlan: h.priced.ratePlan,
+                              refundable: h.priced.refundable,
+                              breakfastIncluded: h.priced.breakfastIncluded,
+                              cancellationDeadlineUtc: h.priced.cancellationDeadlineUtc,
+                              ratesCount: h.priced.ratesCount
+                            }];
+                        // Score and pick the recommended quote (per
+                        // user 2026-05-28: weighted by price +
+                        // refundability + cancel-window).
+                        const minSell = Math.min(...quotes
+                          .filter(q => q.available && typeof q.sellTotal === 'number')
+                          .map(q => q.sellTotal as number));
+                        const scored = quotes.map(q => ({
+                          q,
+                          score: scoreRate({
+                            pricing: {
+                              sell: { totalAmount: q.sellTotal, nightlyAmount: q.sellNightly },
+                              markup: { amount: q.markupAmount }
+                            },
+                            refundable: q.refundable,
+                            cancellationDeadlineUtc: q.cancellationDeadlineUtc
+                          }, minSell, { isB2B: true })
+                        }));
+                        const recommended = scored
+                          .filter(s => s.q.available)
+                          .sort((a, b) => b.score - a.score)[0];
+
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {quotes.map((q, qi) => {
+                              const isRec = recommended && q === recommended.q;
+                              const muted = !q.available;
+                              return (
+                                <div
+                                  key={qi}
+                                  style={{
+                                    border: isRec ? '1.5px solid var(--c-accent)' : '1px solid var(--c-line-soft)',
+                                    borderRadius: 6,
+                                    padding: '6px 8px',
+                                    background: isRec ? 'rgba(155,123,51,0.04)' : 'var(--c-bg)',
+                                    opacity: muted ? 0.45 : 1
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end', marginBottom: 2 }}>
+                                    {q.supplier && <span style={badgeStyle(q.supplier)}>{q.supplier}</span>}
+                                    {isRec && (
+                                      <span style={{
+                                        fontSize: 9.5, fontWeight: 700, letterSpacing: 0.04, textTransform: 'uppercase',
+                                        color: 'var(--c-accent)', padding: '1px 5px', borderRadius: 3,
+                                        background: 'rgba(155,123,51,0.12)', border: '1px solid var(--c-accent)'
+                                      }}>Recommended</span>
+                                    )}
+                                  </div>
+                                  {!q.available ? (
+                                    <div style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>
+                                      {q.reason === 'no_rates' ? 'No rates' :
+                                       q.reason === 'supplier_error' ? 'Supplier error' :
+                                       q.reason || 'Unavailable'}
+                                    </div>
+                                  ) : q.sellNightly == null ? (
+                                    <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', fontStyle: 'italic' }}>Price on request</div>
+                                  ) : (
+                                    <>
+                                      {q.netNightly != null && (
+                                        <div style={{ fontSize: 11, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
+                                          NET&nbsp;{fmtMoney(q.netNightly)}
+                                          {q.markupPct != null && (
+                                            <span style={{ color: 'var(--c-fg-muted)' }}> · +{q.markupPct}%</span>
+                                          )}
+                                        </div>
+                                      )}
+                                      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.25 }}>
+                                        {fmtMoney(q.sellNightly)}
+                                        <span style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> / nt</span>
+                                      </div>
+                                      {q.sellTotal != null && q.sellTotal !== q.sellNightly && (
+                                        <div style={{ fontSize: 11, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
+                                          {fmtMoney(q.sellTotal)} total{q.currency ? ` ${q.currency}` : ''}
+                                        </div>
+                                      )}
+                                      <div style={{ fontSize: 10.5, color: 'var(--c-fg-soft)', marginTop: 2 }}>
+                                        {q.refundable
+                                          ? <span style={{ color: 'var(--c-success)' }}>
+                                              {q.cancellationDeadlineUtc
+                                                ? `Free cancel to ${fmtCancelDate(q.cancellationDeadlineUtc)}`
+                                                : 'Refundable'}
+                                            </span>
+                                          : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>}
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()
                     )}
                   </div>
                 </button>
+              );
+              })}
+              {/* Skeleton placeholders for hotels still being priced.
+                  Renders N blocks (one per pending hit) so the user
+                  sees the work in flight instead of an empty list or
+                  half-populated rows. Hidden once enrichment lands. */}
+              {pendingCount > 0 && Array.from({ length: pendingCount }).map((_, i) => (
+                <div
+                  key={`skeleton-${i}`}
+                  className="c-card c-skeleton"
+                  style={{
+                    display: 'grid', gridTemplateColumns: '120px 1fr auto',
+                    gap: 16, alignItems: 'center', padding: 12,
+                    background: 'var(--c-bg)', border: '1px solid var(--c-line-soft)'
+                  }}
+                  aria-hidden="true"
+                >
+                  <div style={{ width: 120, height: 80, borderRadius: 6, background: 'var(--c-bg-soft)' }} />
+                  <div>
+                    <div style={{ height: 14, width: '55%', borderRadius: 3, background: 'var(--c-bg-soft)', marginBottom: 8 }} />
+                    <div style={{ height: 10, width: '35%', borderRadius: 3, background: 'var(--c-bg-soft)' }} />
+                  </div>
+                  <div style={{ width: 130 }}>
+                    <div style={{ height: 10, width: '60%', borderRadius: 3, background: 'var(--c-bg-soft)', marginBottom: 6, marginLeft: 'auto' }} />
+                    <div style={{ height: 16, width: '80%', borderRadius: 3, background: 'var(--c-bg-soft)', marginLeft: 'auto' }} />
+                  </div>
+                </div>
               ))}
             </div>
           </>
         )}
 
-        {/* In-canvas detail view — replaces the right slide-out so the
-            agent column stays put. */}
+        {/* Detail drawer — slides over the dimmed results list so the
+            consultant keeps the results + scroll position and can bounce
+            between hotels. Expand widens it for the booking step. */}
         {detailHotel && (
-          <div className="c-card" style={{ padding: 16 }}>
+          <>
+            <div
+              onClick={() => { setDetailHotel(null); setDetailExpanded(false); setEditingSearch(false); syncUrl({ hotelId: null }); }}
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.32)', zIndex: 40 }}
+            />
+            <aside
+              role="dialog"
+              aria-label={`${detailHotel.name} rates`}
+              style={{
+                position: 'fixed', top: 0, right: 0, bottom: 0,
+                width: detailExpanded ? 'min(1100px, 96vw)' : 'min(640px, 96vw)',
+                background: 'var(--c-bg)', borderLeft: '1px solid var(--c-line)',
+                boxShadow: '-8px 0 28px rgba(0,0,0,0.18)', zIndex: 41,
+                display: 'flex', flexDirection: 'column', transition: 'width 160ms ease'
+              }}
+            >
+              {/* Drawer header */}
+              <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--c-line)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <button
+                  onClick={() => { setDetailHotel(null); setDetailExpanded(false); setEditingSearch(false); syncUrl({ hotelId: null }); }}
+                  title="Back to results"
+                  style={{ ...iconBtnStyle, marginTop: 2 }}
+                >
+                  <ArrowLeft size={14} />
+                </button>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: 'var(--c-fg)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{detailHotel.name}</h2>
+                  <p className="c-page-sub" style={{ margin: '2px 0 0' }}>
+                    {[detailHotel.city, detailHotel.country].filter(Boolean).join(', ')}
+                    {' · '}{checkIn} → {checkOut}{' · '}
+                    {rooms.reduce((s, r) => s + r.adults, 0)} adult{rooms.reduce((s, r) => s + r.adults, 0) > 1 ? 's' : ''}
+                    {' · '}{rooms.length} room{rooms.length > 1 ? 's' : ''}
+                    {' · '}
+                    <button
+                      onClick={() => setEditingSearch(s => !s)}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--c-accent)', background: 'none', border: 0, cursor: 'pointer', padding: 0, fontWeight: 600 }}
+                    >
+                      <Pencil size={11} /> Edit
+                    </button>
+                  </p>
+                </div>
+                <button onClick={() => setDetailExpanded(x => !x)} title={detailExpanded ? 'Collapse' : 'Expand'} style={{ ...iconBtnStyle, marginTop: 2 }}>
+                  {detailExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                </button>
+                <button
+                  onClick={() => { setDetailHotel(null); setDetailExpanded(false); setEditingSearch(false); syncUrl({ hotelId: null }); }}
+                  title="Close"
+                  style={{ ...iconBtnStyle, marginTop: 2 }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              {/* Edit-search re-check form */}
+              {editingSearch && (
+                <div className="c-card" style={{ padding: 14, margin: '14px 18px 0', overflow: 'visible', position: 'relative', zIndex: 10 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 10, alignItems: 'end' }}>
+                    <div style={{ position: 'relative' }}>
+                      <label style={labelStyle}>Dates</label>
+                      <DateRangePicker checkIn={checkIn} checkOut={checkOut} onChange={({ checkIn, checkOut }) => { setCheckIn(checkIn); setCheckOut(checkOut); }} />
+                    </div>
+                    <div style={{ position: 'relative' }}>
+                      <label style={labelStyle}>Guests</label>
+                      <GuestSelector rooms={rooms} onChange={setRooms} />
+                    </div>
+                    <button className="c-btn c-btn-primary" onClick={() => { void loadRatesFor(detailHotel); setEditingSearch(false); }} disabled={ratesBusy}>
+                      {ratesBusy ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
+                      Re-check
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Drawer body (scrollable) */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
             {ratesBusy && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--c-fg-soft)', fontSize: 13 }}>
                 <Loader2 size={14} className="animate-spin" /> Fetching rates…
@@ -782,17 +1148,50 @@ export default function ConsoleSearchPage() {
               <HotelInfo content={detailContent} />
             )}
 
+            {/* Supplier filter banner: when user clicked a supplier row
+                on the list card, we focus the detail view on just that
+                supplier. Banner offers to expand back to all suppliers. */}
+            {supplierFocus && rates.some(r => r.supplier && r.supplier !== supplierFocus) && (
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 12, padding: '8px 12px', marginBottom: 10,
+                background: 'var(--c-bg-soft)', border: '1px dashed var(--c-line)', borderRadius: 6,
+                fontSize: 12.5
+              }}>
+                <span>
+                  Showing <strong>{supplierFocus}</strong> rates only ({rates.filter(r => r.supplier === supplierFocus).length} of {rates.length})
+                </span>
+                <button
+                  onClick={() => { setSupplierFocus(null); syncUrl({ supplier: null }); }}
+                  style={{ background: 'none', border: 0, color: 'var(--c-accent)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}
+                >Show all suppliers</button>
+              </div>
+            )}
             {rates.length > 0 && (
               <RoomGroupedRates
-                rates={rates}
-                onChoose={(r) => setChosenRate(r)}
+                rates={supplierFocus ? rates.filter(r => r.supplier === supplierFocus) : rates}
+                onChoose={(r) => {
+                  setChosenRate(r);
+                  // Audit: tell the backend which rate the consultant
+                  // picked. Fire-and-forget — the user shouldn't wait
+                  // on this and a write failure must not block the
+                  // booking flow.
+                  if (searchId) {
+                    fetch(`/api/admin/search/decisions/${searchId}/choose`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ rateKey: r.rateKey, supplier: r.supplier })
+                    }).catch(() => {});
+                  }
+                }}
                 marginTop={detailContent ? 18 : 0}
               />
             )}
 
-            {/* Booking is in a slide-out sidebar (BookingSidebar)
-                rendered at the end of the page, outside this card. */}
-          </div>
+            {/* Booking opens in BookingSidebar (rendered after the drawer). */}
+              </div>
+            </aside>
+          </>
         )}
       </div>
 
@@ -865,6 +1264,66 @@ function fmtMoney(n?: number) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
+// Composite rate scorer — Valentin's recommendation (2026-05-28) is
+// "don't optimize only for lowest price; surface 3–5 rates with
+// different conditions per room type." This scores each rate so the
+// UI can rank within a room group and highlight one with a
+// "Recommended" border. Signals (per user 2026-05-28 decision):
+//   • sell price (lower = better, normalised against the pool's min)
+//   • refundability (with cancellation-window distance reinforcing)
+//   • margin tie-break for B2B (consultant sees both quotes anyway)
+// Meal plan and supplier preference are intentionally NOT in the
+// score (user excluded; consultants pick by meal manually).
+type ScorableRate = {
+  pricing?: {
+    sell?: { totalAmount?: number; nightlyAmount?: number };
+    markup?: { amount?: number };
+  };
+  refundable?: boolean | null;
+  cancellationDeadlineUtc?: string | null;
+};
+function scoreRate(rate: ScorableRate, poolMinSellTotal: number, opts?: { isB2B?: boolean }): number {
+  let score = 0;
+  // Price: normalise against the pool min. Cheapest gets +0; each
+  // 1% over loses ~1 point. A rate 20% above cheapest loses 20 pts.
+  const sell = rate.pricing?.sell?.totalAmount ?? Infinity;
+  if (poolMinSellTotal > 0 && isFinite(sell)) {
+    const ratio = sell / poolMinSellTotal;
+    score -= (ratio - 1) * 100;
+  } else if (!isFinite(sell)) {
+    score -= 200;
+  }
+  // Refundability: solid bump. Reinforced when there's real cushion
+  // on the cancellation deadline (consultants love a wide window).
+  if (rate.refundable) {
+    score += 25;
+    if (rate.cancellationDeadlineUtc) {
+      const daysOut = (new Date(rate.cancellationDeadlineUtc).getTime() - Date.now()) / 86400000;
+      if (daysOut > 7) score += 15;
+      else if (daysOut > 2) score += 8;
+    }
+  }
+  // Margin tie-break (B2B only): nudge toward higher-markup options
+  // when the rest is equal. Small weight so this never trumps a real
+  // price/refund difference.
+  if (opts?.isB2B && typeof rate.pricing?.markup?.amount === 'number') {
+    score += rate.pricing.markup.amount * 0.05;
+  }
+  return score;
+}
+
+// Short cancellation deadline rendering for the search list. Full ISO
+// timestamp would crowd the card — consultants only need date + time
+// in local format ("25 Jun 14:00"). Detail page shows the full UTC
+// timestamp per ETG cert §5.
+function fmtCancelDate(iso?: string | null) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) +
+    ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 function Row({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 12, alignItems: 'baseline' }}>
@@ -879,6 +1338,144 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
  * (check-in / check-out / metapolicy snapshot). Renders above the
  * rate list so the consultant has context while picking a rate.
  */
+/**
+ * Multi-supplier hotel card. Hotel header on top, one full-width row
+ * per supplier underneath. Recommended row gets a gold outline.
+ * Clicking the hotel header opens detail unfiltered; clicking a
+ * supplier row opens detail pre-filtered to that supplier.
+ *
+ * Used only when h.priced.quotes.length > 1. Singletons stay on the
+ * compact stacked layout — see filteredHits.map for the dispatch.
+ */
+function MultiSupplierCard({ h, onOpen }: { h: HotelHit; onOpen: (supplier: string | null) => void }) {
+  const quotes: Quote[] = h.priced?.quotes || [];
+  // Score the quotes so the highest-scored gets the Recommended border.
+  const minSell = Math.min(...quotes
+    .filter(q => q.available && typeof q.sellTotal === 'number')
+    .map(q => q.sellTotal as number));
+  const scored = quotes.map(q => ({
+    q,
+    score: scoreRate({
+      pricing: { sell: { totalAmount: q.sellTotal, nightlyAmount: q.sellNightly }, markup: { amount: q.markupAmount } },
+      refundable: q.refundable, cancellationDeadlineUtc: q.cancellationDeadlineUtc
+    }, minSell, { isB2B: true })
+  }));
+  const recommended = scored.filter(s => s.q.available).sort((a, b) => b.score - a.score)[0];
+
+  return (
+    <div className="c-card" style={{ background: 'var(--c-bg)', border: '1px solid var(--c-line)', overflow: 'hidden' }}>
+      {/* Hotel header — click opens detail with both suppliers visible */}
+      <button
+        onClick={() => onOpen(null)}
+        style={{
+          display: 'grid', gridTemplateColumns: '120px 1fr', gap: 16, alignItems: 'center',
+          padding: 12, width: '100%', textAlign: 'left', cursor: 'pointer',
+          background: 'transparent', border: 0, borderBottom: '1px solid var(--c-line-soft)'
+        }}
+      >
+        <div style={{ width: 120, height: 80, borderRadius: 6, overflow: 'hidden', background: 'var(--c-bg-soft)', backgroundImage: h.image ? `url(${h.image})` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{h.name}</div>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <MapPin size={12} /> {[h.city, h.country].filter(Boolean).join(', ')}
+            </span>
+            {!!h.starRating && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                {Array.from({ length: Math.round(h.starRating) }).map((_, i) => (
+                  <Star key={i} size={11} fill="var(--c-accent)" style={{ color: 'var(--c-accent)' }} />
+                ))}
+              </span>
+            )}
+            <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>{quotes.length} suppliers</span>
+          </div>
+        </div>
+      </button>
+
+      {/* One row per supplier */}
+      <div>
+        {quotes.map((q, i) => {
+          const isRec = recommended && q === recommended.q;
+          const muted = !q.available;
+          return (
+            <button
+              key={i}
+              onClick={() => onOpen(q.supplier || null)}
+              disabled={muted}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '120px 1fr auto',
+                gap: 12, alignItems: 'center',
+                width: '100%', padding: '10px 14px', textAlign: 'left',
+                background: isRec ? 'rgba(155,123,51,0.05)' : 'var(--c-bg)',
+                border: 0,
+                borderTop: i === 0 ? 0 : '1px solid var(--c-line-soft)',
+                boxShadow: isRec ? 'inset 3px 0 0 var(--c-accent)' : undefined,
+                cursor: muted ? 'default' : 'pointer',
+                opacity: muted ? 0.5 : 1
+              }}
+            >
+              {/* Supplier badge + Recommended chip */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {q.supplier && <span style={badgeStyle(q.supplier)}>{q.supplier}</span>}
+                {isRec && (
+                  <span style={{
+                    fontSize: 9.5, fontWeight: 700, letterSpacing: 0.04, textTransform: 'uppercase',
+                    color: 'var(--c-accent)', alignSelf: 'flex-start',
+                    padding: '1px 5px', borderRadius: 3,
+                    background: 'rgba(155,123,51,0.12)', border: '1px solid var(--c-accent)'
+                  }}>★ Recommended</span>
+                )}
+              </div>
+
+              {/* Inline pricing summary */}
+              {!q.available ? (
+                <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
+                  {q.reason === 'no_rates' ? 'No rates for these dates' :
+                   q.reason === 'supplier_error' ? 'Supplier error' : (q.reason || 'Unavailable')}
+                </div>
+              ) : q.sellNightly == null ? (
+                <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', fontStyle: 'italic' }}>Price on request</div>
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'baseline', fontSize: 12.5 }}>
+                  {q.netNightly != null && (
+                    <span style={{ fontFamily: 'var(--c-mono)', color: 'var(--c-fg-soft)' }}>
+                      NET ${fmtMoney(q.netNightly)}/nt
+                      {q.markupPct != null && <span style={{ color: 'var(--c-fg-muted)' }}> · +{q.markupPct}%</span>}
+                    </span>
+                  )}
+                  <span style={{ fontFamily: 'var(--c-mono)', fontWeight: 700, color: 'var(--c-accent)' }}>
+                    SELL ${fmtMoney(q.sellNightly)}/nt
+                  </span>
+                  {q.sellTotal != null && q.sellTotal !== q.sellNightly && (
+                    <span style={{ fontFamily: 'var(--c-mono)', color: 'var(--c-fg-soft)' }}>
+                      ${fmtMoney(q.sellTotal)} total{q.currency ? ` ${q.currency}` : ''}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 11.5 }}>
+                    {q.refundable
+                      ? <span style={{ color: 'var(--c-success)' }}>
+                          {q.cancellationDeadlineUtc
+                            ? `Free cancel to ${fmtCancelDate(q.cancellationDeadlineUtc)}`
+                            : 'Refundable'}
+                        </span>
+                      : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>}
+                  </span>
+                  {q.breakfastIncluded && <span style={{ color: 'var(--c-success)', fontSize: 11.5 }}>· Breakfast</span>}
+                </div>
+              )}
+
+              <div style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>
+                {muted ? '' : 'Open →'}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function HotelInfo({ content }: { content: any }) {
   const desc = typeof content.description === 'string'
     ? content.description
@@ -896,11 +1493,28 @@ function HotelInfo({ content }: { content: any }) {
   if (mp.shuttle && Array.isArray(mp.shuttle) && mp.shuttle.length) mpItems.push({ k: 'Shuttle', v: 'Available' });
 
   const [descExpanded, setDescExpanded] = useState(false);
-  const trimmedDesc = desc && desc.length > 320 && !descExpanded ? desc.slice(0, 320) + '…' : desc;
+  // RateHawk descriptions occasionally contain HTML (<em>X</em>,
+  // <strong>X</strong>, <br/>) mixed with markdown. ReactMarkdown
+  // escapes raw HTML by default — adding rehype-raw would let it
+  // through but pulls a new dep. Cheaper: rewrite the handful of
+  // tags suppliers actually emit into their markdown equivalents,
+  // then strip anything residual so we never render `<tag>` as
+  // visible text.
+  const cleanDesc = desc
+    ? desc
+        .replace(/<\s*(em|i)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/gi, '*$2*')
+        .replace(/<\s*(strong|b)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/gi, '**$2**')
+        .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+        .replace(/<\s*p\s*>/gi, '\n\n')
+        .replace(/<\s*\/\s*p\s*>/gi, '')
+        .replace(/<[^>]+>/g, '')   // strip anything else
+        .trim()
+    : null;
+  const trimmedDesc = cleanDesc && cleanDesc.length > 320 && !descExpanded ? cleanDesc.slice(0, 320) + '…' : cleanDesc;
 
   return (
     <div style={{ display: 'grid', gap: 14, marginBottom: 12 }}>
-      {desc && (
+      {cleanDesc && (
         <div>
           <SectionLabel>About the property</SectionLabel>
           {/* RateHawk descriptions contain markdown — bold section
@@ -917,12 +1531,48 @@ function HotelInfo({ content }: { content: any }) {
         </div>
       )}
 
-      {(content.check_in_time || content.check_out_time || content.phone || content.email) && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+      {(content.check_in_time || content.check_out_time || content.phone || content.email || content.address || content.hotel_chain || content.property_type) && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+          {content.address && (
+            <FactCell
+              label="Address"
+              value={
+                content.latitude && content.longitude ? (
+                  <a
+                    href={`https://www.google.com/maps?q=${content.latitude},${content.longitude}`}
+                    target="_blank" rel="noreferrer"
+                    style={{ color: 'var(--c-accent)', textDecoration: 'none', borderBottom: '1px dashed var(--c-line)' }}
+                  >{content.address}</a>
+                ) : content.address
+              }
+            />
+          )}
           {content.check_in_time && <FactCell label="Check-in"  value={content.check_in_time} />}
           {content.check_out_time && <FactCell label="Check-out" value={content.check_out_time} />}
           {content.phone &&        <FactCell label="Phone"      value={content.phone} />}
           {content.email &&        <FactCell label="Email"      value={content.email} />}
+          {content.hotel_chain &&  <FactCell label="Chain"      value={content.hotel_chain} />}
+          {content.property_type && <FactCell label="Type"      value={content.property_type} />}
+          {content.front_desk_time_start && content.front_desk_time_end && (
+            <FactCell label="Front desk" value={`${content.front_desk_time_start}–${content.front_desk_time_end}`} />
+          )}
+          {content.number_of_rooms && <FactCell label="Rooms"   value={String(content.number_of_rooms)} />}
+        </div>
+      )}
+
+      {Array.isArray(content.restaurants) && content.restaurants.length > 0 && (
+        <div>
+          <SectionLabel>Restaurants & bars ({content.restaurants.length})</SectionLabel>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {content.restaurants.slice(0, 8).map((r: any, i: number) => (
+              <span key={i} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 999, background: 'var(--c-bg-soft)', border: '1px solid var(--c-line)', color: 'var(--c-fg-soft)' }}>
+                {typeof r === 'string' ? r : (r.name || r.title || 'Restaurant')}
+              </span>
+            ))}
+            {content.restaurants.length > 8 && (
+              <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>+{content.restaurants.length - 8} more</span>
+            )}
+          </div>
         </div>
       )}
 
@@ -969,11 +1619,18 @@ function RoomGroupedRates({
   onChoose: (r: AdminRate) => void;
   marginTop?: number;
 }) {
+  const sp = useSearchParams();
+  const showRgDebug = sp.get('debug') === 'rgmatch';
   // Group by the precise sub-variant name. roomGroupName is the
   // backend's resolved name from static content — for RateHawk it
   // refines "Ocean Villa" → "Ocean Villa, 1 king bed, ocean view"
   // so each view/bedding/floor combo becomes its own card. Falls
   // back to roomTypeName when no static-content match exists.
+  // Group by sub-variant name, then score each rate per group so the
+  // table can highlight the recommended option and surface the top-N
+  // by default (Valentin, 2026-05-28). Within a group the cheapest
+  // rate anchors the score pool — everything else is normalised
+  // against it.
   const groups = useMemo(() => {
     const m = new Map<string, AdminRate[]>();
     for (const r of rates) {
@@ -981,8 +1638,30 @@ function RoomGroupedRates({
       if (!m.has(k)) m.set(k, []);
       m.get(k)!.push(r);
     }
-    return Array.from(m.entries()).map(([name, list]) => ({ name, rates: list }));
+    return Array.from(m.entries()).map(([name, list]) => {
+      const sellTotals = list
+        .map(r => r.pricing?.sell?.totalAmount)
+        .filter((v): v is number => typeof v === 'number' && v > 0);
+      const poolMin = sellTotals.length ? Math.min(...sellTotals) : 0;
+      const scored = list.map(r => ({
+        r,
+        score: scoreRate({
+          pricing: {
+            sell: { totalAmount: r.pricing?.sell?.totalAmount, nightlyAmount: r.pricing?.sell?.nightlyAmount },
+            markup: { amount: r.pricing?.markup?.amount }
+          },
+          refundable: r.refundable,
+          cancellationDeadlineUtc: r.cancellationDeadlineUtc
+        }, poolMin, { isB2B: true })
+      })).sort((a, b) => b.score - a.score);
+      return {
+        name,
+        rates: scored.map(s => s.r),     // already sorted: highest score first
+        recommendedKey: scored[0]?.r?.rateKey || null
+      };
+    });
   }, [rates]);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   return (
     <div style={{ marginTop, display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -990,12 +1669,14 @@ function RoomGroupedRates({
         Available rooms ({groups.length})
       </div>
       {groups.map((g) => {
-        // Mirror B2C RoomGrid behaviour: show the thumbnail only when
-        // an image actually exists. Empty grey boxes look broken in a
-        // long room list, especially when most rooms don't have an
-        // image (rg_ext match miss). When no image, collapse to a
-        // single-column card.
         const cover = g.rates.find(r => r.roomImage)?.roomImage || null;
+        // Valentin (2026-05-28): show 3–5 rate options per room with
+        // different conditions, not just the cheapest. We surface the
+        // top 3 by composite score and collapse the rest behind a
+        // toggle. The recommended row gets a gold outline.
+        const isExpanded = expandedGroups.has(g.name);
+        const visibleRates = isExpanded ? g.rates : g.rates.slice(0, 3);
+        const hiddenCount = g.rates.length - visibleRates.length;
         return (
           <div key={g.name} className="c-card" style={{ overflow: 'hidden' }}>
             <div style={{ display: 'grid', gridTemplateColumns: cover ? '160px 1fr' : '1fr', gap: 0 }}>
@@ -1014,25 +1695,70 @@ function RoomGroupedRates({
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                   <thead>
                     <tr style={{ textAlign: 'left', color: 'var(--c-fg-muted)' }}>
+                      <th style={thStyle}>Supplier</th>
                       <th style={thStyle}>Plan</th>
                       <th style={thStyle}>Cancellation</th>
-                      <th style={thStyle}>NET</th>
+                      <th style={thStyle}>NET (/ night · total)</th>
                       <th style={thStyle}>Markup</th>
-                      <th style={thStyle}>Sell</th>
+                      <th style={thStyle}>Sell (/ night · total)</th>
                       <th style={thStyle}></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {g.rates.map((r, i) => (
-                      <tr key={i} style={{ borderTop: '1px solid var(--c-line-soft)' }}>
-                        <td style={tdStyle}>{r.ratePlan || 'nomeal'}</td>
+                    {visibleRates.map((r, i) => {
+                      const isRecommended = r.rateKey === g.recommendedKey;
+                      const rowBorder = isRecommended
+                        ? '1.5px solid var(--c-accent)'
+                        : '1px solid var(--c-line-soft)';
+                      const rowBg = isRecommended ? 'rgba(155,123,51,0.04)' : undefined;
+                      return (
+                      <tr key={i} style={{ borderTop: rowBorder, background: rowBg }}>
+                        <td style={tdStyle}>
+                          {r.supplier && <span style={badgeStyle(r.supplier)}>{r.supplier}</span>}
+                          {isRecommended && (
+                            <div style={{
+                              marginTop: 3,
+                              fontSize: 9.5, fontWeight: 700, letterSpacing: 0.04, textTransform: 'uppercase',
+                              color: 'var(--c-accent)'
+                            }}>★ Recommended</div>
+                          )}
+                        </td>
+                        <td style={tdStyle}>
+                          {r.ratePlan || 'nomeal'}
+                          {showRgDebug && r.matchTier && r.matchTier !== 'strict' && (
+                            <span style={{
+                              marginLeft: 6,
+                              padding: '1px 5px',
+                              borderRadius: 3,
+                              fontSize: 10,
+                              fontFamily: 'var(--c-mono)',
+                              background: 'var(--c-bg-soft)',
+                              color: 'var(--c-fg-soft)',
+                              border: '1px solid var(--c-line-soft)'
+                            }}>{r.matchTier}</span>
+                          )}
+                        </td>
                         <td style={tdStyle}>
                           {r.refundable
-                            ? <span style={{ color: 'var(--c-success)', fontWeight: 600 }}>Refundable</span>
+                            ? (
+                              <div style={{ lineHeight: 1.3 }}>
+                                <div style={{ color: 'var(--c-success)', fontWeight: 600 }}>Refundable</div>
+                                {r.cancellationDeadlineUtc && (
+                                  <div style={{ fontSize: 11, color: 'var(--c-fg-soft)' }}>
+                                    until {fmtCancelDate(r.cancellationDeadlineUtc)}
+                                  </div>
+                                )}
+                              </div>
+                            )
                             : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>}
                         </td>
                         <td style={tdStyle}>
-                          <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(r.pricing.net?.totalAmount)}</span>
+                          <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.3 }}>
+                            <div>{fmtMoney(r.pricing.net?.nightlyAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>/nt</span></div>
+                            <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
+                              {fmtMoney(r.pricing.net?.totalAmount)} total
+                            </div>
+                          </div>
                         </td>
                         <td style={tdStyle}>
                           <span style={{ fontFamily: 'var(--c-mono)', color: 'var(--c-fg-soft)' }}>
@@ -1040,9 +1766,12 @@ function RoomGroupedRates({
                           </span>
                         </td>
                         <td style={tdStyle}>
-                          <span style={{ fontFamily: 'var(--c-mono)', fontWeight: 700, color: 'var(--c-accent)' }}>
-                            {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency}
-                          </span>
+                          <div style={{ fontFamily: 'var(--c-mono)', fontWeight: 700, color: 'var(--c-accent)', lineHeight: 1.3 }}>
+                            <div>{fmtMoney(r.pricing.sell?.nightlyAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>/nt</span></div>
+                            <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
+                              {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency} total
+                            </div>
+                          </div>
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'right' }}>
                           <button className="c-btn c-btn-primary" onClick={() => onChoose(r)} style={{ padding: '5px 12px', fontSize: 12 }}>
@@ -1050,9 +1779,36 @@ function RoomGroupedRates({
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
+                {hiddenCount > 0 && (
+                  <button
+                    onClick={() => setExpandedGroups(prev => {
+                      const next = new Set(prev);
+                      next.add(g.name);
+                      return next;
+                    })}
+                    style={{
+                      marginTop: 6, fontSize: 11.5, color: 'var(--c-accent)',
+                      background: 'none', border: 0, cursor: 'pointer', padding: 0, fontWeight: 600
+                    }}
+                  >Show {hiddenCount} more rate{hiddenCount > 1 ? 's' : ''}</button>
+                )}
+                {isExpanded && g.rates.length > 3 && (
+                  <button
+                    onClick={() => setExpandedGroups(prev => {
+                      const next = new Set(prev);
+                      next.delete(g.name);
+                      return next;
+                    })}
+                    style={{
+                      marginTop: 6, fontSize: 11.5, color: 'var(--c-fg-soft)',
+                      background: 'none', border: 0, cursor: 'pointer', padding: 0, fontWeight: 600
+                    }}
+                  >Show top 3 only</button>
+                )}
               </div>
             </div>
           </div>
@@ -1449,7 +2205,7 @@ function BookingSidebar(props: {
   );
 }
 
-function FactCell({ label, value }: { label: string; value: string }) {
+function FactCell({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div style={{ background: 'var(--c-bg-soft)', border: '1px solid var(--c-line-soft)', borderRadius: 6, padding: '8px 10px' }}>
       <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 700, marginBottom: 2 }}>{label}</div>
