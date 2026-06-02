@@ -1066,7 +1066,7 @@ export default function ConsoleSearchPage() {
               aria-label={`${detailHotel.name} rates`}
               style={{
                 position: 'fixed', top: 0, right: 0, bottom: 0,
-                width: detailExpanded ? 'min(1100px, 96vw)' : 'min(640px, 96vw)',
+                width: detailExpanded ? 'min(1320px, 98vw)' : 'min(900px, 96vw)',
                 background: 'var(--c-bg)', borderLeft: '1px solid var(--c-line)',
                 boxShadow: '-8px 0 28px rgba(0,0,0,0.18)', zIndex: 41,
                 display: 'flex', flexDirection: 'column', transition: 'width 160ms ease'
@@ -1129,8 +1129,10 @@ export default function ConsoleSearchPage() {
                 </div>
               )}
 
-              {/* Drawer body (scrollable) */}
-              <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+              {/* Drawer body (scrollable both axes — the rate table is wide,
+                  so allow horizontal scroll as a safety net; ⤢ expand widens
+                  the drawer to near-full-width for the booking step). */}
+              <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', padding: 18 }}>
             {ratesBusy && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--c-fg-soft)', fontSize: 13 }}>
                 <Loader2 size={14} className="animate-spin" /> Fetching rates…
@@ -1348,7 +1350,19 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
  * compact stacked layout — see filteredHits.map for the dispatch.
  */
 function MultiSupplierCard({ h, onOpen, showUnavailable }: { h: HotelHit; onOpen: (supplier: string | null) => void; showUnavailable: boolean }) {
-  const quotes: Quote[] = h.priced?.quotes || [];
+  // Use the per-supplier quotes when present; otherwise synthesise a single
+  // quote from the legacy priced fields so single-supplier hotels render in
+  // the same card (one unified layout for the whole list).
+  const quotes: Quote[] = (h.priced?.quotes && h.priced.quotes.length > 0)
+    ? h.priced.quotes
+    : (h.priced?.available ? [{
+        supplier: h.priced.supplier || null, available: true,
+        sellNightly: h.priced.sellNightly, sellTotal: h.priced.sellTotal,
+        netNightly: h.priced.netNightly, markupPct: h.priced.markupPct,
+        currency: h.priced.currency, ratePlan: h.priced.ratePlan,
+        refundable: h.priced.refundable, breakfastIncluded: h.priced.breakfastIncluded,
+        cancellationDeadlineUtc: h.priced.cancellationDeadlineUtc, ratesCount: h.priced.ratesCount,
+      }] : []);
   // Score the quotes so the highest-scored gets the Recommended border.
   const minSell = Math.min(...quotes
     .filter(q => q.available && typeof q.sellTotal === 'number')
