@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { MapPin, Hotel, Globe2, Loader2 } from 'lucide-react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { MapPin, Hotel, Globe2, Loader2, X } from 'lucide-react';
 
 type Hit = { id?: number; hotel_id?: number; name?: string; city?: string; country?: string; main_image?: string | null };
 
@@ -14,7 +14,16 @@ type Props = {
   placeholder?: string;
 };
 
-export default function DestinationAutocomplete({ value, onChange, onSelectHotel, onSelectCity, onSelectCountry, placeholder }: Props) {
+export type DestinationAutocompleteHandle = {
+  // Set the value without re-opening the dropdown. Use this for
+  // programmatic value changes (quick-prompt chips, form reset, etc.)
+  // — typing in the input itself still triggers normal search.
+  setSilent: (s: string) => void;
+};
+
+const DestinationAutocomplete = forwardRef<DestinationAutocompleteHandle, Props>(function DestinationAutocomplete(
+  { value, onChange, onSelectHotel, onSelectCity, onSelectCountry, placeholder }, ref
+) {
   const [hotels, setHotels]     = useState<Hit[]>([]);
   const [cities, setCities]     = useState<Hit[]>([]);
   const [countries, setCountries] = useState<Hit[]>([]);
@@ -22,6 +31,20 @@ export default function DestinationAutocomplete({ value, onChange, onSelectHotel
   const [busy, setBusy]         = useState(false);
   const rootRef                 = useRef<HTMLDivElement>(null);
   const debounceRef             = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // After the user picks a suggestion, skip the next value-change
+  // search — otherwise the debounce re-opens the dropdown with the
+  // selected text as a new query, and the user has to click twice
+  // because the row they clicked got replaced mid-click.
+  const skipNextSearch          = useRef(false);
+
+  useImperativeHandle(ref, () => ({
+    setSilent: (s: string) => {
+      skipNextSearch.current = true;
+      setOpen(false);
+      setHotels([]); setCities([]); setCountries([]);
+      onChange(s);
+    }
+  }), [onChange]);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
@@ -33,6 +56,7 @@ export default function DestinationAutocomplete({ value, onChange, onSelectHotel
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (skipNextSearch.current) { skipNextSearch.current = false; return; }
     const q = value?.trim() || '';
     if (q.length < 2) { setHotels([]); setCities([]); setCountries([]); return; }
     debounceRef.current = setTimeout(async () => {
@@ -67,12 +91,35 @@ export default function DestinationAutocomplete({ value, onChange, onSelectHotel
         onFocus={() => { if (hasResults) setOpen(true); }}
         placeholder={placeholder || 'Destination, city or hotel'}
         style={{
-          width: '100%', padding: '8px 10px', fontSize: 14,
+          width: '100%', padding: '8px 28px 8px 10px', fontSize: 14,
           border: '1px solid var(--c-line)', borderRadius: 6,
           background: 'var(--c-bg)', color: 'var(--c-fg)'
         }}
       />
       {busy && <Loader2 size={13} className="animate-spin" style={{ position: 'absolute', right: 10, top: 11, color: 'var(--c-fg-muted)' }} />}
+      {!busy && value && (
+        <button
+          type="button"
+          onClick={() => {
+            // Reset the field completely: clear value AND cached
+            // suggestions, suppress the next debounce (otherwise an
+            // empty-query effect leaves results lingering), and close
+            // the dropdown. Same path as setSilent('').
+            skipNextSearch.current = true;
+            setHotels([]); setCities([]); setCountries([]);
+            setOpen(false);
+            onChange('');
+          }}
+          aria-label="Clear destination"
+          style={{
+            position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+            background: 'transparent', border: 0, padding: 4, cursor: 'pointer',
+            color: 'var(--c-fg-muted)', display: 'flex', alignItems: 'center'
+          }}
+        >
+          <X size={13} />
+        </button>
+      )}
       {open && hasResults && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
@@ -85,7 +132,7 @@ export default function DestinationAutocomplete({ value, onChange, onSelectHotel
           {countries.length > 0 && (
             <Group label="Countries" icon={<Globe2 size={11} />}>
               {countries.map((c: any) => (
-                <Row key={`co-${c.id}`} onClick={() => { onChange(c.name); onSelectCountry?.(c.name); setOpen(false); }}>
+                <Row key={`co-${c.id}`} onClick={() => { skipNextSearch.current = true; setOpen(false); setHotels([]); setCities([]); setCountries([]); onChange(c.name); onSelectCountry?.(c.name); }}>
                   <strong style={{ fontWeight: 600 }}>{c.name}</strong>
                 </Row>
               ))}
@@ -94,7 +141,7 @@ export default function DestinationAutocomplete({ value, onChange, onSelectHotel
           {cities.length > 0 && (
             <Group label="Cities" icon={<MapPin size={11} />}>
               {cities.map((c: any) => (
-                <Row key={`c-${c.id}`} onClick={() => { onChange(c.name); onSelectCity?.(c.name, c.country); setOpen(false); }}>
+                <Row key={`c-${c.id}`} onClick={() => { skipNextSearch.current = true; setOpen(false); setHotels([]); setCities([]); setCountries([]); onChange(c.name); onSelectCity?.(c.name, c.country); }}>
                   <strong style={{ fontWeight: 600 }}>{c.name}</strong>
                   {c.country && <span style={{ color: 'var(--c-fg-muted)', marginLeft: 6, fontSize: 12 }}>{c.country}</span>}
                 </Row>
@@ -104,7 +151,7 @@ export default function DestinationAutocomplete({ value, onChange, onSelectHotel
           {hotels.length > 0 && (
             <Group label="Hotels" icon={<Hotel size={11} />}>
               {hotels.map((h: any) => (
-                <Row key={`h-${h.id}`} onClick={() => { onChange(h.name); onSelectHotel?.(h); setOpen(false); }}>
+                <Row key={`h-${h.id}`} onClick={() => { skipNextSearch.current = true; setOpen(false); setHotels([]); setCities([]); setCountries([]); onChange(h.name); onSelectHotel?.(h); }}>
                   <strong style={{ fontWeight: 600 }}>{h.name}</strong>
                   <span style={{ color: 'var(--c-fg-muted)', marginLeft: 6, fontSize: 12 }}>
                     {[h.city, h.country].filter(Boolean).join(', ')}
@@ -117,7 +164,9 @@ export default function DestinationAutocomplete({ value, onChange, onSelectHotel
       )}
     </div>
   );
-}
+});
+
+export default DestinationAutocomplete;
 
 function Group({ label, icon, children }: { label: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (

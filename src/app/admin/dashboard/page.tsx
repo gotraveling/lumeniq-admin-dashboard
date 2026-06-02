@@ -45,7 +45,7 @@ export default function DashboardPage() {
           setUserClaims(claims);
           
           // Fetch real data from API
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.us-central1.run.app';
+          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.australia-southeast1.run.app';
           
           // Fetch bookings
           try {

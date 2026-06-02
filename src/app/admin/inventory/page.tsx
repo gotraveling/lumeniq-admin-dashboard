@@ -68,7 +68,7 @@ export default function InventoryPage() {
       setLoading(true);
       
       // First try to fetch from booking engine API inventory endpoint
-      const bookingEngineUrl = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.us-central1.run.app';
+      const bookingEngineUrl = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.australia-southeast1.run.app';
       let response = await fetch(`${bookingEngineUrl}/api/inventory/hotels`);
       
       if (response.ok) {
@@ -122,7 +122,7 @@ export default function InventoryPage() {
       const today = new Date().toISOString().split('T')[0];
       const endDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // Next 30 days
       
-      const bookingEngineUrl = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.us-central1.run.app';
+      const bookingEngineUrl = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.australia-southeast1.run.app';
       
       // Try to get real rates from Demo Supplier via booking engine
       try {

@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Eye, EyeOff, Plus, Trash2, Edit, RefreshCw, AlertTriangle, CheckCircle } from 'lucide-react';
 
-const HOTEL_API_URL = process.env.NEXT_PUBLIC_HOTEL_API_URL || 'https://hotel-api-91901273027.us-central1.run.app';
+const HOTEL_API_URL = process.env.NEXT_PUBLIC_HOTEL_API_URL || 'https://hotel-api-91901273027.australia-southeast1.run.app';
 
 interface VisibilityRule {
   id: number;

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Use PostgreSQL directly for admin dashboard to get both hotel_id and supplier codes
-const HOTEL_API_URL = process.env.HOTEL_API_URL || 'https://hotel-api-91901273027.us-central1.run.app';
+const HOTEL_API_URL = process.env.HOTEL_API_URL || 'https://hotel-api-91901273027.australia-southeast1.run.app';
 
 export async function POST(request: NextRequest) {
   try {

@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 // enrich the hotel result cards with "From $X" badges after the
 // initial text search returns.
 
-const BOOKING_API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.us-central1.run.app';
+const BOOKING_API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.australia-southeast1.run.app';
 const API_KEY = process.env.BOOKING_API_KEY || '';
 
 export async function POST(request: NextRequest) {

@@ -12,6 +12,11 @@ import {
   Sparkles,
   Settings,
   LogOut,
+  BarChart3,
+  Hotel,
+  EyeOff,
+  DollarSign,
+  Globe,
 } from 'lucide-react';
 
 /**
@@ -23,19 +28,41 @@ import {
  * (each page is responsible for its own access check, same pattern
  * as legacy admin).
  */
+// Items prefixed with `/admin/` are not yet ported to the console
+// shell — clicking them leaves the console layout for the legacy
+// admin layout. They're surfaced here so consultants don't have to
+// remember the two-URL split. Will be migrated into /console/* over
+// time and then the hrefs swap without consumers noticing.
 const NAV: Array<{ section: string; items: Array<{ href: string; label: string; icon: any }> }> = [
   {
     section: 'Operations',
     items: [
-      { href: '/console/bookings', label: 'Bookings', icon: ClipboardList },
-      { href: '/console/search',   label: 'B2B Search', icon: Search },
-      { href: '/console/ai',       label: 'AI Agent',   icon: Sparkles },
+      { href: '/console/bookings',         label: 'Bookings',        icon: ClipboardList },
+      { href: '/console/search',           label: 'B2B Search',      icon: Search },
+      { href: '/console/ai',               label: 'AI Agent',        icon: Sparkles },
+      { href: '/admin/search-activity',    label: 'Search Activity', icon: BarChart3 },
+    ],
+  },
+  {
+    section: 'Catalog',
+    items: [
+      { href: '/admin/inventory/browse',     label: 'Browse Hotels',     icon: Hotel },
+      { href: '/admin/hotels/editorial',     label: 'Editorial Content', icon: Sparkles },
+      { href: '/admin/hotels/visibility',    label: 'Hotel Visibility',  icon: EyeOff },
     ],
   },
   {
     section: 'Pricing',
     items: [
-      { href: '/console/rules', label: 'Pricing rules', icon: Sparkles },
+      { href: '/console/rules',                       label: 'Pricing rules',     icon: Sparkles },
+      { href: '/admin/inventory/display-overrides',   label: 'Display Overrides', icon: DollarSign },
+    ],
+  },
+  {
+    section: 'Setup',
+    items: [
+      { href: '/admin/suppliers',       label: 'Suppliers', icon: Globe },
+      { href: '/admin/tenant-settings', label: 'Settings',  icon: Settings },
     ],
   },
 ];

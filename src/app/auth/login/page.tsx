@@ -26,8 +26,9 @@ export default function LoginPage() {
       const tokenResult = await user.getIdTokenResult();
       const { role } = tokenResult.claims;
 
-      // Redirect to the main admin dashboard after successful login
-      router.push('/admin/dashboard');
+      // Land on the new console (B2B search / bookings / pricing).
+      // Legacy /admin/* pages are reachable from the sidebar footer.
+      router.push('/console');
 
     } catch (error: any) {
       console.error('Login error:', error);

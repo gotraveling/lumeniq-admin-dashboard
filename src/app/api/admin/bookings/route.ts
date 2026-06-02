@@ -14,7 +14,7 @@ import { NextRequest, NextResponse } from 'next/server';
  * who placed it. Future: attach a real consultant_id column when the
  * console adds RBAC.
  */
-const BOOKING_API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.us-central1.run.app';
+const BOOKING_API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.australia-southeast1.run.app';
 const API_KEY = process.env.BOOKING_API_KEY || '';
 
 export async function POST(request: NextRequest) {

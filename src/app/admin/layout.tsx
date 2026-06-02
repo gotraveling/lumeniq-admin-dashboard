@@ -7,7 +7,6 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import {
   LayoutDashboard,
-  Hotel,
   Settings,
   Building2,
   BarChart3,
@@ -84,7 +83,9 @@ export default function AdminLayout({
     ];
 
     const commonItems = [
-      { name: 'My Bookings', href: '/admin/bookings', icon: Hotel, description: 'Tenant bookings' },
+      // Bookings management moved to the new console (/console/bookings).
+      // The legacy /admin/bookings pages still exist (with a banner) but are
+      // intentionally no longer surfaced in the admin menu.
       { name: 'Search Activity', href: '/admin/search-activity', icon: BarChart3, description: 'Live search log + per-supplier health' },
       { name: 'Browse Hotels', href: '/admin/inventory/browse', icon: BarChart3, description: 'Browse hotel inventory' },
       { name: 'Editorial Content', href: '/admin/hotels/editorial', icon: Sparkles, description: 'Manage hotel content, media & reviews' },

@@ -183,3 +183,22 @@
 }
 .agent-md th { background: var(--c-bg-soft); font-weight: 700; }
 .agent-md hr { border: 0; border-top: 1px solid var(--c-line-soft); margin: 10px 0; }
+
+/* Skeleton placeholder shimmer for the search results — one block per
+   hotel currently being priced via the compare endpoint. */
+.c-skeleton > div > div,
+.c-skeleton > div {
+  position: relative;
+  overflow: hidden;
+}
+.c-skeleton > div > div::after,
+.c-skeleton > div:first-child::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent);
+  animation: c-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes c-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}

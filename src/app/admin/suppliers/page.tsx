@@ -50,7 +50,7 @@ export default function SuppliersPage() {
   const loadSuppliersData = async () => {
     try {
       setLoading(true);
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.us-central1.run.app';
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.australia-southeast1.run.app';
 
       // Get real supplier data and stats using local API routes (server-side with API key)
       const [healthResponse, bookingsResponse, suppliersResponse] = await Promise.all([

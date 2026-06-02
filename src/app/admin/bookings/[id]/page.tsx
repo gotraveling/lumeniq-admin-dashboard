@@ -60,8 +60,14 @@ export default function BookingDetailPage() {
   const [booking, setBooking] = useState<BookingDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<null | 'cancel' | 'resend' | 'sync'>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast>(null);
+  const [showEdit, setShowEdit] = useState(false);
+  const [editForm, setEditForm] = useState<{
+    guests: { firstName: string; lastName: string }[];
+    arrival: { date: string; airline: string; number: string };
+    departure: { date: string; airline: string; number: string };
+  }>({ guests: [], arrival: { date: '', airline: '', number: '' }, departure: { date: '', airline: '', number: '' } });
 
   const bookingId = params.id as string;
 
@@ -211,6 +217,54 @@ export default function BookingDetailPage() {
     } finally { setBusy(null); }
   };
 
+  // Open the guest/flight editor, seeding one name row per adult on the
+  // booking (lead guest pre-filled). Hummingbird only — gated at the button.
+  const openEdit = () => {
+    if (!booking) return;
+    const adults = booking.bookingDetails?.searchParams?.adults || 1;
+    const guests = Array.from({ length: adults }, (_, i) =>
+      i === 0
+        ? { firstName: booking.guestInfo?.firstName || '', lastName: booking.guestInfo?.lastName || '' }
+        : { firstName: '', lastName: '' }
+    );
+    setEditForm({ guests, arrival: { date: '', airline: '', number: '' }, departure: { date: '', airline: '', number: '' } });
+    setShowEdit(true);
+  };
+
+  const handleEditDetails = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!booking) return;
+    const named = editForm.guests.filter(g => g.firstName.trim() || g.lastName.trim());
+    if (named.length === 0) { showToast({ kind: 'error', text: 'Enter at least one guest name.' }); return; }
+    const a = editForm.arrival, dep = editForm.departure;
+    const body: any = {
+      firstName: editForm.guests[0]?.firstName || booking.guestInfo?.firstName,
+      lastName: editForm.guests[0]?.lastName || booking.guestInfo?.lastName,
+      email: booking.guestInfo?.email,
+      guests: named.map(g => ({ firstName: g.firstName, lastName: g.lastName, type: 'adult' })),
+    };
+    if (a.date || a.number) body.arrivalFlight = { date: a.date, airline: a.airline, number: a.number };
+    if (dep.date || dep.number) body.departureFlight = { date: dep.date, airline: dep.airline, number: dep.number };
+    setBusy('edit');
+    try {
+      const r = await fetch(`/api/bookings/${bookingId}/guest-details`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.success) {
+        showToast({ kind: 'success', text: 'Guest & flight details updated. The guest has been emailed.' });
+        setShowEdit(false);
+        await fetchBookingDetail();
+      } else {
+        showToast({ kind: 'error', text: d.message || d.error || `Update failed (${r.status})` });
+      }
+    } catch {
+      showToast({ kind: 'error', text: 'Network error updating details' });
+    } finally { setBusy(null); }
+  };
+
   if (loading) return <div className="p-8 flex items-center justify-center text-gray-700">Loading…</div>;
   if (error || !booking) {
     return (
@@ -227,6 +281,11 @@ export default function BookingDetailPage() {
 
   return (
     <div className="p-8 space-y-6 max-w-6xl">
+      {/* Legacy notice — booking management has moved to the new console. */}
+      <div className="rounded-lg p-3 border border-amber-300 bg-amber-50 text-amber-900 text-sm flex items-center justify-between gap-3">
+        <span><strong>Legacy page.</strong> Booking management now lives in the new console.</span>
+        <a href="/console/bookings" className="underline font-medium whitespace-nowrap">Open in console →</a>
+      </div>
       {/* Inline toast */}
       {toast && (
         <div className={`rounded-lg p-3 border ${
@@ -309,6 +368,19 @@ export default function BookingDetailPage() {
               >
                 <X className="h-4 w-4" />
                 <span>{busy === 'cancel' ? 'Cancelling…' : 'Cancel booking'}</span>
+              </button>
+            )}
+            {booking.status !== 'cancelled' && booking.status !== 'awaiting_supplier_confirmation' && (
+              <button
+                onClick={openEdit}
+                disabled={!!busy || booking.supplierId !== 'hummingbird'}
+                title={booking.supplierId === 'hummingbird'
+                  ? 'Edit guest names and flight details'
+                  : 'This supplier captures guest names at booking time — no post-booking edit available'}
+                className="flex items-center space-x-1 px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+              >
+                <Edit className="h-4 w-4" />
+                <span>Edit guest / flight</span>
               </button>
             )}
           </div>
@@ -465,6 +537,63 @@ export default function BookingDetailPage() {
           <p className="text-sm text-gray-500">No events logged for this booking yet. New bookings will accumulate a timeline here.</p>
         )}
       </div>
+
+      {/* Edit guest & flight modal (Hummingbird) */}
+      {showEdit && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-lg font-semibold text-gray-900">Edit guest &amp; flight details</h3>
+              <button onClick={() => setShowEdit(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <form className="space-y-5" onSubmit={handleEditDetails}>
+              <div>
+                <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Guests</div>
+                <div className="space-y-2">
+                  {editForm.guests.map((g, i) => (
+                    <div key={i} className="grid grid-cols-2 gap-2">
+                      <input
+                        type="text" placeholder={`Guest ${i + 1} first name`} value={g.firstName}
+                        onChange={e => setEditForm(f => { const guests = [...f.guests]; guests[i] = { ...guests[i], firstName: e.target.value }; return { ...f, guests }; })}
+                        className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <input
+                        type="text" placeholder="Last name" value={g.lastName}
+                        onChange={e => setEditForm(f => { const guests = [...f.guests]; guests[i] = { ...guests[i], lastName: e.target.value }; return { ...f, guests }; })}
+                        className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {(['arrival', 'departure'] as const).map(leg => (
+                <div key={leg}>
+                  <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">{leg} flight <span className="normal-case text-gray-400">(optional)</span></div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <input type="date" value={editForm[leg].date}
+                      onChange={e => setEditForm(f => ({ ...f, [leg]: { ...f[leg], date: e.target.value } }))}
+                      className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    <input type="text" placeholder="Airline (QF)" value={editForm[leg].airline}
+                      onChange={e => setEditForm(f => ({ ...f, [leg]: { ...f[leg], airline: e.target.value } }))}
+                      className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    <input type="text" placeholder="Flight no." value={editForm[leg].number}
+                      onChange={e => setEditForm(f => ({ ...f, [leg]: { ...f[leg], number: e.target.value } }))}
+                      className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                </div>
+              ))}
+
+              <div className="flex justify-end space-x-3 pt-2">
+                <button type="button" onClick={() => setShowEdit(false)} className="px-4 py-2 text-gray-600 hover:text-gray-800">Cancel</button>
+                <button type="submit" disabled={busy === 'edit'} className="px-6 py-2 bg-black text-white rounded-lg hover:bg-gray-800 disabled:opacity-50">
+                  {busy === 'edit' ? 'Saving…' : 'Update details'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
