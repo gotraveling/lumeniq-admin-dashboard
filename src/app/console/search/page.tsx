@@ -79,6 +79,9 @@ type Quote = {
 
 type AdminRate = {
   supplier: string;
+  // RateHawk channel that produced this rate: 'cug' (member) or 'b2c'.
+  // Drives the per-rate badge + which credentials prebook/booking use.
+  _channel?: 'cug' | 'b2c';
   rateKey: string;
   roomTypeName: string;
   // Precise sub-variant from static content (room_groups[].name on
@@ -170,6 +173,11 @@ export default function ConsoleSearchPage() {
   const [rates, setRates]               = useState<AdminRate[]>([]);
   const [ratesBusy, setRatesBusy]       = useState(false);
   const [ratesErr, setRatesErr]         = useState<string | null>(null);
+  // Lazy B2C compare: false until the consultant clicks "Compare B2C" on the
+  // open hotel (so we don't pay 2x ETG calls on every search). Base channel
+  // is always Member (cug); B2C rates are merged in on demand, tagged.
+  const [b2cLoaded, setB2cLoaded]       = useState(false);
+  const [b2cBusy,   setB2cBusy]         = useState(false);
   const [chosenRate, setChosenRate]     = useState<AdminRate | null>(null);
   // rate_decisions audit-trail identifiers. Set once when rates land,
   // re-used on /choose POST and forwarded into /api/bookings so the
@@ -392,15 +400,16 @@ export default function ConsoleSearchPage() {
     void loadRatesFor(h);
   }
 
-  async function loadRatesFor(h: HotelHit) {
+  async function loadRatesFor(h: HotelHit, channel: 'cug' | 'b2c' = 'cug') {
     setRatesBusy(true);
     setRatesErr(null);
     setRates([]);
+    setB2cLoaded(false);
     try {
       // ETG cert §4: send per-room guests so the backend doesn't have
       // to floor-distribute adults or shove all children into room 1.
       // Equivalent fix to the B2C HotelSearchForm.
-      const qs = new URLSearchParams({ checkIn, checkOut, nationalityCode: citizenship });
+      const qs = new URLSearchParams({ checkIn, checkOut, nationalityCode: citizenship, accountType: channel });
       qs.set('guests', JSON.stringify(rooms.map(r => ({
         adults: r.adults,
         children: r.childrenAges || []
@@ -411,7 +420,7 @@ export default function ConsoleSearchPage() {
         throw new Error(json.message || 'Supplier rate limit — wait ~30 seconds and try again.');
       }
       if (!json.success) throw new Error(json.details ? `${json.error}: ${json.details}` : (json.error || 'rates failed'));
-      setRates(json.data.rates || []);
+      setRates((json.data.rates || []).map((r: AdminRate) => ({ ...r, _channel: channel })));
       setDetailContent(json.data.hotel || null);
       // Persist the rate_decisions audit trail id so /choose and
       // /api/bookings can stamp the same row when the consultant
@@ -424,6 +433,32 @@ export default function ConsoleSearchPage() {
       setRatesErr(e.message || 'rates failed');
     } finally {
       setRatesBusy(false);
+    }
+  }
+
+  // Lazy compare: fetch the B2C channel's rates for the OPEN hotel on demand
+  // and merge them (tagged) into the Member list so the consultant sees both
+  // — without paying the 2x ETG cost on every search.
+  async function addB2CRates(h: HotelHit) {
+    if (b2cLoaded || b2cBusy) return;
+    setB2cBusy(true);
+    try {
+      const qs = new URLSearchParams({ checkIn, checkOut, nationalityCode: citizenship, accountType: 'b2c' });
+      qs.set('guests', JSON.stringify(rooms.map(r => ({ adults: r.adults, children: r.childrenAges || [] }))));
+      const res = await fetch(`/api/admin/search/rates/${h.id}?${qs.toString()}`);
+      const json = await res.json();
+      if (res.status === 429) throw new Error(json.message || 'Supplier rate limit — wait ~30 seconds and try again.');
+      if (!json.success) throw new Error(json.error || 'b2c rates failed');
+      const b2c: AdminRate[] = (json.data.rates || []).map((r: AdminRate) => ({ ...r, _channel: 'b2c' as const }));
+      setRates(prev => {
+        const seen = new Set(prev.map(r => r.rateKey));
+        return [...prev, ...b2c.filter(r => !seen.has(r.rateKey))];
+      });
+      setB2cLoaded(true);
+    } catch (e: any) {
+      setRatesErr(e.message || 'b2c rates failed');
+    } finally {
+      setB2cBusy(false);
     }
   }
 
@@ -463,10 +498,9 @@ export default function ConsoleSearchPage() {
             },
             expectedTotalAmount: chosenRate.pricing.sell?.totalAmount,
             expectedCurrency:    chosenRate.pricing.currency,
-            // Admin console is the B2B/CUG channel — pick the cug
-            // credentials on the supplier side so margins and rate
-            // visibility match the B2B API key ETG issues us.
-            accountType: 'cug'
+            // Use the CHOSEN rate's own channel so prebook hits the same
+            // credentials/pool the rate was quoted under (member vs b2c).
+            accountType: chosenRate._channel || 'cug'
           })
         });
         const json = await r.json();
@@ -528,7 +562,7 @@ export default function ConsoleSearchPage() {
           rateKey: chosenRate.rateKey,
           expectedTotalAmount: prebook?.newPrice || chosenRate.pricing.sell?.totalAmount,
           expectedCurrency:    chosenRate.pricing.currency,
-          accountType: 'cug',
+          accountType: chosenRate._channel || 'cug',
           searchParams: {
             checkIn, checkOut,
             adults: totalAdults,
@@ -1004,6 +1038,31 @@ export default function ConsoleSearchPage() {
                 >Show all suppliers</button>
               </div>
             )}
+            {/* Lazy rate-channel compare. Rates default to Member (CUG)
+                everywhere. On demand we fetch the B2C channel for THIS hotel
+                and merge it in (tagged), so consultants see both side by side
+                without paying the 2x ETG cost (10/min cap) on every search. */}
+            {rates.length > 0 && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
+                fontSize: 12.5, color: 'var(--c-fg-soft)'
+              }}>
+                <span>Showing <strong>Member</strong> rates{b2cLoaded ? ' + B2C' : ''}.</span>
+                {!b2cLoaded && (
+                  <button
+                    onClick={() => detailHotel && void addB2CRates(detailHotel)}
+                    disabled={b2cBusy}
+                    title="Fetch public B2C rates for this hotel and compare against Member rates"
+                    style={{
+                      fontSize: 12, padding: '4px 12px', borderRadius: 999,
+                      border: '1px solid var(--c-line)', cursor: b2cBusy ? 'wait' : 'pointer',
+                      background: 'var(--c-bg)', color: 'var(--c-accent)', fontWeight: 600,
+                      opacity: b2cBusy ? 0.6 : 1,
+                    }}
+                  >{b2cBusy ? 'Loading B2C…' : 'Compare B2C'}</button>
+                )}
+              </div>
+            )}
             {rates.length > 0 && (
               <RoomGroupedRates
                 rates={supplierFocus ? rates.filter(r => r.supplier === supplierFocus) : rates}
@@ -1092,6 +1151,16 @@ function badgeStyle(supplier: string): React.CSSProperties {
   const map: Record<string, string> = { ratehawk: '#1f6feb', hummingbird: '#7c3aed' };
   const color = map[supplier] || '#525252';
   return {
+    fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+    color, border: `1px solid ${color}33`, background: `${color}11`, padding: '2px 8px', borderRadius: 999
+  };
+}
+// Rate-channel badge — Member (CUG) vs public B2C. Only shown once the
+// consultant has clicked "Compare B2C" so both channels coexist in the list.
+function channelBadgeStyle(channel: 'cug' | 'b2c'): React.CSSProperties {
+  const color = channel === 'cug' ? '#0a7d3e' : '#b45309';
+  return {
+    marginLeft: 5,
     fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
     color, border: `1px solid ${color}33`, background: `${color}11`, padding: '2px 8px', borderRadius: 999
   };
@@ -1542,6 +1611,11 @@ function RoomGroupedRates({
                       <tr key={i} style={{ borderTop: rowBorder, background: rowBg }}>
                         <td style={tdStyle}>
                           {r.supplier && <span style={badgeStyle(r.supplier)}>{r.supplier}</span>}
+                          {r._channel && (
+                            <span style={channelBadgeStyle(r._channel)}>
+                              {r._channel === 'cug' ? 'Member' : 'B2C'}
+                            </span>
+                          )}
                           {isRecommended && (
                             <div style={{
                               marginTop: 3,
