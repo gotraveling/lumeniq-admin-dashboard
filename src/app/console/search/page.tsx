@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
-import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle, X, Maximize2, Minimize2 } from 'lucide-react';
+import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle, X, Maximize2, Minimize2, Image as ImageIcon } from 'lucide-react';
 import DestinationAutocomplete, { type DestinationAutocompleteHandle } from '@/components/console/DestinationAutocomplete';
 import CountryPicker from '@/components/console/CountryPicker';
 import ReactMarkdown from 'react-markdown';
@@ -449,12 +449,21 @@ export default function ConsoleSearchPage() {
       const json = await res.json();
       if (res.status === 429) throw new Error(json.message || 'Supplier rate limit — wait ~30 seconds and try again.');
       if (!json.success) throw new Error(json.error || 'b2c rates failed');
-      const b2c: AdminRate[] = (json.data.rates || []).map((r: AdminRate) => ({ ...r, _channel: 'b2c' as const }));
-      setRates(prev => {
-        const seen = new Set(prev.map(r => r.rateKey));
-        return [...prev, ...b2c.filter(r => !seen.has(r.rateKey))];
-      });
+      // Non-Member rates are a DIFFERENT channel from the Member rates
+      // already in `prev` — never dedupe one against the other (a Member and
+      // its Non-Member twin can even share a book_hash). Only collapse exact
+      // dupes WITHIN the incoming Non-Member set.
+      const b2cSeen = new Set<string>();
+      const b2c: AdminRate[] = (json.data.rates || [])
+        .map((r: AdminRate) => ({ ...r, _channel: 'b2c' as const }))
+        .filter((r: AdminRate) => {
+          if (b2cSeen.has(r.rateKey)) return false;
+          b2cSeen.add(r.rateKey);
+          return true;
+        });
+      setRates(prev => [...prev.filter(r => r._channel !== 'b2c'), ...b2c]);
       setB2cLoaded(true);
+      if (b2c.length === 0) setRatesErr('No public non-member rates returned for this hotel.');
     } catch (e: any) {
       setRatesErr(e.message || 'b2c rates failed');
     } finally {
@@ -1002,21 +1011,22 @@ export default function ConsoleSearchPage() {
                   so allow horizontal scroll as a safety net; ⤢ expand widens
                   the drawer to near-full-width for the booking step). */}
               <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', padding: 18 }}>
-            {ratesBusy && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--c-fg-soft)', fontSize: 13 }}>
-                <Loader2 size={14} className="animate-spin" /> Fetching rates…
-              </div>
-            )}
-            {ratesErr && <div style={{ color: 'var(--c-danger)', fontSize: 13 }}>Error: {ratesErr}</div>}
-            {!ratesBusy && !ratesErr && rates.length === 0 && (
-              <div style={{ color: 'var(--c-fg-muted)', fontSize: 13 }}>No rates returned for these dates.</div>
-            )}
+            {ratesErr && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 10 }}>Error: {ratesErr}</div>}
 
             {/* Hotel info section — appears above the rate list so the
                 consultant has context (description, amenities, policies)
-                while picking a rate to book. */}
+                while picking a rate to book. Renders the moment content
+                arrives; the rate table loads into its own skeleton below
+                so the drawer is never a blank spinner. */}
             {!chosenRate && detailContent && (
               <HotelInfo content={detailContent} />
+            )}
+
+            {/* Rates load into a room-card skeleton so the consultant sees
+                the shell immediately rather than a lone "fetching" line. */}
+            {ratesBusy && <RatesSkeleton hasContent={!!detailContent} />}
+            {!ratesBusy && !ratesErr && rates.length === 0 && (
+              <div style={{ color: 'var(--c-fg-muted)', fontSize: 13 }}>No rates returned for these dates.</div>
             )}
 
             {/* Supplier filter banner: when user clicked a supplier row
@@ -1047,19 +1057,19 @@ export default function ConsoleSearchPage() {
                 display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
                 fontSize: 12.5, color: 'var(--c-fg-soft)'
               }}>
-                <span>Showing <strong>Member</strong> rates{b2cLoaded ? ' + B2C' : ''}.</span>
+                <span>Showing <strong>Member</strong> rates{b2cLoaded ? ' + Non-Member' : ''}.</span>
                 {!b2cLoaded && (
                   <button
                     onClick={() => detailHotel && void addB2CRates(detailHotel)}
                     disabled={b2cBusy}
-                    title="Fetch public B2C rates for this hotel and compare against Member rates"
+                    title="Also fetch the public non-member price for this hotel and compare it against the member rate"
                     style={{
                       fontSize: 12, padding: '4px 12px', borderRadius: 999,
                       border: '1px solid var(--c-line)', cursor: b2cBusy ? 'wait' : 'pointer',
                       background: 'var(--c-bg)', color: 'var(--c-accent)', fontWeight: 600,
                       opacity: b2cBusy ? 0.6 : 1,
                     }}
-                  >{b2cBusy ? 'Loading B2C…' : 'Compare B2C'}</button>
+                  >{b2cBusy ? 'Loading non-member…' : 'Compare non-member price'}</button>
                 )}
               </div>
             )}
@@ -1155,8 +1165,17 @@ function badgeStyle(supplier: string): React.CSSProperties {
     color, border: `1px solid ${color}33`, background: `${color}11`, padding: '2px 8px', borderRadius: 999
   };
 }
-// Rate-channel badge — Member (CUG) vs public B2C. Only shown once the
-// consultant has clicked "Compare B2C" so both channels coexist in the list.
+// Plan signature — pairs the SAME room+meal+cancellation across the Member
+// and Non-Member channels so compare mode can sit the twin rates adjacent.
+// Bedding/view is already in the room-group key, so meal + refundability is
+// enough to identify the twin within a group.
+function planSigOf(r: AdminRate): string {
+  return `${r.ratePlan || 'nomeal'}|${r.refundable ? 'ref' : 'nonref'}`;
+}
+
+// Rate-channel badge — Member (CUG, our negotiated price) vs Non-Member
+// (RateHawk's public B2C price). Only shown once the consultant has clicked
+// "Compare Non-Member" so both channels coexist in the list.
 function channelBadgeStyle(channel: 'cug' | 'b2c'): React.CSSProperties {
   const color = channel === 'cug' ? '#0a7d3e' : '#b45309';
   return {
@@ -1527,6 +1546,10 @@ function RoomGroupedRates({
   // by default (Valentin, 2026-05-28). Within a group the cheapest
   // rate anchors the score pool — everything else is normalised
   // against it.
+  // Compare mode kicks in once the consultant has pulled the Non-Member
+  // channel in — it changes how rates are ordered (pair the twins) and how
+  // many we surface when collapsed (top plan-pairs, not top rows).
+  const comparing = useMemo(() => rates.some(r => r._channel === 'b2c'), [rates]);
   const groups = useMemo(() => {
     const m = new Map<string, AdminRate[]>();
     for (const r of rates) {
@@ -1549,15 +1572,50 @@ function RoomGroupedRates({
           refundable: r.refundable,
           cancellationDeadlineUtc: r.cancellationDeadlineUtc
         }, poolMin, { isB2B: true })
-      })).sort((a, b) => b.score - a.score);
-      return {
-        name,
-        rates: scored.map(s => s.r),     // already sorted: highest score first
-        recommendedKey: scored[0]?.r?.rateKey || null
-      };
+      }));
+      const byScore = [...scored].sort((a, b) => b.score - a.score);
+      const recommendedKey = byScore[0]?.r?.rateKey || null;
+
+      // sellBySig: for each plan-pair, the Member + Non-Member sell totals so
+      // a Member row can show "−$X vs non-member" inline.
+      const sellBySig = new Map<string, { cug?: number; b2c?: number }>();
+      for (const r of list) {
+        const sig = planSigOf(r);
+        const cur = sellBySig.get(sig) || {};
+        const ch = r._channel === 'b2c' ? 'b2c' : 'cug';
+        const s = r.pricing?.sell?.totalAmount;
+        if (typeof s === 'number' && (cur[ch] === undefined || s < cur[ch]!)) cur[ch] = s;
+        sellBySig.set(sig, cur);
+      }
+
+      let ordered: AdminRate[];
+      if (comparing) {
+        // Pair Member + Non-Member of the same plan adjacently; order the
+        // pairs by their cheapest sell, Member first within a pair.
+        const sigMin = new Map<string, number>();
+        for (const r of list) {
+          const sig = planSigOf(r);
+          const s = r.pricing?.sell?.totalAmount ?? Infinity;
+          if (!sigMin.has(sig) || s < sigMin.get(sig)!) sigMin.set(sig, s);
+        }
+        ordered = [...list].sort((a, b) => {
+          const am = sigMin.get(planSigOf(a)) ?? Infinity;
+          const bm = sigMin.get(planSigOf(b)) ?? Infinity;
+          if (am !== bm) return am - bm;
+          const ac = a._channel === 'b2c' ? 1 : 0;
+          const bc = b._channel === 'b2c' ? 1 : 0;
+          if (ac !== bc) return ac - bc;
+          return (a.pricing?.sell?.totalAmount ?? Infinity) - (b.pricing?.sell?.totalAmount ?? Infinity);
+        });
+      } else {
+        ordered = byScore.map(s => s.r);   // highest score first
+      }
+      return { name, rates: ordered, recommendedKey, sellBySig };
     });
-  }, [rates]);
+  }, [rates, comparing]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // Room-photos lightbox — opened from a per-room "View photos" button.
+  const [photoModal, setPhotoModal] = useState<{ name: string; images: string[] } | null>(null);
 
   return (
     <div style={{ marginTop, display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1565,13 +1623,30 @@ function RoomGroupedRates({
         Available rooms ({groups.length})
       </div>
       {groups.map((g) => {
-        const cover = g.rates.find(r => r.roomImage)?.roomImage || null;
+        const groupImages = Array.from(new Set(g.rates.map(r => r.roomImage).filter((v): v is string => !!v)));
+        const cover = groupImages[0] || null;
         // Valentin (2026-05-28): show 3–5 rate options per room with
         // different conditions, not just the cheapest. We surface the
         // top 3 by composite score and collapse the rest behind a
-        // toggle. The recommended row gets a gold outline.
+        // toggle. In compare mode we collapse by plan-PAIR instead so the
+        // Member + Non-Member twins are never split across the fold.
         const isExpanded = expandedGroups.has(g.name);
-        const visibleRates = isExpanded ? g.rates : g.rates.slice(0, 3);
+        let visibleRates: AdminRate[];
+        if (isExpanded) {
+          visibleRates = g.rates;
+        } else if (comparing) {
+          const sigs: string[] = [];
+          visibleRates = g.rates.filter(r => {
+            const sig = planSigOf(r);
+            if (!sigs.includes(sig)) {
+              if (sigs.length >= 3) return false;
+              sigs.push(sig);
+            }
+            return true;
+          });
+        } else {
+          visibleRates = g.rates.slice(0, 3);
+        }
         const hiddenCount = g.rates.length - visibleRates.length;
         return (
           <div key={g.name} className="c-card" style={{ overflow: 'hidden' }}>
@@ -1587,7 +1662,22 @@ function RoomGroupedRates({
                 }} />
               )}
               <div style={{ padding: '12px 14px' }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{g.name}</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{g.name}</div>
+                  {groupImages.length > 0 && (
+                    <button
+                      onClick={() => setPhotoModal({ name: g.name, images: groupImages })}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
+                        fontSize: 11.5, fontWeight: 600, color: 'var(--c-accent)',
+                        background: 'none', border: '1px solid var(--c-line)', borderRadius: 6,
+                        padding: '3px 9px', cursor: 'pointer'
+                      }}
+                    >
+                      <ImageIcon size={12} /> {groupImages.length} photo{groupImages.length > 1 ? 's' : ''}
+                    </button>
+                  )}
+                </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                   <thead>
                     <tr style={{ textAlign: 'left', color: 'var(--c-fg-muted)' }}>
@@ -1613,7 +1703,7 @@ function RoomGroupedRates({
                           {r.supplier && <span style={badgeStyle(r.supplier)}>{r.supplier}</span>}
                           {r._channel && (
                             <span style={channelBadgeStyle(r._channel)}>
-                              {r._channel === 'cug' ? 'Member' : 'B2C'}
+                              {r._channel === 'cug' ? 'Member' : 'Non-Member'}
                             </span>
                           )}
                           {isRecommended && (
@@ -1676,6 +1766,22 @@ function RoomGroupedRates({
                             <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
                               {fmtMoney(r.pricing.sell?.nightlyAmount)} /nt
                             </div>
+                            {(() => {
+                              // Compare hint: on a Member row, show how much
+                              // cheaper (or dearer) it is than its Non-Member twin.
+                              if (!comparing || r._channel !== 'cug') return null;
+                              const pair = g.sellBySig.get(planSigOf(r));
+                              const mine = r.pricing.sell?.totalAmount;
+                              if (!pair || pair.b2c === undefined || typeof mine !== 'number') return null;
+                              const diff = pair.b2c - mine;
+                              if (Math.abs(diff) < 0.5) return null;
+                              const cheaper = diff > 0;
+                              return (
+                                <div style={{ fontSize: 10.5, fontWeight: 600, marginTop: 2, color: cheaper ? 'var(--c-success)' : 'var(--c-danger)' }}>
+                                  {cheaper ? '−' : '+'}{fmtMoney(Math.abs(diff))} vs non-member
+                                </div>
+                              );
+                            })()}
                           </div>
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'right' }}>
@@ -1719,11 +1825,77 @@ function RoomGroupedRates({
           </div>
         );
       })}
+
+      {/* Room-photos lightbox */}
+      {photoModal && (
+        <div
+          onClick={() => setPhotoModal(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: 'var(--c-bg)', borderRadius: 10, maxWidth: 'min(900px, 94vw)', maxHeight: '90vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 40px rgba(0,0,0,0.4)' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--c-line)' }}>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>{photoModal.name}</div>
+              <button onClick={() => setPhotoModal(null)} title="Close" style={iconBtnStyle}><X size={14} /></button>
+            </div>
+            <div style={{ overflowY: 'auto', padding: 16, display: 'grid', gridTemplateColumns: photoModal.images.length > 1 ? 'repeat(auto-fill, minmax(240px, 1fr))' : '1fr', gap: 10 }}>
+              {photoModal.images.map((src, i) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img key={i} src={src} alt={`${photoModal.name} ${i + 1}`} style={{ width: '100%', borderRadius: 8, objectFit: 'cover', background: 'var(--c-bg-soft)' }} />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 const thStyle: React.CSSProperties = { fontWeight: 700, fontSize: 11, letterSpacing: 0.05, textTransform: 'uppercase', padding: '6px 8px', color: 'var(--c-fg-muted)' };
 const tdStyle: React.CSSProperties = { padding: '8px 8px', verticalAlign: 'middle', color: 'var(--c-fg)' };
+
+// Loading placeholder for the rate table — shows the room-card shell
+// (image + title + a few rate rows) while the supplier call is in flight,
+// plus an "about" block skeleton if the hotel content hasn't landed yet.
+// Keeps the drawer feeling populated instead of a lone spinner.
+function RatesSkeleton({ hasContent }: { hasContent: boolean }) {
+  const bar = (w: string | number, h = 12): React.CSSProperties => ({
+    width: w, height: h, borderRadius: 4, background: 'var(--c-bg-soft)'
+  });
+  return (
+    <div className="animate-pulse" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {!hasContent && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 4 }}>
+          <div style={bar('40%', 16)} />
+          <div style={bar('92%')} />
+          <div style={bar('85%')} />
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--c-fg-soft)', fontSize: 13 }}>
+        <Loader2 size={14} className="animate-spin" /> Loading rooms…
+      </div>
+      {[0, 1, 2].map(i => (
+        <div key={i} className="c-card" style={{ overflow: 'hidden' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 0 }}>
+            <div style={{ width: 160, minHeight: 120, background: 'var(--c-bg-soft)' }} />
+            <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={bar('55%', 14)} />
+              {[0, 1].map(j => (
+                <div key={j} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <div style={bar(80)} />
+                  <div style={bar(90)} />
+                  <div style={bar(70)} />
+                  <div style={{ ...bar(60), marginLeft: 'auto' }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
