@@ -1299,6 +1299,10 @@ function MultiSupplierCard({ h, onOpen, showUnavailable }: { h: HotelHit; onOpen
   }));
   const avail = quotes.filter(q => q.available);
   const best = scored.filter(s => s.q.available).sort((a, b) => b.score - a.score)[0]?.q;
+  // Distinct supplier names for the card chip (console is cug → may show supplier names).
+  const supplierNames = Array.from(
+    new Set((showUnavailable ? quotes : avail).map(q => q.supplier).filter(Boolean))
+  ) as string[];
 
   return (
     <button
@@ -1331,11 +1335,9 @@ function MultiSupplierCard({ h, onOpen, showUnavailable }: { h: HotelHit; onOpen
         </div>
         {/* Supplier-count chip + best-rate badges (per-supplier breakdown is in the drawer) */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 'auto' }}>
-          {quotes.length > 1 && (
-            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-soft)', background: 'var(--c-bg-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '2px 9px' }}>
-              {showUnavailable
-                ? `${avail.length} of ${quotes.length} suppliers`
-                : (avail.length > 1 ? `${avail.length} suppliers` : '1 supplier')}
+          {quotes.length > 1 && supplierNames.length > 0 && (
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-soft)', background: 'var(--c-bg-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '2px 9px', textTransform: 'capitalize' }}>
+              {supplierNames.join(' · ')}
             </span>
           )}
           {best?.roomTypeName && <span style={{ fontSize: 11.5, color: 'var(--c-fg)' }}>{best.roomTypeName}</span>}
