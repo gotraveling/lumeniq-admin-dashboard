@@ -15,7 +15,10 @@ interface PricingRule {
   is_active: boolean;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_HOTEL_API_URL || '';
+// Same-origin: hits this app's /api/pricing/rules proxy, which forwards (with
+// the server-side key) to the AUTHORITATIVE booking-engine pricing_rules — the
+// table pricingService.js actually applies. (Old hotel-api route was a dud.)
+const API_URL = '';
 
 export default function ConsoleRulesPage() {
   const [rules, setRules] = useState<PricingRule[]>([]);
