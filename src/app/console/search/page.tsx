@@ -42,6 +42,12 @@ type HotelHit = {
     supplier?: string;          // cheapest-supplier surfaced on the card (= cheapestSupplier from compare)
     sellNightly?: number;
     sellTotal?: number;
+    // Derived AUD display layer (from pricing.aud) — primary figure on the
+    // card. USD (sellNightly/sellTotal) shown small beneath. Never recomputed
+    // here; rendered straight from the API.
+    sellNightlyAud?: number;
+    sellTotalAud?: number;
+    fxRate?: number;
     netNightly?: number;
     netTotal?: number;
     markupPct?: number;
@@ -66,6 +72,10 @@ type Quote = {
   reason?: string;
   sellNightly?: number;
   sellTotal?: number;
+  // Derived AUD (from cheapestRate.pricing.aud) — display only.
+  sellNightlyAud?: number;
+  sellTotalAud?: number;
+  fxRate?: number;
   netNightly?: number;
   markupPct?: number;
   markupAmount?: number;
@@ -111,10 +121,21 @@ type AdminRate = {
   } | null;
   pricing: {
     currency: string;
-    net?: { totalAmount: number; nightlyAmount: number };
+    net?: { totalAmount: number; nightlyAmount: number; aud?: AudBlock | null };
     sell?: { totalAmount: number; nightlyAmount: number };
+    // Derived AUD display layer for the sell price (additive — USD sell above
+    // is the booking basis and is unchanged). Render-only, never recomputed.
+    aud?: AudBlock | null;
     markup?: { type: string; value: number; amount: number; ruleName?: string };
   };
+};
+
+// Derived AUD display block emitted by the backend (pricing.aud / net.aud).
+type AudBlock = {
+  nightlyAmount: number | null;
+  totalAmount: number | null;
+  currency: string;
+  fxRate: number;
 };
 
 function todayPlus(days: number) {
@@ -314,12 +335,16 @@ export default function ConsoleSearchPage() {
         const quotes: Quote[] = apiQuotes.map(q => {
           const sell = q.cheapestRate?.pricing?.sell;
           const net  = q.cheapestRate?.pricing?.net;
+          const aud  = q.cheapestRate?.pricing?.aud;   // derived AUD (display)
           return {
             supplier:                q.supplier,
             available:               !!q.available,
             reason:                  q.reason,
             sellNightly:             sell?.nightlyAmount,
             sellTotal:               sell?.totalAmount,
+            sellNightlyAud:          aud?.nightlyAmount ?? undefined,
+            sellTotalAud:            aud?.totalAmount ?? undefined,
+            fxRate:                  aud?.fxRate ?? undefined,
             netNightly:              net?.nightlyAmount,
             markupPct:               q.cheapestRate?.pricing?.markup?.value,
             markupAmount:            q.cheapestRate?.pricing?.markup?.amount,
@@ -343,6 +368,7 @@ export default function ConsoleSearchPage() {
         }
         const sell = r.cheapestRate?.pricing?.sell;
         const net  = r.cheapestRate?.pricing?.net;
+        const aud  = r.cheapestRate?.pricing?.aud;   // derived AUD (display)
         return {
           ...h,
           priced: {
@@ -350,6 +376,9 @@ export default function ConsoleSearchPage() {
             supplier:                r.cheapestSupplier || r.supplier,
             sellNightly:             sell?.nightlyAmount,
             sellTotal:               sell?.totalAmount,
+            sellNightlyAud:          aud?.nightlyAmount ?? undefined,
+            sellTotalAud:            aud?.totalAmount ?? undefined,
+            fxRate:                  aud?.fxRate ?? undefined,
             netNightly:              net?.nightlyAmount,
             netTotal:                net?.totalAmount,
             markupPct:               r.cheapestRate?.pricing?.markup?.value,
@@ -1281,6 +1310,7 @@ function MultiSupplierCard({ h, onOpen, showUnavailable }: { h: HotelHit; onOpen
     : (h.priced?.available ? [{
         supplier: h.priced.supplier || null, available: true,
         sellNightly: h.priced.sellNightly, sellTotal: h.priced.sellTotal,
+        sellNightlyAud: h.priced.sellNightlyAud, sellTotalAud: h.priced.sellTotalAud, fxRate: h.priced.fxRate,
         netNightly: h.priced.netNightly, markupPct: h.priced.markupPct,
         currency: h.priced.currency, ratePlan: h.priced.ratePlan,
         refundable: h.priced.refundable, breakfastIncluded: h.priced.breakfastIncluded,
@@ -1357,13 +1387,34 @@ function MultiSupplierCard({ h, onOpen, showUnavailable }: { h: HotelHit; onOpen
         ) : (
           <>
             <div style={{ fontSize: 10, color: 'var(--c-fg-muted)', letterSpacing: '0.04em', fontWeight: 700 }}>FROM</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
-              {fmtMoney(best.sellNightly)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> / nt</span>
-            </div>
-            {best.sellTotal != null && best.sellTotal !== best.sellNightly && (
-              <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
-                {fmtMoney(best.sellTotal)} total{best.currency ? ` ${best.currency}` : ''}
-              </div>
+            {/* AUD primary (from pricing.aud) with USD small beneath; fall back
+                to USD as the primary when no AUD block came back. Display only —
+                booking still uses the USD basis. */}
+            {best.sellNightlyAud != null ? (
+              <>
+                <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
+                  {fmtMoney(best.sellNightlyAud)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> AUD / nt</span>
+                </div>
+                {best.sellTotalAud != null && best.sellTotalAud !== best.sellNightlyAud && (
+                  <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
+                    {fmtMoney(best.sellTotalAud)} AUD total
+                  </div>
+                )}
+                <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
+                  {fmtMoney(best.sellNightly)} USD / nt{best.fxRate != null ? ` · @ ${best.fxRate}` : ''}
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
+                  {fmtMoney(best.sellNightly)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> / nt</span>
+                </div>
+                {best.sellTotal != null && best.sellTotal !== best.sellNightly && (
+                  <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
+                    {fmtMoney(best.sellTotal)} total{best.currency ? ` ${best.currency}` : ''}
+                  </div>
+                )}
+              </>
             )}
             {best.netNightly != null && (
               <div style={{ fontSize: 11, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
@@ -1619,10 +1670,25 @@ function RoomGroupedRates({
   // Room-photos lightbox — opened from a per-room "View photos" button.
   const [photoModal, setPhotoModal] = useState<{ name: string; images: string[] } | null>(null);
 
+  // FX rate surfaced once as a caption next to the heading (the SELL/NET
+  // columns show AUD primary). Pulled from the first rate carrying a derived
+  // AUD block — display only, never recomputed here.
+  const fxRate = useMemo(
+    () => rates.find(r => r.pricing?.aud?.fxRate != null)?.pricing?.aud?.fxRate ?? null,
+    [rates]
+  );
+
   return (
     <div style={{ marginTop, display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg)' }}>
-        Available rooms ({groups.length})
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg)' }}>
+          Available rooms ({groups.length})
+        </span>
+        {fxRate != null && (
+          <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
+            Sell + Net shown in AUD @ {fxRate}
+          </span>
+        )}
       </div>
       {groups.map((g) => {
         const groupImages = Array.from(new Set(g.rates.map(r => r.roomImage).filter((v): v is string => !!v)));
@@ -1747,12 +1813,30 @@ function RoomGroupedRates({
                         </td>
                         <td style={tdStyle}>
                           <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.3 }}>
-                            <div style={{ fontWeight: 600 }}>
-                              {fmtMoney(r.pricing.net?.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>total</span>
-                            </div>
-                            <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
-                              {fmtMoney(r.pricing.net?.nightlyAmount)} /nt
-                            </div>
+                            {/* NET in AUD primary (pricing.net.aud) + USD small.
+                                Falls back to USD net when no AUD block. */}
+                            {r.pricing.net?.aud?.totalAmount != null ? (
+                              <>
+                                <div style={{ fontWeight: 600 }}>
+                                  {fmtMoney(r.pricing.net.aud.totalAmount)} AUD <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>total</span>
+                                </div>
+                                <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
+                                  {fmtMoney(r.pricing.net.aud.nightlyAmount ?? undefined)} AUD /nt
+                                </div>
+                                <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
+                                  {fmtMoney(r.pricing.net?.totalAmount)} {r.pricing.currency} · {fmtMoney(r.pricing.net?.nightlyAmount)} /nt
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div style={{ fontWeight: 600 }}>
+                                  {fmtMoney(r.pricing.net?.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>total</span>
+                                </div>
+                                <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
+                                  {fmtMoney(r.pricing.net?.nightlyAmount)} /nt
+                                </div>
+                              </>
+                            )}
                           </div>
                         </td>
                         <td style={tdStyle}>
@@ -1762,12 +1846,31 @@ function RoomGroupedRates({
                         </td>
                         <td style={tdStyle}>
                           <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.3 }}>
-                            <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
-                              {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>total</span>
-                            </div>
-                            <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
-                              {fmtMoney(r.pricing.sell?.nightlyAmount)} /nt
-                            </div>
+                            {/* AUD primary (pricing.aud) with USD small beneath.
+                                Falls back to USD as primary when no AUD block.
+                                Display only — booking basis is still USD sell. */}
+                            {r.pricing.aud?.totalAmount != null ? (
+                              <>
+                                <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
+                                  {fmtMoney(r.pricing.aud.totalAmount)} AUD <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>total</span>
+                                </div>
+                                <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
+                                  {fmtMoney(r.pricing.aud.nightlyAmount ?? undefined)} AUD /nt
+                                </div>
+                                <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
+                                  {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency} total · {fmtMoney(r.pricing.sell?.nightlyAmount)} /nt
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
+                                  {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>total</span>
+                                </div>
+                                <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
+                                  {fmtMoney(r.pricing.sell?.nightlyAmount)} /nt
+                                </div>
+                              </>
+                            )}
                             {(() => {
                               // Compare hint: on a Member row, show how much
                               // cheaper (or dearer) it is than its Non-Member twin.
