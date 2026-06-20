@@ -47,7 +47,6 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
   {
     section: 'Catalog',
     items: [
-      { href: '/console/browse',           label: 'Browse Hotels',     icon: Hotel },
       { href: '/console/collections',      label: 'Collections',       icon: FolderOpen },
       { href: '/console/editorial',        label: 'Editorial Content', icon: Sparkles },
       { href: '/console/hotels/visibility', label: 'Hotel Visibility', icon: EyeOff },
