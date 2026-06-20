@@ -17,6 +17,7 @@ import {
   EyeOff,
   DollarSign,
   Globe,
+  FolderOpen,
 } from 'lucide-react';
 
 /**
@@ -47,7 +48,8 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
     section: 'Catalog',
     items: [
       { href: '/admin/inventory/browse',     label: 'Browse Hotels',     icon: Hotel },
-      { href: '/admin/hotels/editorial',     label: 'Editorial Content', icon: Sparkles },
+      { href: '/console/collections',        label: 'Collections',       icon: FolderOpen },
+      { href: '/console/editorial',          label: 'Editorial Content', icon: Sparkles },
       { href: '/admin/hotels/visibility',    label: 'Hotel Visibility',  icon: EyeOff },
     ],
   },
