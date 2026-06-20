@@ -63,7 +63,11 @@ export default function DateRangePicker({ checkIn, checkOut, onChange }: Props) 
   }
 
   function setNights(n: number) {
-    const base = draftFrom || fromDate || new Date();
+    // Clamp the base to today so the nights shortcuts can never emit a
+    // check-in in the past (e.g. a stale draftFrom from a deep-link).
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    let base = draftFrom || fromDate || today;
+    if (base.getTime() < today.getTime()) base = today;
     const co = addDays(base, n);
     setDraftFrom(base); setDraftTo(co);
     onChange({ checkIn: iso(base), checkOut: iso(co) });

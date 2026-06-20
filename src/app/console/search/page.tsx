@@ -144,6 +144,64 @@ function todayPlus(days: number) {
   return d.toISOString().slice(0, 10);
 }
 
+// Local-time today as YYYY-MM-DD. We compare check-in against this to reject
+// past dates. Uses local date parts (not toISOString, which is UTC and can be
+// a day off near midnight).
+function todayIso() {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+function isValidIsoDate(s: string | null | undefined): s is string {
+  return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+// Snap an arbitrary checkIn/checkOut pair to a valid, present-or-future range.
+// Rules: checkIn must be >= today; checkOut must be > checkIn (min 1 night).
+// When checkIn is in the past we slide the WHOLE range forward by the same
+// number of nights so the consultant keeps their requested length of stay.
+// Returns the (possibly unchanged) range plus whether anything was snapped.
+function normalizeRange(ci: string, co: string): { checkIn: string; checkOut: string; snapped: boolean } {
+  const today = todayIso();
+  let inDate = isValidIsoDate(ci) ? ci : todayPlus(30);
+  let outDate = isValidIsoDate(co) ? co : '';
+  let snapped = false;
+
+  const nightsBetween = (a: string, b: string) => {
+    const d1 = new Date(a + 'T00:00:00');
+    const d2 = new Date(b + 'T00:00:00');
+    return Math.round((d2.getTime() - d1.getTime()) / 86400000);
+  };
+
+  // Derive the desired length of stay before we move anything.
+  let nights = isValidIsoDate(outDate) ? nightsBetween(inDate, outDate) : 0;
+  if (nights < 1) nights = 3;
+
+  // Reject past check-in: slide forward to today, preserving nights.
+  if (inDate < today) {
+    inDate = today;
+    snapped = true;
+  }
+
+  const addDaysIso = (d: string, n: number) => {
+    const dt = new Date(d + 'T00:00:00');
+    dt.setDate(dt.getDate() + n);
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const day = String(dt.getDate()).padStart(2, '0');
+    return `${dt.getFullYear()}-${m}-${day}`;
+  };
+
+  // Ensure checkOut is strictly after checkIn (min 1 night).
+  if (!isValidIsoDate(outDate) || outDate <= inDate) {
+    outDate = addDaysIso(inDate, nights);
+    snapped = true;
+  }
+
+  return { checkIn: inDate, checkOut: outDate, snapped };
+}
+
 export default function ConsoleSearchPage() {
   const [user] = useAuthState(auth);
   const sp = useSearchParams();
@@ -255,9 +313,31 @@ export default function ConsoleSearchPage() {
   const [bookingResult, setBookingResult] = useState<any>(null);
 
   // ───────────────────────────────────────────────────────────
-  async function runSearch(qOverride?: string) {
+  // runSearch takes optional date overrides so the URL-restore path can
+  // pass the dates it just parsed from the query string DIRECTLY, instead
+  // of reading checkIn/checkOut from the React closure. The old code set
+  // state then called runSearch() in the same tick — but setState is async,
+  // so runSearch saw the STALE default dates (todayPlus(30/33)) and both
+  // searched and re-wrote the URL with the wrong dates. That was the
+  // observed drift between the URL, the picker, and what got searched.
+  async function runSearch(qOverride?: string, datesOverride?: { checkIn: string; checkOut: string }) {
     const query = (qOverride !== undefined ? qOverride : q).trim();
     if (!query) return;
+
+    // Always run through the past-date guard. Snap a past/invalid range
+    // forward to a valid future range rather than silently searching the
+    // past. Sync the (possibly snapped) range back to state + URL so the
+    // picker, the URL, and the actual search never drift.
+    const raw = datesOverride || { checkIn, checkOut };
+    const norm = normalizeRange(raw.checkIn, raw.checkOut);
+    if (norm.checkIn !== checkIn) setCheckIn(norm.checkIn);
+    if (norm.checkOut !== checkOut) setCheckOut(norm.checkOut);
+    if (norm.snapped) {
+      setSearchErr(`Check-in cannot be in the past — dates adjusted to ${norm.checkIn} → ${norm.checkOut}.`);
+    }
+    const useCheckIn = norm.checkIn;
+    const useCheckOut = norm.checkOut;
+
     // Encode the full per-room composition (adults + children ages
     // per room). URL form: r=2|3&r=4|5,8  → room 1 has 2 adults + 1
     // child age 3, room 2 has 4 adults + 2 children (ages 5 and 8).
@@ -273,13 +353,13 @@ export default function ConsoleSearchPage() {
     next.delete('adults');
     next.delete('rooms');
     next.set('q', query);
-    next.set('checkIn', checkIn);
-    next.set('checkOut', checkOut);
+    next.set('checkIn', useCheckIn);
+    next.set('checkOut', useCheckOut);
     next.set('citizenship', citizenship);
     next.delete('hotelId');
     router.replace(`/console/search?${next.toString()}`);
     setSearching(true);
-    setSearchErr(null);
+    if (!norm.snapped) setSearchErr(null);
     setHits([]);
     setDetailHotel(null);
     try {
@@ -292,8 +372,11 @@ export default function ConsoleSearchPage() {
       if (!json.success) throw new Error(json.error || 'search failed');
       const initial: HotelHit[] = (json.data.hits || []).map((h: any) => ({ ...h }));
       setHits(initial);
-      // fire-and-forget price enrichment so the page paints fast
-      void enrichPrices(initial.map(h => h.id));
+      // fire-and-forget price enrichment so the page paints fast.
+      // Pass the normalized dates explicitly — enrichPrices otherwise
+      // reads checkIn/checkOut from the closure, which has the same
+      // stale-state problem on the URL-restore path.
+      void enrichPrices(initial.map(h => h.id), { checkIn: useCheckIn, checkOut: useCheckOut });
     } catch (e: any) {
       setSearchErr(e.message || 'search failed');
     } finally {
@@ -301,14 +384,16 @@ export default function ConsoleSearchPage() {
     }
   }
 
-  async function enrichPrices(ids: number[]) {
+  async function enrichPrices(ids: number[], datesOverride?: { checkIn: string; checkOut: string }) {
     if (ids.length === 0) return;
+    const useCheckIn = datesOverride?.checkIn ?? checkIn;
+    const useCheckOut = datesOverride?.checkOut ?? checkOut;
     setEnriching(true);
     try {
       const body = {
         hotelIds: ids,
-        checkIn,
-        checkOut,
+        checkIn: useCheckIn,
+        checkOut: useCheckOut,
         guests: rooms.map(r => ({ adults: r.adults, children: r.childrenAges })),
         nationalityCode: citizenship
       };
@@ -415,7 +500,7 @@ export default function ConsoleSearchPage() {
   // lives in URL state via `&supplier=…` so refresh/share round-trip
   // correctly.
   const [supplierFocus, setSupplierFocus] = useState<string | null>(null);
-  async function openHotel(h: HotelHit, supplier?: string | null) {
+  async function openHotel(h: HotelHit, supplier?: string | null, datesOverride?: { checkIn: string; checkOut: string }) {
     setDetailHotel(h);
     setDetailContent(null);
     setChosenRate(null);
@@ -426,10 +511,12 @@ export default function ConsoleSearchPage() {
     setBookingErr(null);
     setSupplierFocus(supplier || null);
     syncUrl({ hotelId: h.id, supplier: supplier || null });
-    void loadRatesFor(h);
+    void loadRatesFor(h, 'cug', datesOverride);
   }
 
-  async function loadRatesFor(h: HotelHit, channel: 'cug' | 'b2c' = 'cug') {
+  async function loadRatesFor(h: HotelHit, channel: 'cug' | 'b2c' = 'cug', datesOverride?: { checkIn: string; checkOut: string }) {
+    const useCheckIn = datesOverride?.checkIn ?? checkIn;
+    const useCheckOut = datesOverride?.checkOut ?? checkOut;
     setRatesBusy(true);
     setRatesErr(null);
     setRates([]);
@@ -438,7 +525,7 @@ export default function ConsoleSearchPage() {
       // ETG cert §4: send per-room guests so the backend doesn't have
       // to floor-distribute adults or shove all children into room 1.
       // Equivalent fix to the B2C HotelSearchForm.
-      const qs = new URLSearchParams({ checkIn, checkOut, nationalityCode: citizenship, accountType: channel });
+      const qs = new URLSearchParams({ checkIn: useCheckIn, checkOut: useCheckOut, nationalityCode: citizenship, accountType: channel });
       qs.set('guests', JSON.stringify(rooms.map(r => ({
         adults: r.adults,
         children: r.childrenAges || []
@@ -707,10 +794,14 @@ export default function ConsoleSearchPage() {
   // and on detail open/close so refresh, share, and back-button all
   // round-trip cleanly.
   useEffect(() => {
-    const ci = sp.get('checkIn');
-    const co = sp.get('checkOut');
-    if (ci && /^\d{4}-\d{2}-\d{2}$/.test(ci)) setCheckIn(ci);
-    if (co && /^\d{4}-\d{2}-\d{2}$/.test(co)) setCheckOut(co);
+    // Normalize the dates from the URL ONCE, up front, and reuse the result
+    // everywhere below. This guards against a past or malformed checkIn/
+    // checkOut in a shared/deep-link URL, and gives us concrete date values
+    // to hand to runSearch/openHotel directly (instead of relying on the
+    // not-yet-flushed checkIn/checkOut state).
+    const norm = normalizeRange(sp.get('checkIn') || '', sp.get('checkOut') || '');
+    setCheckIn(norm.checkIn);
+    setCheckOut(norm.checkOut);
     // Primary: r=2|3&r=4|5,8 per-room composition (lossless).
     const rParams = sp.getAll('r');
     if (rParams.length > 0) {
@@ -749,13 +840,17 @@ export default function ConsoleSearchPage() {
       if (Number.isFinite(n) && !detailHotel) {
         const stub: HotelHit = { id: n, name: '', sources: [] };
         const sup = sp.get('supplier');
-        void openHotel(stub, sup || null);
+        // Pass the normalized dates through so the rates call doesn't fire
+        // with the stale default state on the deep-link path.
+        void openHotel(stub, sup || null, { checkIn: norm.checkIn, checkOut: norm.checkOut });
         return;
       }
     }
     if (qParam) {
-      // Re-run the search so the list rehydrates on refresh.
-      void runSearch(qParam);
+      // Re-run the search so the list rehydrates on refresh. Hand the
+      // normalized dates in explicitly — runSearch would otherwise read the
+      // stale default checkIn/checkOut from this same render's closure.
+      void runSearch(qParam, { checkIn: norm.checkIn, checkOut: norm.checkOut });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -816,10 +911,15 @@ export default function ConsoleSearchPage() {
                       // fill (otherwise the consultant has to click
                       // the suggestion to dismiss it).
                       destRef.current?.setSilent(p.q);
-                      setCheckIn(todayPlus(30));
-                      setCheckOut(todayPlus(30 + p.nights));
+                      const ci = todayPlus(30);
+                      const co = todayPlus(30 + p.nights);
+                      setCheckIn(ci);
+                      setCheckOut(co);
                       setRooms(p.rooms);
-                      runSearch(p.q);
+                      // Pass the just-computed dates explicitly — runSearch
+                      // would otherwise read the stale (default) checkIn/
+                      // checkOut from the closure on this same tick.
+                      runSearch(p.q, { checkIn: ci, checkOut: co });
                     }}
                     style={{ border: '1px solid var(--c-line)', borderRadius: 999, padding: '6px 12px', fontSize: 12, background: 'var(--c-bg)', color: 'var(--c-fg-soft)', cursor: 'pointer' }}
                   >{p.label}</button>
@@ -1750,7 +1850,7 @@ function RoomGroupedRates({
                   <thead>
                     <tr style={{ textAlign: 'left', color: 'var(--c-fg-muted)' }}>
                       <th style={thStyle}>Supplier</th>
-                      <th style={thStyle}>Plan</th>
+                      <th style={planThStyle}>Plan</th>
                       <th style={thStyle}>Cancellation</th>
                       <th style={thStyle}>NET (/ night · total)</th>
                       <th style={thStyle}>Markup</th>
@@ -1782,7 +1882,7 @@ function RoomGroupedRates({
                             }}>★ Recommended</div>
                           )}
                         </td>
-                        <td style={tdStyle}>
+                        <td style={planTdStyle}>
                           {r.ratePlan || 'nomeal'}
                           {showRgDebug && r.matchTier && r.matchTier !== 'strict' && (
                             <span style={{
@@ -1959,6 +2059,14 @@ function RoomGroupedRates({
 }
 const thStyle: React.CSSProperties = { fontWeight: 700, fontSize: 11, letterSpacing: 0.05, textTransform: 'uppercase', padding: '6px 8px', color: 'var(--c-fg-muted)' };
 const tdStyle: React.CSSProperties = { padding: '8px 8px', verticalAlign: 'middle', color: 'var(--c-fg)' };
+// Plan column: rate-plan strings like "Half Board Dine Around · Transfer YT"
+// were getting squeezed into a 1-word-per-line vertical stack because the
+// auto-layout table starved the column. Give it room (min/max width) and
+// wrap on whole words only (normal, not break-word) so it reads on 1–2 lines.
+// max-width keeps it from eating the table when the drawer is narrow, and the
+// drawer body already allows horizontal scroll as the final safety net.
+const planThStyle: React.CSSProperties = { ...thStyle, minWidth: 200, width: '26%' };
+const planTdStyle: React.CSSProperties = { ...tdStyle, minWidth: 200, maxWidth: 320, whiteSpace: 'normal', wordBreak: 'normal', overflowWrap: 'normal', lineHeight: 1.35 };
 
 // Loading placeholder for the rate table — shows the room-card shell
 // (image + title + a few rate rows) while the supplier call is in flight,
