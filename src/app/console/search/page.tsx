@@ -205,9 +205,16 @@ const BLOCKABLE_SUPPLIERS: Array<{ key: string; label: string; color: string }> 
 // a real ETG size before use, or the <img>/background URL is invalid and renders
 // blank. Hummingbird URLs are already resolved, so this is a no-op for them.
 // Common sizes: 240x240 (thumb), 1024x768 (large), x500, original.
-function resolveImg(url?: string | null, size = '240x240'): string | undefined {
-  if (!url) return undefined;
-  return url.replace('{size}', size);
+// Tolerant of runtime shapes: a bare URL string, an {url}/{src} object, or null —
+// anything non-stringy returns undefined (blank box) instead of throwing, since
+// a thrown .replace would take down the whole results render.
+function resolveImg(url: unknown, size = '240x240'): string | undefined {
+  let s: unknown = url;
+  if (s && typeof s === 'object') {
+    s = (s as { url?: string; src?: string }).url ?? (s as { src?: string }).src ?? null;
+  }
+  if (typeof s !== 'string' || !s) return undefined;
+  return s.replace('{size}', size);
 }
 
 // Normalize a control row's blocked suppliers into a lowercase string[] that
