@@ -265,7 +265,7 @@ export default function ConsoleSearchPage() {
       const res = await fetch('/api/admin/search/hotels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: query, limit: 20 })
+        body: JSON.stringify({ q: query, limit: 50 })
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error || 'search failed');
