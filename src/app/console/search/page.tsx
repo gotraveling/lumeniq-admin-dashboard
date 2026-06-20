@@ -153,6 +153,9 @@ type HotelControl = {
   hotel_id?: number;
   network_status?: NetworkStatus | null;
   use_ratehawk?: boolean | null;
+  // Generalized per-hotel supplier block list (text[] on hotel_control).
+  // Supersedes use_ratehawk; use_ratehawk is kept written for back-compat.
+  blocked_suppliers?: string[] | null;
   markup_override_pct?: string | number | null;
   transfer_type?: string | null;
   transfer_included_override?: boolean | null;
@@ -186,11 +189,32 @@ type HotelControl = {
 // A single competitor rate row for the featured-product comparison table.
 type CompetitorRow = { name: string; rate: number | null; currency: string };
 
+// Suppliers an admin can block per-hotel. Scales: add a supplier here and it
+// shows up in the Manage panel + badges with no other code changes.
+const BLOCKABLE_SUPPLIERS: Array<{ key: string; label: string; color: string }> = [
+  { key: 'ratehawk',    label: 'RateHawk',    color: '#7c3aed' },
+  { key: 'hummingbird', label: 'Hummingbird', color: '#1f6feb' },
+];
+
+// Normalize a control row's blocked suppliers into a lowercase string[] that
+// also folds the legacy use_ratehawk===false flag into 'ratehawk', so existing
+// data renders correctly during the transition.
+function blockedSuppliersOf(c?: HotelControl | null): string[] {
+  const set = new Set<string>();
+  if (Array.isArray(c?.blocked_suppliers)) {
+    for (const s of c!.blocked_suppliers!) {
+      if (s != null && String(s).trim()) set.add(String(s).trim().toLowerCase());
+    }
+  }
+  if (c?.use_ratehawk === false) set.add('ratehawk');
+  return Array.from(set);
+}
+
 // True when the hotel is in a state Tina should notice at a glance.
 function controlFlagged(c?: HotelControl | null): boolean {
   if (!c) return false;
   const s = c.network_status;
-  return (s === 'paused' || s === 'hidden' || s === 'deleted') || c.use_ratehawk === false;
+  return (s === 'paused' || s === 'hidden' || s === 'deleted') || blockedSuppliersOf(c).length > 0;
 }
 
 function todayPlus(days: number) {
@@ -1519,7 +1543,8 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
 // controlled; coerced to the API's types on save.
 type ManageForm = {
   network_status: NetworkStatus;
-  use_ratehawk: boolean;
+  // Lowercase supplier keys currently blocked for this hotel (e.g. ['ratehawk']).
+  blocked_suppliers: string[];
   markup_override_pct: string;
   transfer_type: string;
   // tri-state: '' = auto (null), 'yes' = true, 'no' = false
@@ -1569,7 +1594,8 @@ function controlToForm(c: HotelControl | null): ManageForm {
     : [];
   return {
     network_status: (c?.network_status as NetworkStatus) || 'active',
-    use_ratehawk: c?.use_ratehawk !== false, // default true
+    // Folds legacy use_ratehawk===false into 'ratehawk' so existing data shows.
+    blocked_suppliers: blockedSuppliersOf(c),
     markup_override_pct: str(c?.markup_override_pct),
     transfer_type: str(c?.transfer_type),
     transfer_included_override: triState(c?.transfer_included_override),
@@ -1679,9 +1705,13 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
     const competitors: CompetitorRow[] = f.competitor_comparison
       .map(r => ({ name: r.name.trim(), rate: num(r.rate), currency: r.currency.trim() || 'AUD' }))
       .filter(r => r.name !== '' || r.rate !== null);
+    // Send the generalized array AND keep use_ratehawk in sync for back-compat
+    // (enforcement honours both until use_ratehawk is retired).
+    const blocked = Array.from(new Set(f.blocked_suppliers.map(s => s.trim().toLowerCase()).filter(Boolean)));
     return {
       network_status: f.network_status,
-      use_ratehawk: f.use_ratehawk,
+      blocked_suppliers: blocked,
+      use_ratehawk: !blocked.includes('ratehawk'),
       markup_override_pct: num(f.markup_override_pct),
       transfer_type: txt(f.transfer_type),
       transfer_included_override: f.transfer_included_override === '' ? null : f.transfer_included_override === 'yes',
@@ -1864,10 +1894,31 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                     </select>
                   </Field>
                 </div>
-                <label style={{ ...checkLabelStyle, marginTop: 10 }}>
-                  <input type="checkbox" checked={!form.use_ratehawk} onChange={(e) => set('use_ratehawk', !e.target.checked)} />
-                  Don&apos;t use RateHawk for this hotel
-                </label>
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-soft)', marginBottom: 6 }}>
+                    Block suppliers for this hotel
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+                    {BLOCKABLE_SUPPLIERS.map((s) => {
+                      const checked = form.blocked_suppliers.includes(s.key);
+                      return (
+                        <label key={s.key} style={checkLabelStyle}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => set(
+                              'blocked_suppliers',
+                              e.target.checked
+                                ? Array.from(new Set([...form.blocked_suppliers, s.key]))
+                                : form.blocked_suppliers.filter(k => k !== s.key)
+                            )}
+                          />
+                          {s.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
               </ManageGroup>
 
               {/* ── Pricing ── */}
@@ -2047,7 +2098,12 @@ function ControlBadge({ control }: { control: HotelControl }) {
   if (s === 'paused')  labels.push({ text: 'Paused',  color: '#b45309' });
   if (s === 'hidden')  labels.push({ text: 'Hidden',  color: '#6b7280' });
   if (s === 'deleted') labels.push({ text: 'Deleted', color: '#b91c1c' });
-  if (control.use_ratehawk === false) labels.push({ text: 'No RateHawk', color: '#7c3aed' });
+  // One "No <Supplier>" badge per blocked supplier (generalizes "No RateHawk").
+  for (const key of blockedSuppliersOf(control)) {
+    const known = BLOCKABLE_SUPPLIERS.find(b => b.key === key);
+    const name = known ? known.label : (key.charAt(0).toUpperCase() + key.slice(1));
+    labels.push({ text: `No ${name}`, color: known?.color || '#7c3aed' });
+  }
   if (labels.length === 0) return null;
   return (
     <>
