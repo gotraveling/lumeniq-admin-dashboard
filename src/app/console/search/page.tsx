@@ -128,6 +128,13 @@ type AdminRate = {
     aud?: AudBlock | null;
     markup?: { type: string; value: number; amount: number; ruleName?: string };
   };
+  // Promotional OFFER metadata (Hummingbird deal.offers[]). Surfaced so admins
+  // can see which promo produced the price. `discountAmount`/`grossTotal` are in
+  // the rate's own currency (pricing.currency). Present only when the supplier
+  // attached a promo to the deal.
+  offers?: string[];
+  discountAmount?: number;
+  grossTotal?: number;
 };
 
 // Derived AUD display block emitted by the backend (pricing.aud / net.aud).
@@ -1896,6 +1903,30 @@ function RoomGroupedRates({
                               border: '1px solid var(--c-line-soft)'
                             }}>{r.matchTier}</span>
                           )}
+                          {/* Promo OFFER line — names the Hummingbird promo that
+                              produced this price + the saving. Discount is in the
+                              rate currency; convert to AUD when an fxRate exists. */}
+                          {(r.offers?.length || (r.discountAmount ?? 0) > 0) && (() => {
+                            const fx = r.pricing.aud?.fxRate;
+                            const disc = r.discountAmount ?? 0;
+                            const savedLabel = disc > 0
+                              ? (fx
+                                  ? `saved A$${fmtMoney(disc * fx)}`
+                                  : `saved ${r.pricing.currency} ${fmtMoney(disc)}`)
+                              : '';
+                            const name = r.offers?.[0];
+                            return (
+                              <div style={{
+                                marginTop: 3,
+                                fontSize: 11,
+                                fontWeight: 600,
+                                color: 'var(--c-success)',
+                                lineHeight: 1.3
+                              }}>
+                                ★ {[name, savedLabel].filter(Boolean).join(' · ')}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td style={tdStyle}>
                           {r.refundable
