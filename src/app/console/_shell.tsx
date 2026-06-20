@@ -18,6 +18,7 @@ import {
   DollarSign,
   Globe,
   FolderOpen,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 /**
@@ -48,6 +49,7 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
     section: 'Catalog',
     items: [
       { href: '/console/collections',      label: 'Collections',       icon: FolderOpen },
+      { href: '/console/profiles',         label: 'Profiles',          icon: SlidersHorizontal },
       { href: '/console/editorial',        label: 'Editorial Content', icon: Sparkles },
       { href: '/console/hotels/visibility', label: 'Hotel Visibility', icon: EyeOff },
     ],

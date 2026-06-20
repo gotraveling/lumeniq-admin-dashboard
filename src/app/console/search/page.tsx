@@ -148,10 +148,14 @@ type AudBlock = {
 // Per-hotel control row (hotel-api /api/control). Numeric fields come back
 // as STRINGS from postgres numeric/int columns — Number() them at the edge.
 type NetworkStatus = 'active' | 'paused' | 'hidden' | 'deleted';
+type LuxuryTier = '5plus' | '5plusplus';
 type ProximityTier = 'in-terminal' | 'connected' | 'walkable' | 'short-shuttle' | 'off-airport';
 type HotelControl = {
   hotel_id?: number;
   network_status?: NetworkStatus | null;
+  // Luxury curation tier: null (standard 5★) | '5plus' (5★+) | '5plusplus' (5★++).
+  // Reflected to Meili by the backend so curated tier chips can filter on it.
+  luxury_tier?: LuxuryTier | null;
   use_ratehawk?: boolean | null;
   // Generalized per-hotel supplier block list (text[] on hotel_control).
   // Supersedes use_ratehawk; use_ratehawk is kept written for back-compat.
@@ -322,6 +326,62 @@ export default function ConsoleSearchPage() {
   const [filterRefundable,  setFilterRefundable]  = useState(false);
   const [showUnavailable,   setShowUnavailable]   = useState(false);
 
+  // ─── B2B profile picker + 5★ tier chips (compose into the Meili filter
+  //     that the hotel search posts). The picker loads saved profiles and
+  //     resolves a profile to its compiled Meili filter string; the tier
+  //     chips add luxury_tier clauses. All AND-combined. ─────────────────
+  type ProfileLite = { slug: string; name?: string; title?: string; status?: string };
+  const [profiles, setProfiles]           = useState<ProfileLite[]>([]);
+  const [activeProfile, setActiveProfile] = useState<ProfileLite | null>(null);
+  const [profileFilter, setProfileFilter] = useState<string>('');  // compiled Meili filter for the active profile
+  const [tierChip, setTierChip]           = useState<LuxuryTier | null>(null);
+
+  // Load the profile list once on mount (cheap, read-only).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/profiles?status=all', { cache: 'no-store' });
+        const json = await res.json().catch(() => null);
+        const list: ProfileLite[] = Array.isArray(json?.profiles) ? json.profiles
+          : Array.isArray(json?.data) ? json.data
+          : Array.isArray(json) ? json : [];
+        if (!cancelled) setProfiles(list);
+      } catch { /* picker just stays empty */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Resolve a profile slug to its compiled Meili filter and activate it.
+  // Returns the resolved filter string so callers can re-run the search with
+  // the value directly (state set here is async and not yet flushed).
+  async function selectProfile(slug: string): Promise<string> {
+    if (!slug) { setActiveProfile(null); setProfileFilter(''); return ''; }
+    const p = profiles.find(x => x.slug === slug) || { slug };
+    setActiveProfile(p);
+    try {
+      const res = await fetch(`/api/admin/profiles/filter?slug=${encodeURIComponent(slug)}`, { cache: 'no-store' });
+      const json = await res.json().catch(() => null);
+      const filter = typeof json?.filter === 'string' ? json.filter : '';
+      setProfileFilter(filter);
+      return filter;
+    } catch {
+      setProfileFilter('');
+      return '';
+    }
+  }
+
+  // Combine a profile filter + tier chip into one Meili filter string
+  // (AND-joined). Args default to current state, but callers can pass the
+  // freshly-resolved values when their state-setters haven't flushed yet.
+  // Returns undefined when neither is set so the search body omits `filter`.
+  function composedFilter(pf: string = profileFilter, tc: LuxuryTier | null = tierChip): string | undefined {
+    const clauses: string[] = [];
+    if (pf.trim()) clauses.push(`(${pf.trim()})`);
+    if (tc) clauses.push(`luxury_tier = "${tc}"`);
+    return clauses.length ? clauses.join(' AND ') : undefined;
+  }
+
   // ─── Per-hotel "Manage" control state ───────────────────────
   // Bulk-loaded control rows keyed by hotel id, so each result card can
   // show a state badge (paused/hidden/deleted/no-ratehawk) at a glance.
@@ -413,7 +473,11 @@ export default function ConsoleSearchPage() {
   // so runSearch saw the STALE default dates (todayPlus(30/33)) and both
   // searched and re-wrote the URL with the wrong dates. That was the
   // observed drift between the URL, the picker, and what got searched.
-  async function runSearch(qOverride?: string, datesOverride?: { checkIn: string; checkOut: string }) {
+  // filterOverride: pass the literal string 'AUTO' (default) to compute the
+  // filter from current profile/tier state; pass a string|undefined to use an
+  // explicit freshly-resolved filter (when the chip/profile state hasn't
+  // flushed yet).
+  async function runSearch(qOverride?: string, datesOverride?: { checkIn: string; checkOut: string }, filterOverride: string | undefined | 'AUTO' = 'AUTO') {
     const query = (qOverride !== undefined ? qOverride : q).trim();
     if (!query) return;
 
@@ -456,10 +520,15 @@ export default function ConsoleSearchPage() {
     setHits([]);
     setDetailHotel(null);
     try {
+      // Compose the active B2B profile filter + 5★ tier chip into the
+      // search request. The booking-engine /api/admin/search/hotels handler
+      // AND-s this `filter` string into its Meili query (see return summary
+      // for the backend field it must accept).
+      const extraFilter = filterOverride === 'AUTO' ? composedFilter() : filterOverride;
       const res = await fetch('/api/admin/search/hotels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: query, limit: 50 })
+        body: JSON.stringify({ q: query, limit: 50, ...(extraFilter ? { filter: extraFilter } : {}) })
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error || 'search failed');
@@ -1102,6 +1171,56 @@ export default function ConsoleSearchPage() {
         {/* Results list — stays mounted behind the detail drawer */}
         {hits.length > 0 && (
           <>
+            {/* B2B profile picker + 5★ tier quick chips. Selecting a profile
+                resolves its compiled Meili filter; the tier chips add a
+                luxury_tier clause. Both compose (AND) into the search request,
+                so changing either re-runs the search. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+              <Sparkles size={13} style={{ color: 'var(--c-accent)' }} />
+              <select
+                className="c-select"
+                value={activeProfile?.slug || ''}
+                onChange={async (e) => {
+                  const pf = await selectProfile(e.target.value);
+                  runSearch(undefined, undefined, composedFilter(pf, tierChip));
+                }}
+                style={{ maxWidth: 240, fontSize: 12.5 }}
+              >
+                <option value="">No profile</option>
+                {profiles.map((p) => (
+                  <option key={p.slug} value={p.slug}>{p.name || p.title || p.slug}</option>
+                ))}
+              </select>
+              {activeProfile && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--c-fg)', background: 'var(--c-accent-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '3px 10px' }}>
+                  {activeProfile.name || activeProfile.title || activeProfile.slug}
+                  <button
+                    onClick={() => { setActiveProfile(null); setProfileFilter(''); runSearch(undefined, undefined, composedFilter('', tierChip)); }}
+                    title="Clear profile"
+                    style={{ background: 'none', border: 0, cursor: 'pointer', color: 'var(--c-fg-soft)', padding: 0, display: 'inline-flex' }}
+                  ><X size={12} /></button>
+                </span>
+              )}
+              <div style={{ display: 'flex', gap: 4 }}>
+                {([['5plus', '5★+'], ['5plusplus', '5★++']] as Array<[LuxuryTier, string]>).map(([tier, label]) => {
+                  const on = tierChip === tier;
+                  return (
+                    <button
+                      key={tier}
+                      onClick={() => { const next = on ? null : tier; setTierChip(next); runSearch(undefined, undefined, composedFilter(profileFilter, next)); }}
+                      style={{
+                        fontSize: 12, padding: '4px 12px', borderRadius: 999,
+                        border: '1px solid var(--c-line)', cursor: 'pointer',
+                        background: on ? 'var(--c-accent-soft)' : 'var(--c-bg)',
+                        color: on ? 'var(--c-fg)' : 'var(--c-fg-soft)',
+                        fontWeight: on ? 600 : 500,
+                      }}
+                    >{label}</button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Filter row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
               <Filter size={13} style={{ color: 'var(--c-fg-muted)' }} />
@@ -1543,6 +1662,8 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
 // controlled; coerced to the API's types on save.
 type ManageForm = {
   network_status: NetworkStatus;
+  // Luxury curation tier: '' (standard 5★, → null) | '5plus' | '5plusplus'.
+  luxury_tier: '' | LuxuryTier;
   // Lowercase supplier keys currently blocked for this hotel (e.g. ['ratehawk']).
   blocked_suppliers: string[];
   markup_override_pct: string;
@@ -1577,6 +1698,48 @@ type ManageForm = {
 // Repeater row as strings so inputs stay controlled; coerced on save.
 type CompetitorFormRow = { name: string; rate: string; currency: string };
 
+// ── Editorial overrides (subset surfaced in the ManagePanel) ──
+// Full media/reviews live on /console/editorial; here we expose the
+// high-value override fields. Saved via POST /api/admin/editorial.
+type EditorialForm = {
+  title_override: string;
+  subtitle: string;
+  highlight_text: string;
+  featured_badge: string;
+  feature_priority: string; // numeric input kept as string
+  is_featured: boolean;
+};
+function emptyEditorialForm(): EditorialForm {
+  return { title_override: '', subtitle: '', highlight_text: '', featured_badge: '', feature_priority: '', is_featured: false };
+}
+function overridesToForm(ov: any): EditorialForm {
+  const str = (v: any) => v === null || v === undefined ? '' : String(v);
+  return {
+    title_override:  str(ov?.title_override),
+    subtitle:        str(ov?.subtitle),
+    highlight_text:  str(ov?.highlight_text),
+    featured_badge:  str(ov?.featured_badge),
+    feature_priority: ov?.feature_priority === null || ov?.feature_priority === undefined ? '' : String(ov.feature_priority),
+    is_featured:     ov?.is_featured === true,
+  };
+}
+function editorialFormToBody(f: EditorialForm, updatedBy: string) {
+  const txt = (s: string) => s.trim() === '' ? null : s.trim();
+  const n = f.feature_priority.trim();
+  return {
+    title_override: txt(f.title_override),
+    subtitle: txt(f.subtitle),
+    highlight_text: txt(f.highlight_text),
+    featured_badge: txt(f.featured_badge),
+    feature_priority: n === '' || isNaN(Number(n)) ? null : Math.round(Number(n)),
+    is_featured: f.is_featured,
+    updated_by: updatedBy || undefined,
+  };
+}
+
+// Lightweight collection row from GET /api/admin/collections?status=all.
+type CollectionLite = { id: number; slug: string; title?: string; status?: string; hotelCount?: number };
+
 function controlToForm(c: HotelControl | null): ManageForm {
   const triState = (v: boolean | null | undefined): '' | 'yes' | 'no' => v === true ? 'yes' : v === false ? 'no' : '';
   const str = (v: string | number | null | undefined) => v === null || v === undefined ? '' : String(v);
@@ -1594,6 +1757,7 @@ function controlToForm(c: HotelControl | null): ManageForm {
     : [];
   return {
     network_status: (c?.network_status as NetworkStatus) || 'active',
+    luxury_tier: (c?.luxury_tier === '5plus' || c?.luxury_tier === '5plusplus') ? c.luxury_tier : '',
     // Folds legacy use_ratehawk===false into 'ratehawk' so existing data shows.
     blocked_suppliers: blockedSuppliersOf(c),
     markup_override_pct: str(c?.markup_override_pct),
@@ -1644,6 +1808,151 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
   const [savedAt, setSavedAt] = useState<number | null>(null);
   // Note when the pricing-rule write is skipped/failed (markup still saved).
   const [ruleNote, setRuleNote] = useState<string | null>(null);
+
+  // ── Editorial group state (separate endpoint from the control PUT) ──
+  const [edForm, setEdForm] = useState<EditorialForm>(emptyEditorialForm());
+  const [edBaseline, setEdBaseline] = useState<EditorialForm>(emptyEditorialForm());
+  const [edLoaded, setEdLoaded] = useState(false);
+  const [edLoading, setEdLoading] = useState(false);
+  const [edSaving, setEdSaving] = useState(false);
+  const [edErr, setEdErr] = useState<string | null>(null);
+  const [edSavedAt, setEdSavedAt] = useState<number | null>(null);
+  const edDirty = useMemo(() => JSON.stringify(edForm) !== JSON.stringify(edBaseline), [edForm, edBaseline]);
+  const setEd = <K extends keyof EditorialForm>(k: K, v: EditorialForm[K]) =>
+    setEdForm(prev => ({ ...prev, [k]: v }));
+
+  // Lazily load editorial overrides the first time the panel opens.
+  useEffect(() => {
+    if (!open || edLoaded || edLoading) return;
+    let cancelled = false;
+    setEdLoading(true);
+    (async () => {
+      try {
+        const res = await fetch(`/api/admin/editorial?hotelId=${hotelId}`, { cache: 'no-store' });
+        const json = await res.json().catch(() => null);
+        if (cancelled) return;
+        // Proxy returns { overrides: { success, data }, tags }. The row is .overrides.data.
+        const ov = json?.overrides?.data ?? json?.overrides ?? null;
+        const f = overridesToForm(ov);
+        setEdForm(f);
+        setEdBaseline(f);
+        setEdLoaded(true);
+      } catch {
+        if (!cancelled) setEdErr('Could not load editorial');
+      } finally {
+        if (!cancelled) setEdLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, hotelId]);
+
+  // Reset editorial cache when switching hotel so the next open refetches.
+  useEffect(() => {
+    setEdLoaded(false);
+    setEdForm(emptyEditorialForm());
+    setEdBaseline(emptyEditorialForm());
+    setEdSavedAt(null);
+    setEdErr(null);
+  }, [hotelId]);
+
+  async function saveEditorial() {
+    setEdSaving(true);
+    setEdErr(null);
+    try {
+      const body = editorialFormToBody(edForm, userEmail);
+      const res = await fetch(`/api/admin/editorial?hotelId=${hotelId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error || json?.message || `Save failed (HTTP ${res.status})`);
+      const saved = json?.data ?? json ?? null;
+      const f = overridesToForm(saved);
+      setEdForm(f);
+      setEdBaseline(f);
+      setEdSavedAt(Date.now());
+    } catch (e: any) {
+      setEdErr(e?.message || 'Save failed');
+    } finally {
+      setEdSaving(false);
+    }
+  }
+
+  // ── Collections group state (lazy on expand; per-collection toggle) ──
+  const [colExpanded, setColExpanded] = useState(false);
+  const [collections, setCollections] = useState<CollectionLite[]>([]);
+  const [colLoading, setColLoading] = useState(false);
+  const [colErr, setColErr] = useState<string | null>(null);
+  // collectionId → membership (true/false), undefined while resolving.
+  const [colMembership, setColMembership] = useState<Record<number, boolean>>({});
+  // collectionId → true while a toggle POST/DELETE is in flight.
+  const [colSaving, setColSaving] = useState<Record<number, boolean>>({});
+
+  // Reset collections cache when switching hotel.
+  useEffect(() => {
+    setColExpanded(false);
+    setCollections([]);
+    setColMembership({});
+    setColErr(null);
+  }, [hotelId]);
+
+  // When the Collections group is expanded, fetch the list + each collection's
+  // detail once to learn which contain this hotel. There are only a handful.
+  useEffect(() => {
+    if (!colExpanded || collections.length > 0 || colLoading) return;
+    let cancelled = false;
+    setColLoading(true);
+    setColErr(null);
+    (async () => {
+      try {
+        const listRes = await fetch('/api/admin/collections?status=all', { cache: 'no-store' });
+        const listJson = await listRes.json().catch(() => null);
+        const cols: CollectionLite[] = Array.isArray(listJson?.collections) ? listJson.collections : [];
+        if (cancelled) return;
+        setCollections(cols);
+        // Resolve membership per collection (detail keyed by slug via the proxy).
+        const membership: Record<number, boolean> = {};
+        await Promise.all(cols.map(async (c) => {
+          try {
+            const dRes = await fetch(`/api/admin/collections/${encodeURIComponent(c.slug || c.id)}`, { cache: 'no-store' });
+            const dJson = await dRes.json().catch(() => null);
+            const hotels: any[] = Array.isArray(dJson?.hotels) ? dJson.hotels : [];
+            membership[c.id] = hotels.some(h => Number(h.hotelId) === Number(hotelId));
+          } catch {
+            membership[c.id] = false;
+          }
+        }));
+        if (!cancelled) setColMembership(membership);
+      } catch {
+        if (!cancelled) setColErr('Could not load collections');
+      } finally {
+        if (!cancelled) setColLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [colExpanded, hotelId]);
+
+  async function toggleCollection(c: CollectionLite, on: boolean) {
+    setColSaving(prev => ({ ...prev, [c.id]: true }));
+    setColErr(null);
+    try {
+      const res = await fetch(`/api/admin/collections/${c.id}/hotels/${hotelId}`, {
+        method: on ? 'POST' : 'DELETE',
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error(j?.error || j?.message || `HTTP ${res.status}`);
+      }
+      setColMembership(prev => ({ ...prev, [c.id]: on }));
+    } catch (e: any) {
+      setColErr(`${c.title || c.slug}: ${e?.message || 'toggle failed'}`);
+    } finally {
+      setColSaving(prev => ({ ...prev, [c.id]: false }));
+    }
+  }
 
   const dirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(baseline), [form, baseline]);
 
@@ -1710,6 +2019,7 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
     const blocked = Array.from(new Set(f.blocked_suppliers.map(s => s.trim().toLowerCase()).filter(Boolean)));
     return {
       network_status: f.network_status,
+      luxury_tier: f.luxury_tier === '' ? null : f.luxury_tier,
       blocked_suppliers: blocked,
       use_ratehawk: !blocked.includes('ratehawk'),
       markup_override_pct: num(f.markup_override_pct),
@@ -1893,6 +2203,13 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                       <option value="deleted">Deleted</option>
                     </select>
                   </Field>
+                  <Field label="Curation (luxury tier)">
+                    <select className="c-select" value={form.luxury_tier} onChange={(e) => set('luxury_tier', e.target.value as ManageForm['luxury_tier'])}>
+                      <option value="">Standard 5★</option>
+                      <option value="5plus">5★+ (5plus)</option>
+                      <option value="5plusplus">5★++ (5plusplus)</option>
+                    </select>
+                  </Field>
                 </div>
                 <div style={{ marginTop: 12 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-soft)', marginBottom: 6 }}>
@@ -2041,6 +2358,84 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                 </div>
               </ManageGroup>
 
+              {/* ── Editorial (high-value overrides; full media on /console/editorial) ── */}
+              <ManageGroup title="Editorial">
+                {edLoading && <div style={{ fontSize: 12.5, color: 'var(--c-fg-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Loader2 size={12} className="animate-spin" /> Loading editorial…</div>}
+                {!edLoading && (
+                  <>
+                    <Field label="Title override">
+                      <input className="c-input" value={edForm.title_override} onChange={(e) => setEd('title_override', e.target.value)} placeholder="Display name override" />
+                    </Field>
+                    <Field label="Subtitle" style={{ marginTop: 10 }}>
+                      <input className="c-input" value={edForm.subtitle} onChange={(e) => setEd('subtitle', e.target.value)} />
+                    </Field>
+                    <Field label="Highlight text" style={{ marginTop: 10 }}>
+                      <textarea className="c-input" rows={2} value={edForm.highlight_text} onChange={(e) => setEd('highlight_text', e.target.value)} style={{ resize: 'vertical' }} />
+                    </Field>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 10 }}>
+                      <Field label="Featured badge">
+                        <input className="c-input" value={edForm.featured_badge} onChange={(e) => setEd('featured_badge', e.target.value)} placeholder="e.g. Editor's Pick" />
+                      </Field>
+                      <Field label="Feature priority">
+                        <input className="c-input" type="number" value={edForm.feature_priority} onChange={(e) => setEd('feature_priority', e.target.value)} placeholder="Higher = more prominent" />
+                      </Field>
+                    </div>
+                    <div style={{ display: 'flex', gap: 18, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <label style={checkLabelStyle}>
+                        <input type="checkbox" checked={edForm.is_featured} onChange={(e) => setEd('is_featured', e.target.checked)} /> Featured
+                      </label>
+                      <a href="/console/editorial" target="_blank" rel="noreferrer" style={{ fontSize: 12.5, color: 'var(--c-accent)', fontWeight: 600 }}>Open full editorial →</a>
+                    </div>
+                    {edErr && <div style={{ fontSize: 12.5, color: 'var(--c-danger)', marginTop: 8 }}>Error: {edErr}</div>}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+                      <button type="button" className="c-btn" onClick={() => void saveEditorial()} disabled={edSaving || !edDirty} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        {edSaving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                        Save editorial
+                      </button>
+                      {!edDirty && edSavedAt && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--c-success)' }}><CheckCircle2 size={12} /> Saved</span>}
+                      {edDirty && <span style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>Unsaved editorial changes</span>}
+                    </div>
+                  </>
+                )}
+              </ManageGroup>
+
+              {/* ── Collections (membership toggles; lazy on expand) ── */}
+              <ManageGroup title="Collections">
+                {!colExpanded ? (
+                  <button type="button" className="c-btn" onClick={() => setColExpanded(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <Plus size={13} /> Manage collection membership
+                  </button>
+                ) : (
+                  <>
+                    {colLoading && <div style={{ fontSize: 12.5, color: 'var(--c-fg-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Loader2 size={12} className="animate-spin" /> Loading collections…</div>}
+                    {colErr && <div style={{ fontSize: 12.5, color: 'var(--c-danger)', marginBottom: 8 }}>Error: {colErr}</div>}
+                    {!colLoading && collections.length === 0 && !colErr && (
+                      <div style={{ fontSize: 12.5, color: 'var(--c-fg-muted)' }}>No collections found.</div>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {collections.map((c) => {
+                        const checked = colMembership[c.id] === true;
+                        const busy = colSaving[c.id] === true;
+                        const resolved = colMembership[c.id] !== undefined;
+                        return (
+                          <label key={c.id} style={{ ...checkLabelStyle, opacity: resolved ? 1 : 0.6 }}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={busy || !resolved}
+                              onChange={(e) => void toggleCollection(c, e.target.checked)}
+                            />
+                            {c.title || c.slug}
+                            {busy && <Loader2 size={11} className="animate-spin" style={{ marginLeft: 6 }} />}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <a href="/console/collections" target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 10, fontSize: 12.5, color: 'var(--c-accent)', fontWeight: 600 }}>Open collections editor →</a>
+                  </>
+                )}
+              </ManageGroup>
+
               {/* ── Notes ── */}
               <ManageGroup title="Notes">
                 <Field label="Internal notes">
@@ -2095,6 +2490,9 @@ function Field({ label, children, style }: { label: string; children: React.Reac
 function ControlBadge({ control }: { control: HotelControl }) {
   const s = control.network_status;
   const labels: Array<{ text: string; color: string }> = [];
+  // Luxury curation tier — surfaced even on otherwise-active hotels.
+  if (control.luxury_tier === '5plus')     labels.push({ text: '5★+',  color: '#9a6a00' });
+  if (control.luxury_tier === '5plusplus') labels.push({ text: '5★++', color: '#9a6a00' });
   if (s === 'paused')  labels.push({ text: 'Paused',  color: '#b45309' });
   if (s === 'hidden')  labels.push({ text: 'Hidden',  color: '#6b7280' });
   if (s === 'deleted') labels.push({ text: 'Deleted', color: '#b91c1c' });
@@ -2182,7 +2580,7 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
         </div>
         {/* Supplier-count chip + best-rate badges (per-supplier breakdown is in the drawer) */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 'auto' }}>
-          {controlFlagged(control) && <ControlBadge control={control!} />}
+          {(controlFlagged(control) || !!control?.luxury_tier) && <ControlBadge control={control!} />}
           {quotes.length > 1 && supplierNames.length > 0 && (
             <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-soft)', background: 'var(--c-bg-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '2px 9px', textTransform: 'capitalize' }}>
               {supplierNames.join(' · ')}
