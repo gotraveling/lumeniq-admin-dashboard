@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
-import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle, X, Maximize2, Minimize2, Image as ImageIcon } from 'lucide-react';
+import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle, X, Plus, Maximize2, Minimize2, Image as ImageIcon } from 'lucide-react';
 import DestinationAutocomplete, { type DestinationAutocompleteHandle } from '@/components/console/DestinationAutocomplete';
 import CountryPicker from '@/components/console/CountryPicker';
 import ReactMarkdown from 'react-markdown';
@@ -168,9 +168,23 @@ type HotelControl = {
   walk_minutes?: string | number | null;
   day_use?: boolean | null;
   internal_notes?: string | null;
+  // Marketing / Offer (featured-product copy + advertised pricing window)
+  promotion_name?: string | null;
+  offers?: string[] | null;
+  stay_from?: string | null;
+  stay_until?: string | null;
+  advertise_stay_until?: string | null;
+  book_by?: string | null;
+  min_nights?: string | number | null;
+  package_nights?: string | number | null;
+  terms_conditions?: string | null;
+  competitor_comparison?: CompetitorRow[] | null;
   attributes?: Record<string, any> | null;
   updated_by?: string | null;
 };
+
+// A single competitor rate row for the featured-product comparison table.
+type CompetitorRow = { name: string; rate: number | null; currency: string };
 
 // True when the hotel is in a state Tina should notice at a glance.
 function controlFlagged(c?: HotelControl | null): boolean {
@@ -1522,11 +1536,37 @@ type ManageForm = {
   walk_minutes: string;
   day_use: boolean;
   internal_notes: string;
+  // Marketing / Offer
+  promotion_name: string;
+  offers: string;            // textarea — one offer per line
+  stay_from: string;         // YYYY-MM-DD
+  stay_until: string;        // YYYY-MM-DD
+  advertise_stay_until: string; // YYYY-MM-DD
+  book_by: string;           // YYYY-MM-DD
+  min_nights: string;
+  package_nights: string;
+  terms_conditions: string;
+  competitor_comparison: CompetitorFormRow[]; // repeater rows (strings for inputs)
 };
+
+// Repeater row as strings so inputs stay controlled; coerced on save.
+type CompetitorFormRow = { name: string; rate: string; currency: string };
 
 function controlToForm(c: HotelControl | null): ManageForm {
   const triState = (v: boolean | null | undefined): '' | 'yes' | 'no' => v === true ? 'yes' : v === false ? 'no' : '';
   const str = (v: string | number | null | undefined) => v === null || v === undefined ? '' : String(v);
+  // Dates may arrive as 'YYYY-MM-DD' or a full ISO timestamp — keep just the day.
+  const dateStr = (v: string | null | undefined) => {
+    const s = str(v);
+    return s ? s.slice(0, 10) : '';
+  };
+  const competitors: CompetitorFormRow[] = Array.isArray(c?.competitor_comparison)
+    ? c!.competitor_comparison!.map(r => ({
+        name: str(r?.name),
+        rate: r?.rate === null || r?.rate === undefined ? '' : String(r.rate),
+        currency: str(r?.currency) || 'AUD',
+      }))
+    : [];
   return {
     network_status: (c?.network_status as NetworkStatus) || 'active',
     use_ratehawk: c?.use_ratehawk !== false, // default true
@@ -1545,6 +1585,17 @@ function controlToForm(c: HotelControl | null): ManageForm {
     walk_minutes: str(c?.walk_minutes),
     day_use: c?.day_use === true,
     internal_notes: str(c?.internal_notes),
+    // Marketing / Offer
+    promotion_name: str(c?.promotion_name),
+    offers: Array.isArray(c?.offers) ? c!.offers!.join('\n') : '',
+    stay_from: dateStr(c?.stay_from),
+    stay_until: dateStr(c?.stay_until),
+    advertise_stay_until: dateStr(c?.advertise_stay_until),
+    book_by: dateStr(c?.book_by),
+    min_nights: str(c?.min_nights),
+    package_nights: str(c?.package_nights),
+    terms_conditions: str(c?.terms_conditions),
+    competitor_comparison: competitors,
   };
 }
 
@@ -1603,10 +1654,31 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
   const set = <K extends keyof ManageForm>(k: K, v: ManageForm[K]) =>
     setForm(prev => ({ ...prev, [k]: v }));
 
+  // Competitor-comparison repeater helpers.
+  const addCompetitor = () =>
+    setForm(prev => ({ ...prev, competitor_comparison: [...prev.competitor_comparison, { name: '', rate: '', currency: 'AUD' }] }));
+  const removeCompetitor = (i: number) =>
+    setForm(prev => ({ ...prev, competitor_comparison: prev.competitor_comparison.filter((_, idx) => idx !== i) }));
+  const setCompetitor = (i: number, patch: Partial<CompetitorFormRow>) =>
+    setForm(prev => ({
+      ...prev,
+      competitor_comparison: prev.competitor_comparison.map((r, idx) => idx === i ? { ...r, ...patch } : r),
+    }));
+
   function formToBody(f: ManageForm): HotelControl {
     const num = (s: string): number | null => s.trim() === '' || isNaN(Number(s)) ? null : Number(s);
     const intNum = (s: string): number | null => { const n = num(s); return n === null ? null : Math.round(n); };
     const txt = (s: string): string | null => s.trim() === '' ? null : s.trim();
+    const dateVal = (s: string): string | null => s.trim() === '' ? null : s.trim();
+    // offers textarea → trimmed non-empty string[] (one per line).
+    const offers = f.offers
+      .split('\n')
+      .map(o => o.trim())
+      .filter(Boolean);
+    // competitor rows → array, dropping rows with no name AND no rate.
+    const competitors: CompetitorRow[] = f.competitor_comparison
+      .map(r => ({ name: r.name.trim(), rate: num(r.rate), currency: r.currency.trim() || 'AUD' }))
+      .filter(r => r.name !== '' || r.rate !== null);
     return {
       network_status: f.network_status,
       use_ratehawk: f.use_ratehawk,
@@ -1625,6 +1697,18 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
       walk_minutes: intNum(f.walk_minutes),
       day_use: f.day_use,
       internal_notes: txt(f.internal_notes),
+      // Marketing / Offer — offers + competitor_comparison sent as real arrays;
+      // the proxy / hotel-api JSON-encode them into the jsonb columns.
+      promotion_name: txt(f.promotion_name),
+      offers,
+      stay_from: dateVal(f.stay_from),
+      stay_until: dateVal(f.stay_until),
+      advertise_stay_until: dateVal(f.advertise_stay_until),
+      book_by: dateVal(f.book_by),
+      min_nights: intNum(f.min_nights),
+      package_nights: intNum(f.package_nights),
+      terms_conditions: txt(f.terms_conditions),
+      competitor_comparison: competitors,
       updated_by: userEmail || undefined,
     };
   }
@@ -1833,6 +1917,77 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                 <Field label="Transfer notes" style={{ marginTop: 10 }}>
                   <textarea className="c-input" rows={2} value={form.transfer_notes} onChange={(e) => set('transfer_notes', e.target.value)} style={{ resize: 'vertical' }} />
                 </Field>
+              </ManageGroup>
+
+              {/* ── Marketing / Offer ── */}
+              <ManageGroup title="Marketing / Offer">
+                <Field label="Promotion name">
+                  <input className="c-input" value={form.promotion_name} onChange={(e) => set('promotion_name', e.target.value)} placeholder="e.g. Gili Summer Adventures 2026" />
+                </Field>
+                <Field label="Offers (one per line)" style={{ marginTop: 10 }}>
+                  <textarea className="c-input" rows={3} value={form.offers} onChange={(e) => set('offers', e.target.value)} style={{ resize: 'vertical' }} placeholder={'Free breakfast for two\nComplimentary airport transfer\n50% off spa treatments'} />
+                </Field>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 10 }}>
+                  <Field label="Stay from">
+                    <input className="c-input" type="date" value={form.stay_from} onChange={(e) => set('stay_from', e.target.value)} />
+                  </Field>
+                  <Field label="Stay until">
+                    <input className="c-input" type="date" value={form.stay_until} onChange={(e) => set('stay_until', e.target.value)} />
+                  </Field>
+                  <Field label="Advertise stay until">
+                    <input className="c-input" type="date" value={form.advertise_stay_until} onChange={(e) => set('advertise_stay_until', e.target.value)} />
+                  </Field>
+                  <Field label="Book by">
+                    <input className="c-input" type="date" value={form.book_by} onChange={(e) => set('book_by', e.target.value)} />
+                  </Field>
+                </div>
+                <p style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', margin: '6px 0 0' }}>
+                  Advertise stay until: window used to calculate the advertised &ldquo;from&rdquo; price (can be earlier than stay until).
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 10 }}>
+                  <Field label="Min nights">
+                    <input className="c-input" type="number" min={0} value={form.min_nights} onChange={(e) => set('min_nights', e.target.value)} placeholder="e.g. 3" />
+                  </Field>
+                  <Field label="Package nights">
+                    <input className="c-input" type="number" min={0} value={form.package_nights} onChange={(e) => set('package_nights', e.target.value)} placeholder="e.g. 7" />
+                  </Field>
+                </div>
+                <Field label="Terms & conditions" style={{ marginTop: 10 }}>
+                  <textarea className="c-input" rows={3} value={form.terms_conditions} onChange={(e) => set('terms_conditions', e.target.value)} style={{ resize: 'vertical' }} />
+                </Field>
+
+                {/* Competitor comparison repeater (featured-product display) */}
+                <div style={{ marginTop: 12 }}>
+                  <label className="c-label">Competitor comparison</label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {form.competitor_comparison.map((row, i) => (
+                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 90px auto', gap: 8, alignItems: 'center' }}>
+                        <input
+                          className="c-input" value={row.name} placeholder="Competitor name"
+                          onChange={(e) => setCompetitor(i, { name: e.target.value })}
+                        />
+                        <input
+                          className="c-input" type="number" step="0.01" value={row.rate} placeholder="Rate"
+                          onChange={(e) => setCompetitor(i, { rate: e.target.value })}
+                        />
+                        <input
+                          className="c-input" value={row.currency} maxLength={3} placeholder="AUD"
+                          onChange={(e) => setCompetitor(i, { currency: e.target.value.toUpperCase() })}
+                        />
+                        <button
+                          type="button" className="c-btn" title="Remove row"
+                          onClick={() => removeCompetitor(i)}
+                          style={{ padding: '6px 10px' }}
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <button type="button" className="c-btn" onClick={addCompetitor} style={{ marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <Plus size={13} /> Add competitor
+                  </button>
+                </div>
               </ManageGroup>
 
               {/* ── Notes ── */}
