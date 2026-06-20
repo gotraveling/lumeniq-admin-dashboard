@@ -200,6 +200,16 @@ const BLOCKABLE_SUPPLIERS: Array<{ key: string; label: string; color: string }> 
   { key: 'hummingbird', label: 'Hummingbird', color: '#1f6feb' },
 ];
 
+// RateHawk image URLs embed a literal `{size}` token (e.g.
+// https://cdn.worldota.net/t/{size}/ostrovok/...) that must be substituted with
+// a real ETG size before use, or the <img>/background URL is invalid and renders
+// blank. Hummingbird URLs are already resolved, so this is a no-op for them.
+// Common sizes: 240x240 (thumb), 1024x768 (large), x500, original.
+function resolveImg(url?: string | null, size = '240x240'): string | undefined {
+  if (!url) return undefined;
+  return url.replace('{size}', size);
+}
+
 // Normalize a control row's blocked suppliers into a lowercase string[] that
 // also folds the legacy use_ratehawk===false flag into 'ratehawk', so existing
 // data renders correctly during the transition.
@@ -1162,14 +1172,16 @@ export default function ConsoleSearchPage() {
         {searchErr && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 14 }}>Error: {searchErr}</div>}
 
         {/* Empty state */}
-        {hits.length === 0 && !searching && (
+        {hits.length === 0 && !searching && !tierChip && !activeProfile && (
           <div className="c-card" style={{ padding: 32, textAlign: 'center', color: 'var(--c-fg-muted)', fontSize: 13 }}>
             Type a destination or hotel name above, or ask the agent on the right.
           </div>
         )}
 
-        {/* Results list — stays mounted behind the detail drawer */}
-        {hits.length > 0 && (
+        {/* Results list — stays mounted behind the detail drawer. Also renders
+            when a profile/tier filter is active even with 0 hits, so the picker
+            and chips stay visible/clearable instead of vanishing. */}
+        {(hits.length > 0 || tierChip || activeProfile) && (
           <>
             {/* B2B profile picker + 5★ tier quick chips. Selecting a profile
                 resolves its compiled Meili filter; the tier chips add a
@@ -1257,6 +1269,19 @@ export default function ConsoleSearchPage() {
                 {enrichingPrices && <span> · <Loader2 size={11} style={{ verticalAlign: 'middle' }} className="animate-spin" /> </span>}
               </span>
             </div>
+
+            {/* Filter-aware empty state: a profile/tier filter matched nothing.
+                Keeps the chips above visible so the user can clear them. */}
+            {hits.length === 0 && !searching && (tierChip || activeProfile) && (
+              <div className="c-card" style={{ padding: 24, textAlign: 'center', color: 'var(--c-fg-muted)', fontSize: 13, lineHeight: 1.5 }}>
+                No hotels match {tierChip ? (tierChip === '5plus' ? '5★+' : '5★++') : 'this profile'}
+                {activeProfile && tierChip ? ' + the active profile' : ''}.
+                <br />
+                {tierChip
+                  ? 'No hotels are tagged this tier yet — tag them in a hotel’s Manage → Curation, or clear the chip above.'
+                  : 'Try another profile or clear it above.'}
+              </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
               {filteredHits.map((h) => (
@@ -2542,12 +2567,7 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
       refundable: q.refundable, cancellationDeadlineUtc: q.cancellationDeadlineUtc
     }, minSell, { isB2B: true })
   }));
-  const avail = quotes.filter(q => q.available);
   const best = scored.filter(s => s.q.available).sort((a, b) => b.score - a.score)[0]?.q;
-  // Distinct supplier names for the card chip (console is cug → may show supplier names).
-  const supplierNames = Array.from(
-    new Set((showUnavailable ? quotes : avail).map(q => q.supplier).filter(Boolean))
-  ) as string[];
 
   return (
     <button
@@ -2561,7 +2581,7 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
       }}
     >
       {/* Image */}
-      <div style={{ width: 150, height: 104, borderRadius: 8, overflow: 'hidden', background: 'var(--c-bg-soft)', backgroundImage: h.image ? `url(${h.image})` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+      <div style={{ width: 150, height: 104, borderRadius: 8, overflow: 'hidden', background: 'var(--c-bg-soft)', backgroundImage: resolveImg(h.image, '240x240') ? `url(${resolveImg(h.image, '240x240')})` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
 
       {/* Hotel info */}
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -2581,11 +2601,19 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
         {/* Supplier-count chip + best-rate badges (per-supplier breakdown is in the drawer) */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 'auto' }}>
           {(controlFlagged(control) || !!control?.luxury_tier) && <ControlBadge control={control!} />}
-          {quotes.length > 1 && supplierNames.length > 0 && (
-            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-soft)', background: 'var(--c-bg-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '2px 9px', textTransform: 'capitalize' }}>
-              {supplierNames.join(' · ')}
-            </span>
-          )}
+          {/* One chip per supplier this property exists under (h.sources), shown
+              always — RateHawk-only → "RateHawk", HB-only → "Hummingbird", both →
+              both chips. Console is cug, so supplier disclosure is allowed here. */}
+          {Array.isArray(h.sources) && h.sources.map((s) => {
+            const meta = BLOCKABLE_SUPPLIERS.find(b => b.key === String(s).toLowerCase());
+            const label = meta?.label || String(s);
+            const color = meta?.color || 'var(--c-fg-soft)';
+            return (
+              <span key={s} style={{ fontSize: 11, fontWeight: 600, color, background: 'var(--c-bg-soft)', border: `1px solid ${color}33`, borderRadius: 999, padding: '2px 9px' }}>
+                {label}
+              </span>
+            );
+          })}
           {best?.roomTypeName && <span style={{ fontSize: 11.5, color: 'var(--c-fg)' }}>{best.roomTypeName}</span>}
           {best && (best.refundable
             ? <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>{best.cancellationDeadlineUtc ? `Free cancel to ${fmtCancelDate(best.cancellationDeadlineUtc)}` : 'Refundable'}</span>
@@ -2907,7 +2935,7 @@ function RoomGroupedRates({
         )}
       </div>
       {groups.map((g) => {
-        const groupImages = Array.from(new Set(g.rates.map(r => r.roomImage).filter((v): v is string => !!v)));
+        const groupImages = Array.from(new Set(g.rates.map(r => resolveImg(r.roomImage, '1024x768')).filter((v): v is string => !!v)));
         const cover = groupImages[0] || null;
         // Valentin (2026-05-28): show 3–5 rate options per room with
         // different conditions, not just the cheapest. We surface the
