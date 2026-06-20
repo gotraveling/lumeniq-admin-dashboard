@@ -24,6 +24,8 @@ interface Hotel {
   name: string;
   city: string;
   country: string;
+  star_rating?: number;
+  supplier?: string;
 }
 
 interface EditorialMedia {
@@ -114,13 +116,39 @@ export default function HotelEditorialPage() {
 
   // Search hotels
   const searchHotels = async () => {
-    if (!searchTerm) return;
+    const term = searchTerm.trim();
+    if (!term) return;
 
     setLoading(true);
     try {
-      const response = await fetch(`${HOTEL_API_URL}/api/hotels/search?query=${encodeURIComponent(searchTerm)}&limit=10`);
-      const data = await response.json();
-      setHotels(data.hotels || []);
+      // A bare number is treated as a direct hotel_id lookup; otherwise
+      // free-text search by name/city/country.
+      if (/^\d+$/.test(term)) {
+        const response = await fetch(`${HOTEL_API_URL}/api/hotels/${term}`);
+        if (response.ok) {
+          const d = await response.json();
+          const h = d.hotel || d;
+          setHotels(h && (h.hotel_id || h.id) ? [{
+            hotel_id: Number(h.hotel_id ?? h.id),
+            name: h.hotel_name || h.name || `Hotel ${term}`,
+            city: h.city || '', country: h.country || '',
+            star_rating: h.star_rating ?? h.cost_rating,
+            supplier: h.supplier || (h.source_data && h.source_data.supplier),
+          }] : []);
+        } else {
+          setHotels([]);
+        }
+      } else {
+        const response = await fetch(`${HOTEL_API_URL}/api/hotels/search?query=${encodeURIComponent(term)}&limit=15`);
+        const data = await response.json();
+        setHotels((data.hotels || []).map((h: Record<string, unknown>) => ({
+          hotel_id: Number(h.hotel_id ?? h.id),
+          name: (h.name ?? h.hotel_name ?? '') as string,
+          city: (h.city ?? '') as string, country: (h.country ?? '') as string,
+          star_rating: (h.star_rating ?? h.cost_rating) as number | undefined,
+          supplier: (h.supplier ?? (h.source_data as Record<string, unknown>)?.supplier) as string | undefined,
+        })));
+      }
     } catch (error) {
       console.error('Error searching hotels:', error);
     } finally {
@@ -331,7 +359,7 @@ export default function HotelEditorialPage() {
               <div className="flex-1">
                 <input
                   type="text"
-                  placeholder="Search hotels by name, city, or country..."
+                  placeholder="Search by name, city, country — or paste a hotel ID"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && searchHotels()}
@@ -354,10 +382,19 @@ export default function HotelEditorialPage() {
                   <div
                     key={hotel.hotel_id}
                     onClick={() => handleSelectHotel(hotel)}
-                    className="p-4 border rounded-lg hover:bg-gray-50 cursor-pointer"
+                    className="p-4 border rounded-lg hover:bg-gray-50 cursor-pointer flex items-center justify-between gap-3"
                   >
-                    <div className="font-semibold">{hotel.name}</div>
-                    <div className="text-sm text-gray-600">{hotel.city}, {hotel.country}</div>
+                    <div>
+                      <div className="font-semibold">
+                        {hotel.name}
+                        {hotel.star_rating ? <span className="ml-2 text-xs text-amber-600">{'★'.repeat(Math.round(hotel.star_rating))}</span> : null}
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        {[hotel.city, hotel.country].filter(Boolean).join(', ')}
+                        {hotel.supplier ? <span className="ml-2 text-xs text-gray-400">· {hotel.supplier}</span> : null}
+                      </div>
+                    </div>
+                    <span className="text-xs font-mono text-gray-500 whitespace-nowrap">ID {hotel.hotel_id}</span>
                   </div>
                 ))}
               </div>

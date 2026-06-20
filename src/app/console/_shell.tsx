@@ -41,30 +41,29 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
       { href: '/console/bookings',         label: 'Bookings',        icon: ClipboardList },
       { href: '/console/search',           label: 'B2B Search',      icon: Search },
       { href: '/console/ai',               label: 'AI Agent',        icon: Sparkles },
-      { href: '/admin/search-activity',    label: 'Search Activity', icon: BarChart3 },
+      { href: '/console/search-activity',  label: 'Search Activity', icon: BarChart3 },
     ],
   },
   {
     section: 'Catalog',
     items: [
-      { href: '/admin/inventory/browse',     label: 'Browse Hotels',     icon: Hotel },
-      { href: '/console/collections',        label: 'Collections',       icon: FolderOpen },
-      { href: '/console/editorial',          label: 'Editorial Content', icon: Sparkles },
-      { href: '/admin/hotels/visibility',    label: 'Hotel Visibility',  icon: EyeOff },
+      { href: '/console/browse',           label: 'Browse Hotels',     icon: Hotel },
+      { href: '/console/collections',      label: 'Collections',       icon: FolderOpen },
+      { href: '/console/editorial',        label: 'Editorial Content', icon: Sparkles },
+      { href: '/console/hotels/visibility', label: 'Hotel Visibility', icon: EyeOff },
     ],
   },
   {
     section: 'Pricing',
     items: [
-      { href: '/console/rules',                       label: 'Pricing rules',     icon: Sparkles },
-      { href: '/admin/inventory/display-overrides',   label: 'Display Overrides', icon: DollarSign },
+      { href: '/console/rules',            label: 'Pricing rules',     icon: DollarSign },
     ],
   },
   {
     section: 'Setup',
     items: [
-      { href: '/admin/suppliers',       label: 'Suppliers', icon: Globe },
-      { href: '/admin/tenant-settings', label: 'Settings',  icon: Settings },
+      { href: '/console/suppliers',        label: 'Suppliers', icon: Globe },
+      { href: '/console/settings',         label: 'Settings',  icon: Settings },
     ],
   },
 ];

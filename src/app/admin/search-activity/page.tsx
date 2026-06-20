@@ -128,15 +128,16 @@ export default function SearchActivityPage() {
                 <th className="px-3 py-2">Guests</th>
                 <th className="px-3 py-2 text-right">Result</th>
                 <th className="px-3 py-2">Suppliers</th>
+                <th className="px-3 py-2">User</th>
                 <th className="px-3 py-2">Session</th>
                 <th className="px-3 py-2">Latency</th>
               </tr>
             </thead>
             <tbody>
               {loading && events.length === 0 ? (
-                <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-500">Loading…</td></tr>
+                <tr><td colSpan={9} className="px-3 py-8 text-center text-gray-500">Loading…</td></tr>
               ) : events.length === 0 ? (
-                <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-500">No events yet — try a search at /luxury-hotels/search and refresh.</td></tr>
+                <tr><td colSpan={9} className="px-3 py-8 text-center text-gray-500">No events yet — try a search at /luxury-hotels/search and refresh.</td></tr>
               ) : events.map(ev => {
                 const errPct = ev.hotels_queried && ev.hotels_error ? Math.round((ev.hotels_error / ev.hotels_queried) * 100) : 0;
                 const errBadge = errPct >= 50 ? 'bg-red-50 border-red-200 text-red-700'
@@ -169,6 +170,10 @@ export default function SearchActivityPage() {
                     </td>
                     <td className="px-3 py-2 text-xs">
                       {supplierChips(ev.supplier_breakdown)}
+                    </td>
+                    <td className="px-3 py-2 text-xs whitespace-nowrap" title={ev.user_agent || ''}>
+                      <div className="text-gray-700">{ev.user_email || <span className="text-gray-400">anon</span>}</div>
+                      {ev.ip && <div className="font-mono text-[11px] text-gray-400">{ev.ip}</div>}
                     </td>
                     <td className="px-3 py-2 font-mono text-[11px] text-gray-500" title={ev.session_id || ''}>
                       {ev.session_id ? ev.session_id.slice(0, 12) + '…' : '—'}

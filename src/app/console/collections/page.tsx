@@ -149,9 +149,7 @@ export default function CollectionsPage() {
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <button className="c-btn" onClick={() => openEditor(c.slug)} disabled={busy}>Edit</button>
                         {' '}
-                        <a className="c-btn" href={`https://firstclass.com.au/luxury-hotels/collections/${c.slug}`} target="_blank" rel="noreferrer">View</a>
-                        {' '}
-                        <a className="c-btn" href={`https://firstclass.com.au/newsletter/preview?collection=${c.slug}`} target="_blank" rel="noreferrer">Newsletter</a>
+                        <a className="c-btn" href={`https://www.firstclass.com.au/luxury-hotels/collections/${c.slug}?access=firstclass2025`} target="_blank" rel="noreferrer">View</a>
                         {' '}
                         <button className="c-btn c-btn-danger" onClick={() => remove(c)} disabled={busy}><Trash2 size={14} /></button>
                       </td>
