@@ -145,6 +145,40 @@ type AudBlock = {
   fxRate: number;
 };
 
+// Per-hotel control row (hotel-api /api/control). Numeric fields come back
+// as STRINGS from postgres numeric/int columns — Number() them at the edge.
+type NetworkStatus = 'active' | 'paused' | 'hidden' | 'deleted';
+type ProximityTier = 'in-terminal' | 'connected' | 'walkable' | 'short-shuttle' | 'off-airport';
+type HotelControl = {
+  hotel_id?: number;
+  network_status?: NetworkStatus | null;
+  use_ratehawk?: boolean | null;
+  markup_override_pct?: string | number | null;
+  transfer_type?: string | null;
+  transfer_included_override?: boolean | null;
+  transfer_cost_adult?: string | number | null;
+  transfer_cost_child?: string | number | null;
+  transfer_currency?: string | null;
+  transfer_duration?: string | null;
+  transfer_notes?: string | null;
+  airport_code?: string | null;
+  airport_terminal?: string | null;
+  proximity_tier?: ProximityTier | null;
+  airside?: boolean | null;
+  walk_minutes?: string | number | null;
+  day_use?: boolean | null;
+  internal_notes?: string | null;
+  attributes?: Record<string, any> | null;
+  updated_by?: string | null;
+};
+
+// True when the hotel is in a state Tina should notice at a glance.
+function controlFlagged(c?: HotelControl | null): boolean {
+  if (!c) return false;
+  const s = c.network_status;
+  return (s === 'paused' || s === 'hidden' || s === 'deleted') || c.use_ratehawk === false;
+}
+
 function todayPlus(days: number) {
   const d = new Date();
   d.setDate(d.getDate() + days);
@@ -249,6 +283,20 @@ export default function ConsoleSearchPage() {
   const [filterSupplier,    setFilterSupplier]    = useState<'all' | 'ratehawk' | 'hummingbird'>('all');
   const [filterRefundable,  setFilterRefundable]  = useState(false);
   const [showUnavailable,   setShowUnavailable]   = useState(false);
+
+  // ─── Per-hotel "Manage" control state ───────────────────────
+  // Bulk-loaded control rows keyed by hotel id, so each result card can
+  // show a state badge (paused/hidden/deleted/no-ratehawk) at a glance.
+  // Re-fetched whenever the visible hit set changes; also refreshed for a
+  // single hotel after the Manage panel saves it.
+  const [controlMap, setControlMap] = useState<Record<number, HotelControl>>({});
+  const refreshControl = (id: number, row: HotelControl | null) => {
+    setControlMap(curr => {
+      const next = { ...curr };
+      if (row) next[id] = row; else delete next[id];
+      return next;
+    });
+  };
 
   // ─── Detail view: right slide-over drawer over the (dimmed) results
   // list, so the consultant keeps the search results + scroll position
@@ -884,6 +932,32 @@ export default function ConsoleSearchPage() {
   const pendingCount = useMemo(() => hits.filter(h => h.priced === undefined).length, [hits]);
   const unavailableCount = useMemo(() => hits.filter(h => h.priced && !h.priced.available).length, [hits]);
 
+  // Bulk-load control rows for the visible hits so each card can show a
+  // state badge. Keyed on the comma-joined id list so it only re-fires when
+  // the result set actually changes (not on every price-enrichment tick).
+  const hitIdsKey = useMemo(() => hits.map(h => h.id).sort((a, b) => a - b).join(','), [hits]);
+  useEffect(() => {
+    if (!hitIdsKey) { setControlMap({}); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/admin/control?ids=${encodeURIComponent(hitIdsKey)}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const json = await res.json();
+        // Backend returns a { [id]: row } map (possibly wrapped in .data).
+        const map = (json && typeof json === 'object' && json.data && typeof json.data === 'object') ? json.data : json;
+        if (cancelled || !map || typeof map !== 'object') return;
+        const normalized: Record<number, HotelControl> = {};
+        for (const [k, v] of Object.entries(map)) {
+          const id = Number(k);
+          if (Number.isFinite(id) && v && typeof v === 'object') normalized[id] = v as HotelControl;
+        }
+        setControlMap(normalized);
+      } catch { /* badges are best-effort */ }
+    })();
+    return () => { cancelled = true; };
+  }, [hitIdsKey]);
+
   // ───────────────────────────────────────────────────────────
   return (
     <div style={{ minWidth: 0 }}>
@@ -1032,6 +1106,7 @@ export default function ConsoleSearchPage() {
                 <MultiSupplierCard
                   key={h.id}
                   h={h}
+                  control={controlMap[h.id]}
                   onOpen={(supplier) => openHotel(h, supplier)}
                   showUnavailable={showUnavailable}
                 />
@@ -1147,6 +1222,16 @@ export default function ConsoleSearchPage() {
                   so allow horizontal scroll as a safety net; ⤢ expand widens
                   the drawer to near-full-width for the booking step). */}
               <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', padding: 18 }}>
+            {/* Per-hotel "Manage" controls — visibility, pricing, transfer,
+                airport proximity, notes. Collapsible so it doesn't crowd the
+                rate table; refreshes the result-card badges on save. */}
+            <ManagePanel
+              hotelId={detailHotel.id}
+              hotelName={detailHotel.name}
+              userEmail={user?.email || ''}
+              onSaved={(row) => refreshControl(detailHotel.id, row)}
+              onCloseDrawer={() => { setDetailHotel(null); setDetailExpanded(false); setEditingSearch(false); syncUrl({ hotelId: null }); }}
+            />
             {ratesErr && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 10 }}>Error: {ratesErr}</div>}
 
             {/* Hotel info section — appears above the rate list so the
@@ -1408,7 +1493,421 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
  * Used only when h.priced.quotes.length > 1. Singletons stay on the
  * compact stacked layout — see filteredHits.map for the dispatch.
  */
-function MultiSupplierCard({ h, onOpen, showUnavailable }: { h: HotelHit; onOpen: (supplier: string | null) => void; showUnavailable: boolean }) {
+// ─── Per-hotel "Manage" panel ───────────────────────────────────
+// Editable form over the hotel-api control row. Loads on open, tracks a
+// dirty flag, and saves via PUT /api/admin/control. On markup save it ALSO
+// writes a per-hotel booking-engine pricing rule (the thing that actually
+// changes the sell price) and echoes the % into control.markup_override_pct.
+// Numeric fields from postgres arrive as strings — we keep them as strings
+// in form state and coerce on save.
+
+// Editable form shape — every field a string|boolean so inputs stay
+// controlled; coerced to the API's types on save.
+type ManageForm = {
+  network_status: NetworkStatus;
+  use_ratehawk: boolean;
+  markup_override_pct: string;
+  transfer_type: string;
+  // tri-state: '' = auto (null), 'yes' = true, 'no' = false
+  transfer_included_override: '' | 'yes' | 'no';
+  transfer_cost_adult: string;
+  transfer_cost_child: string;
+  transfer_currency: string;
+  transfer_duration: string;
+  transfer_notes: string;
+  airport_code: string;
+  airport_terminal: string;
+  proximity_tier: string;
+  airside: boolean;
+  walk_minutes: string;
+  day_use: boolean;
+  internal_notes: string;
+};
+
+function controlToForm(c: HotelControl | null): ManageForm {
+  const triState = (v: boolean | null | undefined): '' | 'yes' | 'no' => v === true ? 'yes' : v === false ? 'no' : '';
+  const str = (v: string | number | null | undefined) => v === null || v === undefined ? '' : String(v);
+  return {
+    network_status: (c?.network_status as NetworkStatus) || 'active',
+    use_ratehawk: c?.use_ratehawk !== false, // default true
+    markup_override_pct: str(c?.markup_override_pct),
+    transfer_type: str(c?.transfer_type),
+    transfer_included_override: triState(c?.transfer_included_override),
+    transfer_cost_adult: str(c?.transfer_cost_adult),
+    transfer_cost_child: str(c?.transfer_cost_child),
+    transfer_currency: str(c?.transfer_currency),
+    transfer_duration: str(c?.transfer_duration),
+    transfer_notes: str(c?.transfer_notes),
+    airport_code: str(c?.airport_code).toUpperCase(),
+    airport_terminal: str(c?.airport_terminal),
+    proximity_tier: str(c?.proximity_tier),
+    airside: c?.airside === true,
+    walk_minutes: str(c?.walk_minutes),
+    day_use: c?.day_use === true,
+    internal_notes: str(c?.internal_notes),
+  };
+}
+
+function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: {
+  hotelId: number;
+  hotelName: string;
+  userEmail: string;
+  onSaved: (row: HotelControl) => void;
+  // Fast-tag "Save & next": close the drawer so Tina opens the next hotel.
+  onCloseDrawer: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [fastTag, setFastTag] = useState(false); // airport-only quick mode
+  const [loading, setLoading] = useState(false);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [form, setForm] = useState<ManageForm>(controlToForm(null));
+  const [baseline, setBaseline] = useState<ManageForm>(controlToForm(null));
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  // Note when the pricing-rule write is skipped/failed (markup still saved).
+  const [ruleNote, setRuleNote] = useState<string | null>(null);
+
+  const dirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(baseline), [form, baseline]);
+
+  // Load the control row whenever the panel is first expanded for a hotel.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    setLoadErr(null);
+    (async () => {
+      try {
+        const res = await fetch(`/api/admin/control?hotelId=${hotelId}`, { cache: 'no-store' });
+        const json = await res.json().catch(() => null);
+        if (cancelled) return;
+        // hotel-api returns the row directly or wrapped in .data; a missing
+        // row (never managed) → defaults.
+        const row: HotelControl | null = json && typeof json === 'object'
+          ? (json.data && typeof json.data === 'object' ? json.data : (json.hotel_id !== undefined || json.network_status !== undefined ? json : null))
+          : null;
+        const f = controlToForm(row);
+        setForm(f);
+        setBaseline(f);
+      } catch (e: any) {
+        if (!cancelled) setLoadErr(e?.message || 'Could not load controls');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // Reload only when (re)opening or switching hotel.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, hotelId]);
+
+  const set = <K extends keyof ManageForm>(k: K, v: ManageForm[K]) =>
+    setForm(prev => ({ ...prev, [k]: v }));
+
+  function formToBody(f: ManageForm): HotelControl {
+    const num = (s: string): number | null => s.trim() === '' || isNaN(Number(s)) ? null : Number(s);
+    const intNum = (s: string): number | null => { const n = num(s); return n === null ? null : Math.round(n); };
+    const txt = (s: string): string | null => s.trim() === '' ? null : s.trim();
+    return {
+      network_status: f.network_status,
+      use_ratehawk: f.use_ratehawk,
+      markup_override_pct: num(f.markup_override_pct),
+      transfer_type: txt(f.transfer_type),
+      transfer_included_override: f.transfer_included_override === '' ? null : f.transfer_included_override === 'yes',
+      transfer_cost_adult: num(f.transfer_cost_adult),
+      transfer_cost_child: num(f.transfer_cost_child),
+      transfer_currency: txt(f.transfer_currency),
+      transfer_duration: txt(f.transfer_duration),
+      transfer_notes: txt(f.transfer_notes),
+      airport_code: f.airport_code.trim() ? f.airport_code.trim().toUpperCase() : null,
+      airport_terminal: txt(f.airport_terminal),
+      proximity_tier: txt(f.proximity_tier) as ProximityTier | null,
+      airside: f.airside,
+      walk_minutes: intNum(f.walk_minutes),
+      day_use: f.day_use,
+      internal_notes: txt(f.internal_notes),
+      updated_by: userEmail || undefined,
+    };
+  }
+
+  // Persist a per-hotel pricing rule so the markup actually changes the sell
+  // price. Best-effort: if the proxy rejects, surface a note but still let
+  // the control save succeed.
+  async function writePricingRule(pct: number): Promise<string | null> {
+    try {
+      const res = await fetch('/api/pricing/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Console pricing-rule shape (pricingRulesMap.toBackend maps it to the
+        // booking-engine model). hotel_id condition → per-hotel rule; high
+        // priority so it wins the cascade over destination/global rules.
+        body: JSON.stringify({
+          name: `Hotel ${hotelId} override`,
+          markup_type: 'percentage',
+          markup_value: pct,
+          priority: 100,
+          is_active: true,
+          conditions: { hotel_id: hotelId, hotel_name: hotelName || undefined },
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        return `rule write skipped — ${j?.message || j?.error || `HTTP ${res.status}`}`;
+      }
+      return null;
+    } catch (e: any) {
+      return `rule write skipped — ${e?.message || 'wire pricing POST'}`;
+    }
+  }
+
+  async function save() {
+    setSaving(true);
+    setSaveErr(null);
+    setRuleNote(null);
+    try {
+      const body = formToBody(form);
+      // 1) Pricing rule first (only when the markup actually changed) so the
+      //    note is ready before we report the save.
+      let note: string | null = null;
+      const pct = body.markup_override_pct;
+      if (typeof pct === 'number' && form.markup_override_pct !== baseline.markup_override_pct) {
+        note = await writePricingRule(pct);
+      }
+      // 2) Control row (always).
+      const res = await fetch(`/api/admin/control?hotelId=${hotelId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error || json?.message || `Save failed (HTTP ${res.status})`);
+      const saved: HotelControl = (json && json.data && typeof json.data === 'object') ? json.data : (json || body);
+      const f = controlToForm(saved);
+      setForm(f);
+      setBaseline(f);
+      setSavedAt(Date.now());
+      setRuleNote(note);
+      onSaved(saved);
+      // Fast-tag flow: after saving the airport tags, close the drawer so the
+      // consultant can immediately open the next hotel from the results list.
+      if (fastTag && !note) onCloseDrawer();
+    } catch (e: any) {
+      setSaveErr(e?.message || 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <div style={{ marginBottom: 14 }}>
+        <button
+          onClick={() => setOpen(true)}
+          className="c-btn"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <Pencil size={13} /> Manage this hotel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="c-card" style={{ padding: 14, marginBottom: 16 }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg)' }}>Manage hotel</span>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--c-fg-soft)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={fastTag} onChange={(e) => setFastTag(e.target.checked)} />
+          Fast-tag (airport only)
+        </label>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {dirty && <span style={{ fontSize: 11.5, color: 'var(--c-accent)', fontWeight: 600 }}>Unsaved changes</span>}
+          {!dirty && savedAt && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--c-success)' }}><CheckCircle2 size={12} /> Saved</span>}
+          <button onClick={() => setOpen(false)} title="Collapse" style={{ ...iconBtnStyle }}><Minimize2 size={13} /></button>
+        </div>
+      </div>
+
+      {loading && <div style={{ fontSize: 13, color: 'var(--c-fg-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Loader2 size={13} className="animate-spin" /> Loading controls…</div>}
+      {loadErr && <div style={{ fontSize: 13, color: 'var(--c-danger)' }}>Error: {loadErr}</div>}
+
+      {!loading && !loadErr && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* ── Airport proximity (always shown; the only group in fast-tag) ── */}
+          <ManageGroup title="Airport proximity">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+              <Field label="Airport code">
+                <input className="c-input" value={form.airport_code} maxLength={4}
+                  onChange={(e) => set('airport_code', e.target.value.toUpperCase())} placeholder="e.g. MLE" />
+              </Field>
+              <Field label="Terminal">
+                <input className="c-input" value={form.airport_terminal} onChange={(e) => set('airport_terminal', e.target.value)} placeholder="e.g. T1" />
+              </Field>
+              <Field label="Proximity tier">
+                <select className="c-select" value={form.proximity_tier} onChange={(e) => set('proximity_tier', e.target.value)}>
+                  <option value="">—</option>
+                  <option value="in-terminal">In-terminal</option>
+                  <option value="connected">Connected</option>
+                  <option value="walkable">Walkable</option>
+                  <option value="short-shuttle">Short shuttle</option>
+                  <option value="off-airport">Off-airport</option>
+                </select>
+              </Field>
+              <Field label="Walk minutes">
+                <input className="c-input" type="number" min={0} value={form.walk_minutes} onChange={(e) => set('walk_minutes', e.target.value)} placeholder="e.g. 5" />
+              </Field>
+            </div>
+            <div style={{ display: 'flex', gap: 18, marginTop: 10, flexWrap: 'wrap' }}>
+              <label style={checkLabelStyle}>
+                <input type="checkbox" checked={form.airside} onChange={(e) => set('airside', e.target.checked)} /> Airside (inside security)
+              </label>
+              <label style={checkLabelStyle}>
+                <input type="checkbox" checked={form.day_use} onChange={(e) => set('day_use', e.target.checked)} /> Day-use available
+              </label>
+            </div>
+          </ManageGroup>
+
+          {!fastTag && (
+            <>
+              {/* ── Visibility ── */}
+              <ManageGroup title="Visibility">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
+                  <Field label="Network status">
+                    <select className="c-select" value={form.network_status} onChange={(e) => set('network_status', e.target.value as NetworkStatus)}>
+                      <option value="active">Active</option>
+                      <option value="paused">Paused (kept, hidden from site)</option>
+                      <option value="hidden">Hidden</option>
+                      <option value="deleted">Deleted</option>
+                    </select>
+                  </Field>
+                </div>
+                <label style={{ ...checkLabelStyle, marginTop: 10 }}>
+                  <input type="checkbox" checked={!form.use_ratehawk} onChange={(e) => set('use_ratehawk', !e.target.checked)} />
+                  Don&apos;t use RateHawk for this hotel
+                </label>
+              </ManageGroup>
+
+              {/* ── Pricing ── */}
+              <ManageGroup title="Pricing">
+                <Field label="Markup override %">
+                  <input className="c-input" type="number" step="0.1" style={{ maxWidth: 200 }}
+                    value={form.markup_override_pct} onChange={(e) => set('markup_override_pct', e.target.value)} placeholder="e.g. 12.5" />
+                </Field>
+                <p style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', margin: '6px 0 0' }}>
+                  Saving also writes a per-hotel pricing rule (priority 100) so this markup applies to live rates.
+                </p>
+              </ManageGroup>
+
+              {/* ── Transfer ── */}
+              <ManageGroup title="Transfer (Maldives etc.)">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+                  <Field label="Transfer type">
+                    <select className="c-select" value={form.transfer_type} onChange={(e) => set('transfer_type', e.target.value)}>
+                      <option value="">—</option>
+                      <option value="seaplane">Seaplane</option>
+                      <option value="speedboat">Speedboat</option>
+                      <option value="domestic-flight">Domestic flight</option>
+                      <option value="car">Car / road</option>
+                      <option value="ferry">Ferry</option>
+                    </select>
+                  </Field>
+                  <Field label="Included?">
+                    <select className="c-select" value={form.transfer_included_override} onChange={(e) => set('transfer_included_override', e.target.value as ManageForm['transfer_included_override'])}>
+                      <option value="">Auto (supplier)</option>
+                      <option value="yes">Yes — included</option>
+                      <option value="no">No — extra cost</option>
+                    </select>
+                  </Field>
+                  <Field label="Cost / adult">
+                    <input className="c-input" type="number" step="0.01" value={form.transfer_cost_adult} onChange={(e) => set('transfer_cost_adult', e.target.value)} />
+                  </Field>
+                  <Field label="Cost / child">
+                    <input className="c-input" type="number" step="0.01" value={form.transfer_cost_child} onChange={(e) => set('transfer_cost_child', e.target.value)} />
+                  </Field>
+                  <Field label="Currency">
+                    <input className="c-input" value={form.transfer_currency} maxLength={3} onChange={(e) => set('transfer_currency', e.target.value.toUpperCase())} placeholder="USD" />
+                  </Field>
+                  <Field label="Duration">
+                    <input className="c-input" value={form.transfer_duration} onChange={(e) => set('transfer_duration', e.target.value)} placeholder="e.g. 45 min" />
+                  </Field>
+                </div>
+                <Field label="Transfer notes" style={{ marginTop: 10 }}>
+                  <textarea className="c-input" rows={2} value={form.transfer_notes} onChange={(e) => set('transfer_notes', e.target.value)} style={{ resize: 'vertical' }} />
+                </Field>
+              </ManageGroup>
+
+              {/* ── Notes ── */}
+              <ManageGroup title="Notes">
+                <Field label="Internal notes">
+                  <textarea className="c-input" rows={3} value={form.internal_notes} onChange={(e) => set('internal_notes', e.target.value)} style={{ resize: 'vertical' }} />
+                </Field>
+              </ManageGroup>
+            </>
+          )}
+
+          {/* Footer: errors + save */}
+          {saveErr && <div style={{ fontSize: 13, color: 'var(--c-danger)' }}>Error: {saveErr}</div>}
+          {ruleNote && <div style={{ fontSize: 12.5, color: 'var(--c-warning, #b45309)' }}><AlertTriangle size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />{ruleNote}</div>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button className="c-btn c-btn-primary" onClick={() => void save()} disabled={saving || !dirty}>
+              {saving ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+              {fastTag ? 'Save & next hotel' : 'Save'}
+            </button>
+            {!dirty && savedAt && <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>All changes saved.</span>}
+            {dirty && <span style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>You have unsaved changes.</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const checkLabelStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, color: 'var(--c-fg)', cursor: 'pointer'
+};
+
+function ManageGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-fg-soft)', marginBottom: 8 }}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, children, style }: { label: string; children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div style={style}>
+      <label className="c-label">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+// At-a-glance state pill on a result card: surfaces a non-active network
+// status and/or a "RateHawk off" flag so Tina sees managed hotels without
+// opening the drawer.
+function ControlBadge({ control }: { control: HotelControl }) {
+  const s = control.network_status;
+  const labels: Array<{ text: string; color: string }> = [];
+  if (s === 'paused')  labels.push({ text: 'Paused',  color: '#b45309' });
+  if (s === 'hidden')  labels.push({ text: 'Hidden',  color: '#6b7280' });
+  if (s === 'deleted') labels.push({ text: 'Deleted', color: '#b91c1c' });
+  if (control.use_ratehawk === false) labels.push({ text: 'No RateHawk', color: '#7c3aed' });
+  if (labels.length === 0) return null;
+  return (
+    <>
+      {labels.map((l) => (
+        <span key={l.text} style={{
+          fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+          color: l.color, border: `1px solid ${l.color}33`, background: `${l.color}11`,
+          padding: '2px 8px', borderRadius: 999
+        }}>{l.text}</span>
+      ))}
+    </>
+  );
+}
+
+function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHit; control?: HotelControl; onOpen: (supplier: string | null) => void; showUnavailable: boolean }) {
   // Use the per-supplier quotes when present; otherwise synthesise a single
   // quote from the legacy priced fields so single-supplier hotels render in
   // the same card (one unified layout for the whole list).
@@ -1472,6 +1971,7 @@ function MultiSupplierCard({ h, onOpen, showUnavailable }: { h: HotelHit; onOpen
         </div>
         {/* Supplier-count chip + best-rate badges (per-supplier breakdown is in the drawer) */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 'auto' }}>
+          {controlFlagged(control) && <ControlBadge control={control!} />}
           {quotes.length > 1 && supplierNames.length > 0 && (
             <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-soft)', background: 'var(--c-bg-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '2px 9px', textTransform: 'capitalize' }}>
               {supplierNames.join(' · ')}
