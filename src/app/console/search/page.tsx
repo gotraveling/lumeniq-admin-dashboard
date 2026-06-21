@@ -344,6 +344,15 @@ export default function ConsoleSearchPage() {
   const [searching, setSearching]       = useState(false);
   const [enrichingPrices, setEnriching] = useState(false);
   const [searchErr, setSearchErr]       = useState<string | null>(null);
+  // ─── "Load more" paging ─────────────────────────────────────
+  // `total` is the backend's estimated total result count (Meili
+  // estimatedTotalHits). `loadingMore` gates the button + spinner.
+  // `lastSearchRef` snapshots the exact query/filter/dates the current
+  // result set was fetched with so loadMore() pages the SAME search even
+  // if the query box / chips / date picker have since changed.
+  const [total, setTotal]             = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const lastSearchRef = useRef<{ q: string; filter?: string; checkIn: string; checkOut: string } | null>(null);
 
   // ─── Result filters ─────────────────────────────────────────
   const [filterSupplier,    setFilterSupplier]    = useState<'all' | 'ratehawk' | 'hummingbird'>('all');
@@ -552,12 +561,16 @@ export default function ConsoleSearchPage() {
       const res = await fetch('/api/admin/search/hotels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: query, limit: 50, ...(extraFilter ? { filter: extraFilter } : {}) })
+        body: JSON.stringify({ q: query, limit: 50, offset: 0, ...(extraFilter ? { filter: extraFilter } : {}) })
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error || 'search failed');
       const initial: HotelHit[] = (json.data.hits || []).map((h: any) => ({ ...h }));
       setHits(initial);
+      // Capture the total + the exact search inputs so loadMore() can page
+      // the SAME query/filter/dates regardless of later UI state changes.
+      setTotal(json.data.total ?? initial.length);
+      lastSearchRef.current = { q: query, filter: extraFilter || undefined, checkIn: useCheckIn, checkOut: useCheckOut };
       // fire-and-forget price enrichment so the page paints fast.
       // Pass the normalized dates explicitly — enrichPrices otherwise
       // reads checkIn/checkOut from the closure, which has the same
@@ -674,6 +687,40 @@ export default function ConsoleSearchPage() {
       /* swallow — leaves cards without price badge */
     } finally {
       setEnriching(false);
+    }
+  }
+
+  // Fetch the next page of the CURRENT search (same query/filter/dates as
+  // captured in lastSearchRef) and APPEND to the existing hits. Pages are
+  // 50-wide (server caps limit at 50); offset = current hit count. Only the
+  // new page's ids are sent to enrichPrices so existing cards never re-price.
+  async function loadMore() {
+    const last = lastSearchRef.current;
+    if (loadingMore || !last || hits.length >= total) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetch('/api/admin/search/hotels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: last.q, limit: 50, offset: hits.length, ...(last.filter ? { filter: last.filter } : {}) })
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || 'search failed');
+      const newInitial: HotelHit[] = (json.data.hits || []).map((h: any) => ({ ...h }));
+      if (newInitial.length === 0) {
+        // Meili estimatedTotalHits is an estimate that can overshoot the real
+        // result count — a page with 0 new hits means we've hit the real end,
+        // so pin total to what we have and hide the button.
+        setTotal(hits.length);
+        return;
+      }
+      setHits(curr => [...curr, ...newInitial]);
+      setTotal(json.data.total ?? (hits.length + newInitial.length));
+      void enrichPrices(newInitial.map(h => h.id), { checkIn: last.checkIn, checkOut: last.checkOut });
+    } catch {
+      /* swallow — leaves the existing list intact */
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -1277,6 +1324,7 @@ export default function ConsoleSearchPage() {
               </label>
               <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginLeft: 'auto' }}>
                 {filteredHits.length} bookable
+                {total > 0 && <span> · {total} found</span>}
                 {pendingCount > 0 && <span> · {pendingCount} loading</span>}
                 {!enrichingPrices && unavailableCount > 0 && !showUnavailable && (
                   <span> · {unavailableCount} unavailable hidden</span>
@@ -1335,6 +1383,23 @@ export default function ConsoleSearchPage() {
                 </div>
               ))}
             </div>
+
+            {/* "Load more" — pages the SAME search (lastSearchRef) and appends.
+                Shown only while there are more results than we've loaded. */}
+            {hits.length < total && (
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14 }}>
+                <button
+                  type="button"
+                  className="c-btn"
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
+                >
+                  {loadingMore && <Loader2 size={14} className="animate-spin" />}
+                  Load more · showing {hits.length} of {total}
+                </button>
+              </div>
+            )}
           </>
         )}
 
