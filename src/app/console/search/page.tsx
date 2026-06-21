@@ -318,7 +318,11 @@ export default function ConsoleSearchPage() {
       if (v === null || v === undefined || v === '') next.delete(k);
       else next.set(k, String(v));
     }
-    router.replace(next.toString() ? `/console/search?${next}` : '/console/search');
+    // scroll:false — router.replace defaults to scrolling the window to the
+    // top. Opening the detail drawer calls syncUrl({ hotelId }), which would
+    // otherwise jump the left results list back to the top. Keep the scroll
+    // position so the consultant can bounce between hotels.
+    router.replace(next.toString() ? `/console/search?${next}` : '/console/search', { scroll: false });
   };
 
   // ─── Form state ─────────────────────────────────────────────
@@ -1483,6 +1487,18 @@ export default function ConsoleSearchPage() {
                 )}
               </div>
             )}
+            {/* Discount scanner — how the cheapest HB discount moves across
+                the year for THIS hotel. Keyed by hotel id so its scan state
+                resets cleanly when the consultant bounces to another hotel. */}
+            {rates.length > 0 && detailHotel && (
+              <DiscountScanner
+                key={detailHotel.id}
+                hotelId={detailHotel.id}
+                rooms={rooms}
+                citizenship={citizenship}
+                defaultNights={Number(controlMap[detailHotel.id]?.package_nights) || 5}
+              />
+            )}
             {rates.length > 0 && (
               <RoomGroupedRates
                 rates={supplierFocus ? rates.filter(r => r.supplier === supplierFocus) : rates}
@@ -1597,6 +1613,13 @@ function channelBadgeStyle(channel: 'cug' | 'b2c'): React.CSSProperties {
 function fmtMoney(n?: number) {
   if (n === undefined || n === null || isNaN(n)) return '—';
   return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+// Round a money figure to whole dollars for the decluttered rate-table cells
+// (NET/SELL show totals-first; cents add noise). Passes undefined/null through
+// so fmtMoney renders its em-dash placeholder.
+function roundOrUndef(n?: number | null) {
+  return n === undefined || n === null || isNaN(n) ? undefined : Math.round(n);
 }
 
 // Composite rate scorer — Valentin's recommendation (2026-05-28) is
@@ -2831,6 +2854,204 @@ function HotelInfo({ content }: { content: any }) {
  * then a small table of rates inside (meals, cancellation,
  * NET, markup, sell, Choose).
  */
+// ─── Discount scanner ───────────────────────────────────────────
+// Scans how the cheapest Hummingbird discount varies across N monthly
+// check-in windows for ONE hotel (Tina: HB discounts run deeper in low
+// season, shallower from ~1 Oct). Fetches all windows IN PARALLEL via the
+// same rates proxy the drawer uses, then tabulates Gross / Discount % /
+// Nett / Offer and highlights the deepest discount. State is local and
+// keyed by hotelId via React (the parent remounts this on hotel change by
+// passing a `key`), so a new hotel starts clean.
+
+// "13 Jul 2026" from a YYYY-MM-DD string (UTC, no date lib).
+function fmtScanDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC'
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+// today + n days as YYYY-MM-DD (UTC).
+function utcPlusIso(days: number): string {
+  const d = new Date();
+  const base = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  return new Date(base + days * 86400000).toISOString().slice(0, 10);
+}
+
+type ScanRow = {
+  checkIn: string;
+  gross: number | null;
+  discount: number | null;
+  nett: number | null;
+  pct: number | null;
+  offerName: string | null;
+  currency: string | null;
+};
+
+function DiscountScanner({
+  hotelId, rooms, citizenship, defaultNights
+}: {
+  hotelId: number;
+  rooms: RoomGuests[];
+  citizenship: string;
+  defaultNights: number;
+}) {
+  const [nights, setNights] = useState(String(defaultNights));
+  const [months, setMonths] = useState(6);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [results, setResults] = useState<ScanRow[] | null>(null);
+
+  async function scan() {
+    const pkgNights = Math.max(1, Math.round(Number(nights) || defaultNights || 5));
+    const n = Math.max(1, Math.min(12, months));
+    setBusy(true);
+    setErr(null);
+    setResults(null);
+    try {
+      const guests = JSON.stringify(rooms.map(r => ({ adults: r.adults, children: r.childrenAges || [] })));
+      // Build N monthly windows starting ~14 days out: checkIn = today + 30*i + 14.
+      const windows = Array.from({ length: n }, (_, i) => {
+        const checkIn = utcPlusIso(30 * i + 14);
+        const checkOut = utcPlusIso(30 * i + 14 + pkgNights);
+        return { checkIn, checkOut };
+      });
+      const rows = await Promise.all(windows.map(async (w): Promise<ScanRow> => {
+        const empty: ScanRow = { checkIn: w.checkIn, gross: null, discount: null, nett: null, pct: null, offerName: null, currency: null };
+        try {
+          const qs = new URLSearchParams({
+            checkIn: w.checkIn, checkOut: w.checkOut,
+            nationalityCode: citizenship, accountType: 'cug', guests
+          });
+          const res = await fetch(`/api/admin/search/rates/${hotelId}?${qs.toString()}`);
+          const json = await res.json();
+          if (!json.success) return empty;
+          const hbRates: AdminRate[] = (json.data?.rates || []).filter((r: AdminRate) => r.supplier === 'hummingbird');
+          if (!hbRates.length) return empty;
+          // Cheapest HB rate: min of (gross - discount) when present, else sell total.
+          const basisOf = (r: AdminRate) => {
+            const g = r.grossTotal ?? 0;
+            const d = r.discountAmount ?? 0;
+            if (g > 0) return g - d;
+            return r.pricing.sell?.totalAmount ?? Infinity;
+          };
+          const best = hbRates.reduce((a, b) => (basisOf(b) < basisOf(a) ? b : a));
+          const gross = best.grossTotal ?? null;
+          const discount = best.discountAmount ?? null;
+          if (gross == null || !(gross > 0) || discount == null || !(discount > 0)) {
+            return { ...empty, currency: best.pricing.currency };
+          }
+          const nett = gross - discount;
+          const pct = Math.round((discount / gross) * 100);
+          return {
+            checkIn: w.checkIn,
+            gross, discount, nett, pct,
+            offerName: best.offers?.[0]?.name ?? null,
+            currency: best.pricing.currency,
+          };
+        } catch {
+          return empty;
+        }
+      }));
+      setResults(rows);
+    } catch (e: any) {
+      setErr(e?.message || 'Scan failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Deepest discount % across the scanned windows — its row(s) get the accent.
+  const maxPct = useMemo(
+    () => (results || []).reduce((m, r) => (r.pct != null && r.pct > m ? r.pct : m), 0),
+    [results]
+  );
+
+  return (
+    <div className="c-card" style={{ padding: '12px 14px', marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg)' }}>Discount scanner</span>
+        <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>
+          How the cheapest Hummingbird discount moves across the year
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--c-fg-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.04 }}>
+          Package nights
+          <input
+            className="c-input"
+            type="number"
+            min={1}
+            value={nights}
+            onChange={(e) => setNights(e.target.value)}
+            style={{ width: 90 }}
+          />
+        </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--c-fg-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.04 }}>
+          Months
+          <select className="c-input" value={months} onChange={(e) => setMonths(Number(e.target.value))} style={{ width: 90 }}>
+            {[3, 6, 9, 12].map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </label>
+        <button
+          className="c-btn c-btn-primary"
+          onClick={() => void scan()}
+          disabled={busy}
+          style={{ padding: '7px 16px', fontSize: 12.5, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          {busy && <Loader2 size={13} className="animate-spin" />}
+          {busy ? 'Scanning…' : 'Scan discounts'}
+        </button>
+      </div>
+
+      {err && <div style={{ marginTop: 10, fontSize: 12, color: 'var(--c-danger)' }}>{err}</div>}
+
+      {results && results.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginTop: 12 }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: 'var(--c-fg-muted)' }}>
+              <th style={thStyle}>Check-in</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>Gross</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>Discount %</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>Nett</th>
+              <th style={thStyle}>Offer</th>
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((row, i) => {
+              const hasRate = row.pct != null;
+              const isBest = hasRate && maxPct > 0 && row.pct === maxPct;
+              const accent = isBest ? 'var(--c-accent)' : 'var(--c-fg)';
+              const num = (v: number | null, suffix = '') =>
+                v == null ? '—' : `${fmtMoney(v)}${suffix}`;
+              return (
+                <tr key={i} style={{ borderTop: '1px solid var(--c-line-soft)', background: isBest ? 'rgba(155,123,51,0.06)' : undefined }}>
+                  <td style={{ ...tdStyle, fontFamily: 'var(--c-mono)' }}>{fmtScanDate(row.checkIn)}</td>
+                  {hasRate ? (
+                    <>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'var(--c-mono)' }}>
+                        {num(row.gross)} {row.currency}
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'var(--c-mono)', fontWeight: isBest ? 700 : 500, color: accent }}>
+                        {row.pct}%
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'var(--c-mono)' }}>
+                        {num(row.nett)} {row.currency}
+                      </td>
+                      <td style={{ ...tdStyle, color: 'var(--c-fg-soft)' }}>{row.offerName || '—'}</td>
+                    </>
+                  ) : (
+                    <td colSpan={4} style={{ ...tdStyle, color: 'var(--c-fg-muted)', fontStyle: 'italic' }}>no HB rate</td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function RoomGroupedRates({
   rates, onChoose, marginTop = 0
 }: {
@@ -3090,27 +3311,29 @@ function RoomGroupedRates({
                         </td>
                         <td style={tdStyle}>
                           <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.3 }}>
-                            {/* NET in AUD primary (pricing.net.aud) + USD small.
-                                Falls back to USD net when no AUD block. */}
+                            {/* NET — total-first, decluttered. Primary = AUD total
+                                (bold). Secondary = USD total (small/muted). One
+                                combined per-night line (AUD/nt · USD/nt). Falls
+                                back to USD-only when no AUD block. */}
                             {r.pricing.net?.aud?.totalAmount != null ? (
                               <>
                                 <div style={{ fontWeight: 600 }}>
-                                  {fmtMoney(r.pricing.net.aud.totalAmount)} AUD <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>total</span>
+                                  {fmtMoney(roundOrUndef(r.pricing.net.aud.totalAmount))} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>AUD total</span>
                                 </div>
                                 <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
-                                  {fmtMoney(r.pricing.net.aud.nightlyAmount ?? undefined)} AUD /nt
+                                  {fmtMoney(roundOrUndef(r.pricing.net?.totalAmount))} {r.pricing.currency}
                                 </div>
                                 <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                  {fmtMoney(r.pricing.net?.totalAmount)} {r.pricing.currency} · {fmtMoney(r.pricing.net?.nightlyAmount)} /nt
+                                  {fmtMoney(roundOrUndef(r.pricing.net.aud.nightlyAmount ?? undefined))} AUD/nt · {fmtMoney(roundOrUndef(r.pricing.net?.nightlyAmount))} {r.pricing.currency}/nt
                                 </div>
                               </>
                             ) : (
                               <>
                                 <div style={{ fontWeight: 600 }}>
-                                  {fmtMoney(r.pricing.net?.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>total</span>
+                                  {fmtMoney(roundOrUndef(r.pricing.net?.totalAmount))} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>{r.pricing.currency} total</span>
                                 </div>
-                                <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
-                                  {fmtMoney(r.pricing.net?.nightlyAmount)} /nt
+                                <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
+                                  {fmtMoney(roundOrUndef(r.pricing.net?.nightlyAmount))} {r.pricing.currency}/nt
                                 </div>
                               </>
                             )}
@@ -3123,28 +3346,57 @@ function RoomGroupedRates({
                         </td>
                         <td style={tdStyle}>
                           <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.3 }}>
-                            {/* AUD primary (pricing.aud) with USD small beneath.
-                                Falls back to USD as primary when no AUD block.
+                            {/* Struck "was" SELL — when a promo applied, apply the
+                                same markup ratio to the rack (gross) rate so the
+                                consultant sees the pre-offer sell price crossed out.
+                                Display only — the row still books at the offer sell
+                                price below. AUD when an fxRate exists, else native. */}
+                            {(() => {
+                              const gross = r.grossTotal ?? 0;
+                              const disc = r.discountAmount ?? 0;
+                              const nett = gross - disc;
+                              const sellTotal = r.pricing.sell?.totalAmount;
+                              if (!(disc > 0 && gross > 0 && nett > 0 && typeof sellTotal === 'number')) return null;
+                              const wasSell = sellTotal * gross / nett;
+                              const fx = r.pricing.aud?.fxRate;
+                              const wasLabel = fx
+                                ? `${fmtMoney(Math.round(wasSell * fx))} AUD`
+                                : `${fmtMoney(Math.round(wasSell))} ${r.pricing.currency}`;
+                              return (
+                                <div style={{
+                                  fontSize: 11,
+                                  fontWeight: 500,
+                                  color: 'var(--c-fg-muted)',
+                                  textDecoration: 'line-through'
+                                }}>
+                                  was {wasLabel}
+                                </div>
+                              );
+                            })()}
+                            {/* SELL — total-first, decluttered. Primary = AUD
+                                total (bold accent). Secondary = USD total
+                                (small/muted). One combined per-night line.
+                                Falls back to USD-only when no AUD block.
                                 Display only — booking basis is still USD sell. */}
                             {r.pricing.aud?.totalAmount != null ? (
                               <>
                                 <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
-                                  {fmtMoney(r.pricing.aud.totalAmount)} AUD <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>total</span>
+                                  {fmtMoney(roundOrUndef(r.pricing.aud.totalAmount))} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>AUD total</span>
                                 </div>
                                 <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
-                                  {fmtMoney(r.pricing.aud.nightlyAmount ?? undefined)} AUD /nt
+                                  {fmtMoney(roundOrUndef(r.pricing.sell?.totalAmount))} {r.pricing.currency}
                                 </div>
                                 <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                  {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency} total · {fmtMoney(r.pricing.sell?.nightlyAmount)} /nt
+                                  {fmtMoney(roundOrUndef(r.pricing.aud.nightlyAmount ?? undefined))} AUD/nt · {fmtMoney(roundOrUndef(r.pricing.sell?.nightlyAmount))} {r.pricing.currency}/nt
                                 </div>
                               </>
                             ) : (
                               <>
                                 <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
-                                  {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>total</span>
+                                  {fmtMoney(roundOrUndef(r.pricing.sell?.totalAmount))} {r.pricing.currency} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>total</span>
                                 </div>
-                                <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
-                                  {fmtMoney(r.pricing.sell?.nightlyAmount)} /nt
+                                <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
+                                  {fmtMoney(roundOrUndef(r.pricing.sell?.nightlyAmount))} {r.pricing.currency}/nt
                                 </div>
                               </>
                             )}
