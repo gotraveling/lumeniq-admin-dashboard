@@ -449,6 +449,13 @@ export default function ConsoleSearchPage() {
   const [rates, setRates]               = useState<AdminRate[]>([]);
   const [ratesBusy, setRatesBusy]       = useState(false);
   const [ratesErr, setRatesErr]         = useState<string | null>(null);
+  // Cross-supplier room map for the open hotel: lookup keyed by
+  // `${supplier}|${normName(roomName)}` → { canonical group key, display label }.
+  // Built from /api/admin/room-mappings TRUSTED rows (both hb + rh sides) so a
+  // Hummingbird rate and a RateHawk rate for the same physical room collapse
+  // into ONE card ("one room, both rates"). Soft-fails to empty (drawer must
+  // never break on a mapping fetch error). Reset/refetch on hotel change.
+  const [roomMap, setRoomMap] = useState<Map<string, { key: string; label: string }>>(new Map());
   // Lazy B2C compare: false until the consultant clicks "Compare B2C" on the
   // open hotel (so we don't pay 2x ETG calls on every search). Base channel
   // is always Member (cug); B2C rates are merged in on demand, tagged.
@@ -833,6 +840,41 @@ export default function ConsoleSearchPage() {
       setB2cBusy(false);
     }
   }
+
+  // Fetch the cross-supplier room map whenever a hotel detail opens (keyed by
+  // detailHotel.id). A TRUSTED row (has BOTH hb + rh names, status in
+  // auto_high|auto_med|confirmed|manual) seeds two lookup entries — one for
+  // each supplier side — pointing at the same canonical group key. Anything
+  // else (review_low/rejected/hb_only/rh_only) is ignored so those rates stay
+  // as separate cards. Soft-fails to an empty map.
+  useEffect(() => {
+    const id = detailHotel?.id;
+    if (!id) { setRoomMap(new Map()); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/admin/room-mappings?hotelId=${id}`);
+        if (!res.ok) throw new Error(String(res.status));
+        const json = await res.json();
+        const rows: Array<{ id: number; hb_room_name?: string; rh_room_name?: string; status?: string }> =
+          Array.isArray(json) ? json : (json?.data ?? json?.rows ?? []);
+        const TRUSTED = new Set(['auto_high', 'auto_med', 'confirmed', 'manual']);
+        const m = new Map<string, { key: string; label: string }>();
+        for (const row of rows) {
+          if (!row?.hb_room_name || !row?.rh_room_name) continue;       // both sides required
+          if (!TRUSTED.has(row.status || '')) continue;                 // trusted statuses only
+          const key = `canon:${row.id}`;
+          const label = row.hb_room_name || row.rh_room_name;           // prefer HB name
+          m.set(`hummingbird|${normName(row.hb_room_name)}`, { key, label });
+          m.set(`ratehawk|${normName(row.rh_room_name)}`,   { key, label });
+        }
+        if (!cancelled) setRoomMap(m);
+      } catch {
+        if (!cancelled) setRoomMap(new Map());                          // never break the drawer
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [detailHotel?.id]);
 
   // When the consultant picks a rate, immediately fire a prebook
   // so we verify availability + price BEFORE they fill the form.
@@ -1601,6 +1643,7 @@ export default function ConsoleSearchPage() {
                 marginTop={detailContent ? 18 : 0}
                 control={detailHotel ? controlMap[detailHotel.id] : undefined}
                 rooms={rooms}
+                roomMap={roomMap}
               />
             )}
 
@@ -1649,6 +1692,13 @@ export default function ConsoleSearchPage() {
       {/* Agent lives on its own page now — /console/ai */}
     </div>
   );
+}
+
+// Normalize a room name for cross-supplier matching: lowercase + trim +
+// collapse internal whitespace. Used on BOTH the room_mappings side and the
+// rate side so a Hummingbird/RateHawk rate can resolve to its canonical room.
+function normName(s: string | null | undefined): string {
+  return (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
 // ─── small style helpers ────────────────────────────────────────
@@ -3146,7 +3196,7 @@ function DiscountScanner({
 }
 
 function RoomGroupedRates({
-  rates, onChoose, marginTop = 0, control, rooms = []
+  rates, onChoose, marginTop = 0, control, rooms = [], roomMap
 }: {
   rates: AdminRate[];
   onChoose: (r: AdminRate) => void;
@@ -3156,6 +3206,10 @@ function RoomGroupedRates({
   // (Hummingbird) rate already includes. Makes the comparison apple-to-apple.
   control?: HotelControl;
   rooms?: RoomGuests[];
+  // Cross-supplier canonical room lookup. Keyed by `${supplier}|${normName(roomName)}`.
+  // When a rate resolves here, it groups under the canonical key so the HB +
+  // RateHawk rates for the same physical room share ONE card.
+  roomMap?: Map<string, { key: string; label: string }>;
 }) {
   const sp = useSearchParams();
   const showRgDebug = sp.get('debug') === 'rgmatch';
@@ -3187,13 +3241,22 @@ function RoomGroupedRates({
   // many we surface when collapsed (top plan-pairs, not top rows).
   const comparing = useMemo(() => rates.some(r => r._channel === 'b2c'), [rates]);
   const groups = useMemo(() => {
-    const m = new Map<string, AdminRate[]>();
+    // Each bucket carries its rate list + a display label. The label is the
+    // canonical room name when a rate merged via roomMap, else the room's own
+    // name — so a merged card titles as the canonical room (e.g. "Villa Suite")
+    // and contains BOTH the Hummingbird and RateHawk rate rows.
+    const m = new Map<string, { list: AdminRate[]; label: string }>();
     for (const r of rates) {
-      const k = r.roomGroupName || r.roomTypeName || r.rateKey || 'Room';
-      if (!m.has(k)) m.set(k, []);
-      m.get(k)!.push(r);
+      // Try the cross-supplier canonical key first (collapses HB + RateHawk
+      // rates for the same physical room into one group), else fall back to
+      // the existing per-variant grouping.
+      const lk = roomMap?.get(`${(r.supplier || '').toLowerCase()}|${normName(r.roomTypeName)}`);
+      const k = lk?.key || r.roomGroupName || r.roomTypeName || r.rateKey || 'Room';
+      const label = lk?.label || r.roomGroupName || r.roomTypeName || r.rateKey || 'Room';
+      if (!m.has(k)) m.set(k, { list: [], label });
+      m.get(k)!.list.push(r);
     }
-    return Array.from(m.entries()).map(([name, list]) => {
+    return Array.from(m.entries()).map(([, { list, label: name }]) => {
       const sellTotals = list
         .map(r => r.pricing?.sell?.totalAmount)
         .filter((v): v is number => typeof v === 'number' && v > 0);
@@ -3246,9 +3309,14 @@ function RoomGroupedRates({
       } else {
         ordered = byScore.map(s => s.r);   // highest score first
       }
-      return { name, rates: ordered, recommendedKey, sellBySig };
+      // Distinct suppliers in this (possibly merged) group — drives the
+      // subtle "N suppliers" hint on merged cards.
+      const supplierCount = new Set(
+        list.map(r => (r.supplier || '').toLowerCase()).filter(Boolean)
+      ).size;
+      return { name, rates: ordered, recommendedKey, sellBySig, supplierCount };
     });
-  }, [rates, comparing]);
+  }, [rates, comparing, roomMap]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Room-photos lightbox — opened from a per-room "View photos" button.
   const [photoModal, setPhotoModal] = useState<{ name: string; images: string[] } | null>(null);
@@ -3314,7 +3382,14 @@ function RoomGroupedRates({
                         backgroundPosition: 'center'
                       }} />
                     )}
-                    <div style={{ fontSize: 14, fontWeight: 700 }}>{g.name}</div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>{g.name}</div>
+                      {g.supplierCount > 1 && (
+                        <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--c-fg-muted)', marginTop: 2 }}>
+                          {g.supplierCount} suppliers
+                        </div>
+                      )}
+                    </div>
                   </div>
                   {groupImages.length > 0 && (
                     <button
