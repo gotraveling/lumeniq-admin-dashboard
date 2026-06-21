@@ -128,11 +128,11 @@ type AdminRate = {
     aud?: AudBlock | null;
     markup?: { type: string; value: number; amount: number; ruleName?: string };
   };
-  // Promotional OFFER metadata (Hummingbird deal.offers[]). Surfaced so admins
-  // can see which promo produced the price. `discountAmount`/`grossTotal` are in
-  // the rate's own currency (pricing.currency). Present only when the supplier
-  // attached a promo to the deal.
-  offers?: string[];
+  // Promotional OFFER metadata (Hummingbird deal.offers[]). Structured as
+  // { name, code } so admins see which promo produced the price AND its supplier
+  // reference code. `discountAmount`/`grossTotal` are in the rate's own currency
+  // (pricing.currency). Present only when the supplier attached a promo.
+  offers?: Array<{ name: string | null; code: string | null }>;
   discountAmount?: number;
   grossTotal?: number;
 };
@@ -3058,7 +3058,9 @@ function RoomGroupedRates({
                                   ? `saved A$${fmtMoney(disc * fx)}`
                                   : `saved ${r.pricing.currency} ${fmtMoney(disc)}`)
                               : '';
-                            const name = r.offers?.[0];
+                            const offer = r.offers?.[0];
+                            const name = offer?.name || undefined;
+                            const code = offer?.code ? `code ${offer.code}` : undefined;
                             return (
                               <div style={{
                                 marginTop: 3,
@@ -3067,7 +3069,7 @@ function RoomGroupedRates({
                                 color: 'var(--c-success)',
                                 lineHeight: 1.3
                               }}>
-                                ★ {[name, savedLabel].filter(Boolean).join(' · ')}
+                                ★ {[name, code, savedLabel].filter(Boolean).join(' · ')}
                               </div>
                             );
                           })()}
