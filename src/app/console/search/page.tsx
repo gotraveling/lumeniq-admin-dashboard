@@ -3301,20 +3301,21 @@ function RoomGroupedRates({
         const hiddenCount = g.rates.length - visibleRates.length;
         return (
           <div key={g.name} className="c-card" style={{ overflow: 'hidden' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: cover ? '160px 1fr' : '1fr', gap: 0 }}>
-              {cover && (
-                <div style={{
-                  width: 160, minHeight: 120,
-                  backgroundColor: 'var(--c-bg-soft)',
-                  backgroundImage: `url(${cover})`,
-                  backgroundSize: 'contain',
-                  backgroundRepeat: 'no-repeat',
-                  backgroundPosition: 'center'
-                }} />
-              )}
+            <div>
               <div style={{ padding: '12px 14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700 }}>{g.name}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    {cover && (
+                      <div style={{
+                        width: 64, height: 44, flexShrink: 0, borderRadius: 6, overflow: 'hidden',
+                        backgroundColor: 'var(--c-bg-soft)',
+                        backgroundImage: `url(${cover})`,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center'
+                      }} />
+                    )}
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>{g.name}</div>
+                  </div>
                   {groupImages.length > 0 && (
                     <button
                       onClick={() => setPhotoModal({ name: g.name, images: groupImages })}
