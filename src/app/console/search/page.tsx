@@ -85,6 +85,9 @@ type Quote = {
   breakfastIncluded?: boolean | null;
   cancellationDeadlineUtc?: string | null;
   ratesCount?: number;
+  // Promo offer on the cheapest rate (the one the card price reflects), so the
+  // search card can badge "offer applied". [{name, code}], Hummingbird only.
+  offers?: Array<{ name: string | null; code: string | null }>;
 };
 
 type AdminRate = {
@@ -621,7 +624,8 @@ export default function ConsoleSearchPage() {
             refundable:              q.cheapestRate?.refundable,
             breakfastIncluded:       q.cheapestRate?.breakfastIncluded,
             cancellationDeadlineUtc: q.cheapestRate?.cancellationDeadlineUtc,
-            ratesCount:              q.ratesCount
+            ratesCount:              q.ratesCount,
+            offers:                  q.cheapestRate?.offers
           };
         });
         if (!r.cheapestRate) {
@@ -2645,6 +2649,12 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
             );
           })}
           {best?.roomTypeName && <span style={{ fontSize: 11.5, color: 'var(--c-fg)' }}>{best.roomTypeName}</span>}
+          {/* Offer badge — the card "from" price already reflects this promo (nett). */}
+          {best?.offers?.[0]?.name && (
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-success)' }}>
+              ★ {best.offers[0].name}{best.offers[0].code ? ` · ${best.offers[0].code}` : ''}
+            </span>
+          )}
           {best && (best.refundable
             ? <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>{best.cancellationDeadlineUtc ? `Free cancel to ${fmtCancelDate(best.cancellationDeadlineUtc)}` : 'Refundable'}</span>
             : <span style={{ fontSize: 11.5, color: 'var(--c-danger)' }}>Non-refundable</span>)}
