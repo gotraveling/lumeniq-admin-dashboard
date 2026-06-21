@@ -57,6 +57,9 @@ type HotelHit = {
     refundable?: boolean;
     breakfastIncluded?: boolean | null;
     cancellationDeadlineUtc?: string | null;
+    // Transfer-bundled label on the cheapest rate (Hummingbird, e.g. "Seaplane");
+    // null = room-only. Feeds the subtle "incl." note on the card.
+    transferLabel?: string | null;
     ratesCount?: number;
     onRequest?: boolean;
     // Multi-supplier quotes (one per linked supplier). When length > 1
@@ -88,6 +91,9 @@ type Quote = {
   // Promo offer on the cheapest rate (the one the card price reflects), so the
   // search card can badge "offer applied". [{name, code}], Hummingbird only.
   offers?: Array<{ name: string | null; code: string | null }>;
+  // Transfer-bundled label on the cheapest rate (Hummingbird, e.g. "Seaplane").
+  // Present means the card price already includes that transfer; null = room-only.
+  transferLabel?: string | null;
 };
 
 type AdminRate = {
@@ -138,6 +144,11 @@ type AdminRate = {
   offers?: Array<{ name: string | null; code: string | null }>;
   discountAmount?: number;
   grossTotal?: number;
+  // Transfer-bundled label (Hummingbird, e.g. "Seaplane"/"Speedboat"). Present
+  // means the rate PRICE already includes that transfer. Absent = room-only
+  // (RateHawk sells transfers separately). DISTINCT from the HotelControl
+  // `transfer_type` field — this is the supplier rate's bundled-transfer label.
+  transfer?: string | null;
 };
 
 // Derived AUD display block emitted by the backend (pricing.aud / net.aud).
@@ -638,7 +649,8 @@ export default function ConsoleSearchPage() {
             breakfastIncluded:       q.cheapestRate?.breakfastIncluded,
             cancellationDeadlineUtc: q.cheapestRate?.cancellationDeadlineUtc,
             ratesCount:              q.ratesCount,
-            offers:                  q.cheapestRate?.offers
+            offers:                  q.cheapestRate?.offers,
+            transferLabel:           q.cheapestRate?.transfer ?? null
           };
         });
         if (!r.cheapestRate) {
@@ -673,6 +685,7 @@ export default function ConsoleSearchPage() {
             refundable:              r.cheapestRate?.refundable,
             breakfastIncluded:       r.cheapestRate?.breakfastIncluded,
             cancellationDeadlineUtc: r.cheapestRate?.cancellationDeadlineUtc,
+            transferLabel:           r.cheapestRate?.transfer ?? null,
             ratesCount:              r.ratesCount,
             quotes:                  quotes.length ? quotes : undefined
           }
@@ -1586,6 +1599,8 @@ export default function ConsoleSearchPage() {
                   }
                 }}
                 marginTop={detailContent ? 18 : 0}
+                control={detailHotel ? controlMap[detailHotel.id] : undefined}
+                rooms={rooms}
               />
             )}
 
@@ -2654,6 +2669,7 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
         currency: h.priced.currency, ratePlan: h.priced.ratePlan,
         refundable: h.priced.refundable, breakfastIncluded: h.priced.breakfastIncluded,
         cancellationDeadlineUtc: h.priced.cancellationDeadlineUtc, ratesCount: h.priced.ratesCount,
+        transferLabel: h.priced.transferLabel ?? null,
       }] : []);
   // Score the quotes so the highest-scored gets the Recommended border.
   const minSell = Math.min(...quotes
@@ -2724,6 +2740,8 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
             ? <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>{best.cancellationDeadlineUtc ? `Free cancel to ${fmtCancelDate(best.cancellationDeadlineUtc)}` : 'Refundable'}</span>
             : <span style={{ fontSize: 11.5, color: 'var(--c-danger)' }}>Non-refundable</span>)}
           {best?.breakfastIncluded && <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>· Breakfast</span>}
+          {/* Transfer-bundled note — the card "from" price already includes this transfer. */}
+          {best?.transferLabel && <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>· incl. {best.transferLabel}</span>}
         </div>
       </div>
 
@@ -3128,14 +3146,32 @@ function DiscountScanner({
 }
 
 function RoomGroupedRates({
-  rates, onChoose, marginTop = 0
+  rates, onChoose, marginTop = 0, control, rooms = []
 }: {
   rates: AdminRate[];
   onChoose: (r: AdminRate) => void;
   marginTop?: number;
+  // Per-hotel control row (transfer cost) + the search occupancy, so a
+  // room-only rate can show the transfer surcharge a transfer-bundled
+  // (Hummingbird) rate already includes. Makes the comparison apple-to-apple.
+  control?: HotelControl;
+  rooms?: RoomGuests[];
 }) {
   const sp = useSearchParams();
   const showRgDebug = sp.get('debug') === 'rgmatch';
+  // Occupancy totals for the per-rate transfer surcharge (room-only rates).
+  const totalAdults   = rooms.reduce((s, r) => s + (r.adults || 0), 0);
+  const totalChildren = rooms.reduce((s, r) => s + (r.childrenAges?.length || 0), 0);
+  // Per-hotel transfer cost (Tina enters it in Manage → Transfer). Numeric
+  // columns arrive as strings — Number() at the edge. Surcharge = the cost of
+  // adding the transfer ETG/RateHawk omits, for THIS occupancy.
+  const transferAdult = Number(control?.transfer_cost_adult);
+  const transferChild = Number(control?.transfer_cost_child);
+  const transferCurrency = control?.transfer_currency || 'AUD';
+  const hasTransferCost = Number.isFinite(transferAdult) && transferAdult > 0;
+  const transferSurcharge = hasTransferCost
+    ? Math.round(transferAdult * totalAdults + (Number.isFinite(transferChild) ? transferChild : 0) * totalChildren)
+    : null;
   // Group by the precise sub-variant name. roomGroupName is the
   // backend's resolved name from static content — for RateHawk it
   // refines "Ocean Villa" → "Ocean Villa, 1 king bed, ocean view"
@@ -3369,6 +3405,43 @@ function RoomGroupedRates({
                               </div>
                             );
                           })()}
+                          {/* Transfer inclusion tag — make Maldives apple-to-apple.
+                              Transfer-bundled (Hummingbird) rates carry r.transfer
+                              and the PRICE already includes that transfer. Room-only
+                              (RateHawk) rates have no r.transfer; show the per-hotel
+                              transfer surcharge for this occupancy so the consultant
+                              compares like for like. */}
+                          {r.transfer ? (
+                            <div style={{
+                              marginTop: 3,
+                              fontSize: 11,
+                              fontWeight: 600,
+                              color: 'var(--c-success)',
+                              lineHeight: 1.3
+                            }}>
+                              ✓ incl. {r.transfer}
+                            </div>
+                          ) : transferSurcharge != null ? (
+                            <div style={{
+                              marginTop: 3,
+                              fontSize: 11,
+                              fontWeight: 600,
+                              color: '#9a6a00',
+                              lineHeight: 1.3
+                            }}>
+                              room only · +{transferCurrency} {fmtMoney(transferSurcharge)}
+                            </div>
+                          ) : (
+                            <div style={{
+                              marginTop: 3,
+                              fontSize: 11,
+                              fontWeight: 500,
+                              color: 'var(--c-fg-muted)',
+                              lineHeight: 1.3
+                            }}>
+                              room only
+                            </div>
+                          )}
                         </td>
                         <td style={tdStyle}>
                           {r.refundable
