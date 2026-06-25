@@ -245,6 +245,24 @@ function blockedSuppliersOf(c?: HotelControl | null): string[] {
   return Array.from(set);
 }
 
+// Name-relevance score of a hotel name against the search query, so a
+// hotel-NAME search ("Fairmont Quasar Istanbul") pins the property the
+// consultant actually typed to the top instead of letting the cheapest
+// unrelated "Fairmont …" win on price. Returns 0 for destination-style
+// queries (a single word like "Dubai") so those keep cheapest-first order.
+function nameMatchScore(name: string | null | undefined, query: string): number {
+  const n = String(name || '').toLowerCase();
+  const qn = String(query || '').toLowerCase().trim();
+  const tokens = qn.split(/\s+/).filter((t) => t.length >= 3);
+  // Single-token query → treat as a destination search; don't reorder by name.
+  if (tokens.length < 2) return 0;
+  let hits = 0;
+  for (const t of tokens) if (n.includes(t)) hits++;
+  // Whole-name exact match gets a decisive boost over partial token matches.
+  const exact = n === qn ? 10 : 0;
+  return hits + exact;
+}
+
 // True when the hotel is in a state Tina should notice at a glance.
 function controlFlagged(c?: HotelControl | null): boolean {
   if (!c) return false;
@@ -698,6 +716,13 @@ export default function ConsoleSearchPage() {
           }
         };
       }).sort((a, b) => {
+        // Hotel-NAME search: the property the consultant typed pins to the top,
+        // regardless of price (a name match is what they asked for). Falls back
+        // to cheapest-first for destination searches (nameMatchScore === 0).
+        const nq = lastSearchRef.current?.q || '';
+        const an = nameMatchScore(a.name, nq);
+        const bn = nameMatchScore(b.name, nq);
+        if (an !== bn) return bn - an;
         // available first, cheapest first
         const aa = a.priced?.available ? (a.priced.sellNightly ?? Infinity) : Infinity;
         const bb = b.priced?.available ? (b.priced.sellNightly ?? Infinity) : Infinity;
@@ -2424,6 +2449,11 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                       );
                     })}
                   </div>
+                  {form.blocked_suppliers.length > 0 && (
+                    <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', marginTop: 8 }}>
+                      Add the reason in <strong>Internal notes</strong> below (e.g. “RateHawk excludes Harbour meals — book via Expedia”). It shows on the result card and on the “No&nbsp;RateHawk” badge.
+                    </div>
+                  )}
                 </div>
               </ManageGroup>
 
@@ -2678,7 +2708,7 @@ function Field({ label, children, style }: { label: string; children: React.Reac
 // opening the drawer.
 function ControlBadge({ control }: { control: HotelControl }) {
   const s = control.network_status;
-  const labels: Array<{ text: string; color: string }> = [];
+  const labels: Array<{ text: string; color: string; title?: string }> = [];
   // Luxury curation tier — surfaced even on otherwise-active hotels.
   if (control.luxury_tier === '5plus')     labels.push({ text: '5★+',  color: '#9a6a00' });
   if (control.luxury_tier === '5plusplus') labels.push({ text: '5★++', color: '#9a6a00' });
@@ -2686,19 +2716,26 @@ function ControlBadge({ control }: { control: HotelControl }) {
   if (s === 'hidden')  labels.push({ text: 'Hidden',  color: '#6b7280' });
   if (s === 'deleted') labels.push({ text: 'Deleted', color: '#b91c1c' });
   // One "No <Supplier>" badge per blocked supplier (generalizes "No RateHawk").
+  // The internal note (the "why we blocked it" reason) rides along as a tooltip
+  // so a consultant can see the rationale on hover without opening Manage.
+  const blockReason = (control.internal_notes || '').trim();
   for (const key of blockedSuppliersOf(control)) {
     const known = BLOCKABLE_SUPPLIERS.find(b => b.key === key);
     const name = known ? known.label : (key.charAt(0).toUpperCase() + key.slice(1));
-    labels.push({ text: `No ${name}`, color: known?.color || '#7c3aed' });
+    labels.push({
+      text: `No ${name}`,
+      color: known?.color || '#7c3aed',
+      title: blockReason ? `Blocked — ${blockReason}` : `${name} blocked for this hotel`,
+    });
   }
   if (labels.length === 0) return null;
   return (
     <>
       {labels.map((l) => (
-        <span key={l.text} style={{
+        <span key={l.text} title={l.title} style={{
           fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
           color: l.color, border: `1px solid ${l.color}33`, background: `${l.color}11`,
-          padding: '2px 8px', borderRadius: 999
+          padding: '2px 8px', borderRadius: 999, cursor: l.title ? 'help' : undefined
         }}>{l.text}</span>
       ))}
     </>
@@ -2793,6 +2830,15 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
           {/* Transfer-bundled note — the card "from" price already includes this transfer. */}
           {best?.transferLabel && <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>· incl. {best.transferLabel}</span>}
         </div>
+        {/* Why a supplier is blocked — the consultant's note, shown inline so the
+            rationale (e.g. "RateHawk excludes Harbour meals; book via Expedia")
+            is visible at a glance, not only on hover or inside Manage. */}
+        {blockedSuppliersOf(control).length > 0 && (control?.internal_notes || '').trim() && (
+          <div style={{ fontSize: 11.5, color: '#b45309', display: 'flex', gap: 4, alignItems: 'flex-start', maxWidth: 520 }}>
+            <span aria-hidden>⚠</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(control!.internal_notes || '').trim()}</span>
+          </div>
+        )}
       </div>
 
       {/* Headline price — cheapest/recommended across suppliers */}
