@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 //   "Maldives") so the dropdown reads consistently.
 // The Meilisearch key + booking key never reach the browser.
 
-const MEILI_HOST = process.env.MEILI_HOST || 'http://34.9.214.217:7700';
+const MEILI_HOST = process.env.MEILI_HOST || 'http://34.40.151.242:7700';
 const MEILI_KEY = process.env.MEILI_SEARCH_API_KEY || '';
 const BOOKING_API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.australia-southeast1.run.app';
 const BOOKING_API_KEY = process.env.BOOKING_API_KEY || '';

@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Hotel } from 'lucide-react';
 
-const MEILI_HOST = process.env.NEXT_PUBLIC_MEILI_HOST || 'http://34.9.214.217:7700';
+const MEILI_HOST = process.env.NEXT_PUBLIC_MEILI_HOST || 'http://34.40.151.242:7700';
 const MEILI_API_KEY = process.env.NEXT_PUBLIC_MEILI_SEARCH_API_KEY || '';
 
 interface Hotel {
