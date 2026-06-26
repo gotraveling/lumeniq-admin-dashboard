@@ -39,6 +39,16 @@ type HotelHit = {
   // Enriched after the compare call:
   priced?: {
     available: boolean;
+    // Why a hotel came back unavailable, straight from the compare API
+    // (`supplier_error` | `no_rates` | `no_data` | `hotel_excluded_from_search`).
+    // `supplier_error`/`no_data` are TRANSIENT (supplier timeout / rate-limit /
+    // cold start) — distinct from a genuine `no_rates` sold-out. We keep this so
+    // a slow-but-working search isn't rendered as "0 bookable".
+    reason?: string;
+    // Set when `reason` is transient AND we have a retry pending for this hotel.
+    // Retryable hotels render as still-resolving (skeleton), never as
+    // "unavailable", so an in-flight retry can't make the page look empty.
+    retryable?: boolean;
     supplier?: string;          // cheapest-supplier surfaced on the card (= cheapestSupplier from compare)
     sellNightly?: number;
     sellTotal?: number;
@@ -619,10 +629,30 @@ export default function ConsoleSearchPage() {
     }
   }
 
-  async function enrichPrices(ids: number[], datesOverride?: { checkIn: string; checkOut: string }) {
+  // Retry budget for transient compare failures. The compare fan-out makes ONE
+  // bulk supplier call per page; a single supplier timeout / 429 / cold start
+  // marks the WHOLE page unavailable even though the hotels are bookable (the
+  // backend correctly never caches that, so a manual re-search "just works").
+  // We make that retry automatic and invisible: on a whole-page failure or on
+  // hotels that came back with a transient `reason`, we re-probe ONCE before
+  // letting anything render as genuinely unavailable. `attempt` caps recursion.
+  async function enrichPrices(
+    ids: number[],
+    datesOverride?: { checkIn: string; checkOut: string },
+    attempt = 0
+  ) {
     if (ids.length === 0) return;
     const useCheckIn = datesOverride?.checkIn ?? checkIn;
     const useCheckOut = datesOverride?.checkOut ?? checkOut;
+    const canRetry = attempt < 1;
+    // When we schedule a retry we keep the global "enriching" flag ON so the UI
+    // shows the spinner (not the "N unavailable hidden" line) across the gap.
+    let retryScheduled = false;
+    const scheduleRetry = (retryIds: number[]) => {
+      if (!canRetry || retryIds.length === 0) return;
+      retryScheduled = true;
+      setTimeout(() => { void enrichPrices(retryIds, datesOverride, attempt + 1); }, 1500);
+    };
     setEnriching(true);
     try {
       const body = {
@@ -637,13 +667,32 @@ export default function ConsoleSearchPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      const json = await res.json();
-      if (!json.success) return;
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        // Whole-page failure (proxy timeout / 5xx / supplier rate-limit on the
+        // bulk call). Re-probe the SAME ids once before giving up; leave the
+        // cards in their pending (skeleton) state so the page never collapses
+        // to "0 bookable" on a transient blip.
+        scheduleRetry(ids);
+        return;
+      }
+      const results: any[] = json.data.results || [];
       const byId = new Map<number, any>();
-      for (const r of (json.data.results || [])) byId.set(Number(r.hotelId), r);
+      for (const r of results) byId.set(Number(r.hotelId), r);
+      // Hotels whose unavailability is transient → re-probe just those.
+      const transientReasons = new Set(['supplier_error', 'no_data']);
+      const retryIds = canRetry
+        ? results.filter(r => !r.available && transientReasons.has(r.reason)).map(r => Number(r.hotelId))
+        : [];
+      const retrySet = new Set(retryIds);
       setHits(curr => curr.map(h => {
         const r = byId.get(h.id);
-        if (!r || !r.available) return { ...h, priced: { available: false } };
+        if (!r || !r.available) {
+          // Distinguish "still resolving (will retry)" from genuinely sold out
+          // so the count line + filter treat them differently (see
+          // pendingCount / unavailableCount).
+          return { ...h, priced: { available: false, reason: r?.reason, retryable: retrySet.has(h.id) } };
+        }
         // ETG cert §10 — hotel may be available without a quotable
         // headline price (all rates on-request, supplier echoed
         // null amounts). Card surfaces "Price on request" so it
@@ -728,10 +777,16 @@ export default function ConsoleSearchPage() {
         const bb = b.priced?.available ? (b.priced.sellNightly ?? Infinity) : Infinity;
         return aa - bb;
       }));
+      // Re-probe the transient-failure subset once (supplier timeout / 429).
+      scheduleRetry(retryIds);
     } catch {
-      /* swallow — leaves cards without price badge */
+      // Network error talking to the compare endpoint — retry the same ids once
+      // rather than leaving the page looking empty.
+      scheduleRetry(ids);
     } finally {
-      setEnriching(false);
+      // Keep the spinner up across a pending retry so the UI reads "still
+      // checking", not "0 bookable".
+      if (!retryScheduled) setEnriching(false);
     }
   }
 
@@ -1187,9 +1242,18 @@ export default function ConsoleSearchPage() {
     });
   }, [hits, filterSupplier, filterRefundable, showUnavailable]);
 
-  // Count of hits still resolving — drives skeleton row count.
-  const pendingCount = useMemo(() => hits.filter(h => h.priced === undefined).length, [hits]);
-  const unavailableCount = useMemo(() => hits.filter(h => h.priced && !h.priced.available).length, [hits]);
+  // Count of hits still resolving — drives skeleton row count. A hotel whose
+  // first probe failed transiently (retryable) is STILL resolving (a retry is
+  // in flight), so it counts as pending, never as unavailable — otherwise an
+  // in-flight retry would render the page as "N unavailable hidden".
+  const pendingCount = useMemo(
+    () => hits.filter(h => h.priced === undefined || (h.priced && !h.priced.available && h.priced.retryable)).length,
+    [hits]
+  );
+  const unavailableCount = useMemo(
+    () => hits.filter(h => h.priced && !h.priced.available && !h.priced.retryable).length,
+    [hits]
+  );
 
   // Bulk-load control rows for the visible hits so each card can show a
   // state badge. Keyed on the comma-joined id list so it only re-fires when
