@@ -185,6 +185,8 @@ type HotelControl = {
   // Supersedes use_ratehawk; use_ratehawk is kept written for back-compat.
   blocked_suppliers?: string[] | null;
   markup_override_pct?: string | number | null;
+  // admin-controlled "Recommended" sort override (migration 021)
+  recommend_rank?: string | number | null;
   transfer_type?: string | null;
   transfer_included_override?: boolean | null;
   transfer_cost_adult?: string | number | null;
@@ -1945,6 +1947,7 @@ type ManageForm = {
   // Lowercase supplier keys currently blocked for this hotel (e.g. ['ratehawk']).
   blocked_suppliers: string[];
   markup_override_pct: string;
+  recommend_rank: string;
   transfer_type: string;
   // tri-state: '' = auto (null), 'yes' = true, 'no' = false
   transfer_included_override: '' | 'yes' | 'no';
@@ -2039,6 +2042,7 @@ function controlToForm(c: HotelControl | null): ManageForm {
     // Folds legacy use_ratehawk===false into 'ratehawk' so existing data shows.
     blocked_suppliers: blockedSuppliersOf(c),
     markup_override_pct: str(c?.markup_override_pct),
+    recommend_rank: str(c?.recommend_rank),
     transfer_type: str(c?.transfer_type),
     transfer_included_override: triState(c?.transfer_included_override),
     transfer_cost_adult: str(c?.transfer_cost_adult),
@@ -2301,6 +2305,7 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
       blocked_suppliers: blocked,
       use_ratehawk: !blocked.includes('ratehawk'),
       markup_override_pct: num(f.markup_override_pct),
+      recommend_rank: intNum(f.recommend_rank),
       transfer_type: txt(f.transfer_type),
       transfer_included_override: f.transfer_included_override === '' ? null : f.transfer_included_override === 'yes',
       transfer_cost_adult: num(f.transfer_cost_adult),
@@ -2499,6 +2504,15 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                       <option value="5plus">5★+ (5plus)</option>
                       <option value="5plusplus">5★++ (5plusplus)</option>
                     </select>
+                  </Field>
+                  <Field label="Recommended rank">
+                    <input className="c-input" type="number" inputMode="numeric"
+                      value={form.recommend_rank}
+                      onChange={(e) => set('recommend_rank', e.target.value)}
+                      placeholder="0 = auto" />
+                    <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', marginTop: 4 }}>
+                      Pins this hotel higher in public “Recommended”. Beats collection + tier. 0 = automatic.
+                    </div>
                   </Field>
                 </div>
                 <div style={{ marginTop: 12 }}>
