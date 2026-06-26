@@ -2433,7 +2433,7 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
       {loadErr && <div style={{ fontSize: 13, color: 'var(--c-danger)' }}>Error: {loadErr}</div>}
 
       {!loading && !loadErr && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
           {/* ── Airport proximity (always shown; the only group in fast-tag) ── */}
           <ManageGroup title="Airport proximity">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
@@ -2474,12 +2474,24 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
               <ManageGroup title="Visibility">
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
                   <Field label="Network status">
-                    <select className="c-select" value={form.network_status} onChange={(e) => set('network_status', e.target.value as NetworkStatus)}>
-                      <option value="active">Active</option>
-                      <option value="paused">Paused (kept, hidden from site)</option>
-                      <option value="hidden">Hidden</option>
-                      <option value="deleted">Deleted</option>
-                    </select>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: 2 }}>
+                      {([
+                        ['active',  'Active'],
+                        ['paused',  'Paused (kept, hidden from site)'],
+                        ['hidden',  'Hidden'],
+                        ['deleted', 'Deleted'],
+                      ] as Array<[NetworkStatus, string]>).map(([val, label]) => (
+                        <label key={val} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: form.network_status === val ? 'var(--c-fg)' : 'var(--c-fg-soft)' }}>
+                          <input
+                            type="radio"
+                            name="network_status"
+                            checked={form.network_status === val}
+                            onChange={() => set('network_status', val)}
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
                   </Field>
                   <Field label="Curation (luxury tier)">
                     <select className="c-select" value={form.luxury_tier} onChange={(e) => set('luxury_tier', e.target.value as ManageForm['luxury_tier'])}>
@@ -2749,10 +2761,14 @@ const checkLabelStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, color: 'var(--c-fg)', cursor: 'pointer'
 };
 
+// Each section of the Manage panel is a labelled block: an uppercase header with
+// a thin divider rule under it, separated from the next by generous whitespace.
+// No enclosing border/box — clean sectioning (à la Luxury Escapes) so the long
+// form reads as distinct groups without feeling boxy.
 function ManageGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-fg-soft)', marginBottom: 8 }}>{title}</div>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-fg-muted)', marginBottom: 14, paddingBottom: 8, borderBottom: '1px solid var(--c-line)' }}>{title}</div>
       {children}
     </div>
   );
@@ -3332,6 +3348,11 @@ function RoomGroupedRates({
   const transferAdult = Number(control?.transfer_cost_adult);
   const transferChild = Number(control?.transfer_cost_child);
   const transferCurrency = control?.transfer_currency || 'AUD';
+  // Suppliers blocked for THIS hotel (e.g. ['ratehawk']). Their rates still
+  // appear in the console by design (so the consultant can see what they're
+  // excluding), but we grey + strike them and tag "Blocked" so it's obvious
+  // this rate will NOT be sold on the public site.
+  const blockedSet = useMemo(() => new Set(blockedSuppliersOf(control)), [control]);
   const hasTransferCost = Number.isFinite(transferAdult) && transferAdult > 0;
   const transferSurcharge = hasTransferCost
     ? Math.round(transferAdult * totalAdults + (Number.isFinite(transferChild) ? transferChild : 0) * totalChildren)
@@ -3530,14 +3551,25 @@ function RoomGroupedRates({
                   <tbody>
                     {visibleRates.map((r, i) => {
                       const isRecommended = r.rateKey === g.recommendedKey;
+                      const rowBlocked = blockedSet.has((r.supplier || '').toLowerCase());
                       const rowBorder = isRecommended
                         ? '1.5px solid var(--c-accent)'
                         : '1px solid var(--c-line-soft)';
-                      const rowBg = isRecommended ? 'rgba(155,123,51,0.04)' : undefined;
+                      const rowBg = rowBlocked
+                        ? 'rgba(185,28,28,0.05)'
+                        : isRecommended ? 'rgba(155,123,51,0.04)' : undefined;
                       return (
-                      <tr key={i} style={{ borderTop: rowBorder, background: rowBg }}>
+                      <tr key={i} style={{ borderTop: rowBorder, background: rowBg, opacity: rowBlocked ? 0.55 : 1 }}>
                         <td style={tdStyle}>
-                          {r.supplier && <span style={badgeStyle(r.supplier)}>{r.supplier}</span>}
+                          {r.supplier && (
+                            <span style={{ ...badgeStyle(r.supplier), textDecoration: rowBlocked ? 'line-through' : undefined }}>{r.supplier}</span>
+                          )}
+                          {rowBlocked && (
+                            <span
+                              title="Blocked for this hotel — will not be sold on the public site"
+                              style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 999, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#b91c1c', background: 'rgba(185,28,28,0.1)', border: '1px solid rgba(185,28,28,0.3)' }}
+                            >Blocked</span>
+                          )}
                           {r._channel && (
                             <span style={channelBadgeStyle(r._channel)}>
                               {r._channel === 'cug' ? 'Member' : 'Non-Member'}
