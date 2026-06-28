@@ -42,7 +42,7 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
     items: [
       { href: '/console/bookings',         label: 'Bookings',        icon: ClipboardList },
       { href: '/console/search',           label: 'B2B Search',      icon: Search },
-      { href: '/console/ai',               label: 'AI Agent',        icon: Sparkles },
+      // AI Agent search disabled — driven via MCP now (2026-06-28)
       { href: '/console/search-activity',  label: 'Search Activity', icon: BarChart3 },
     ],
   },

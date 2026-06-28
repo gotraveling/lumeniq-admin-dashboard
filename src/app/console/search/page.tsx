@@ -1382,7 +1382,7 @@ export default function ConsoleSearchPage() {
         {/* Empty state */}
         {hits.length === 0 && !searching && !tierChip && !activeProfile && (
           <div className="c-card" style={{ padding: 32, textAlign: 'center', color: 'var(--c-fg-muted)', fontSize: 13 }}>
-            Type a destination or hotel name above, or ask the agent on the right.
+            Type a destination or hotel name above to start searching.
           </div>
         )}
 
