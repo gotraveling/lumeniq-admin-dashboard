@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
-import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle, X, Plus, Maximize2, Minimize2, Image as ImageIcon } from 'lucide-react';
+import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle, X, Plus, Maximize2, Minimize2, Image as ImageIcon, StickyNote } from 'lucide-react';
 import DestinationAutocomplete, { type DestinationAutocompleteHandle } from '@/components/console/DestinationAutocomplete';
 import CountryPicker from '@/components/console/CountryPicker';
 import ReactMarkdown from 'react-markdown';
@@ -1644,6 +1644,18 @@ export default function ConsoleSearchPage() {
               onSaved={(row) => refreshControl(detailHotel.id, row)}
               onCloseDrawer={() => { setDetailHotel(null); setDetailExpanded(false); setEditingSearch(false); syncUrl({ hotelId: null }); }}
             />
+            {/* Internal note (hotel_control.internal_notes) surfaced for the
+                consultant right under the Manage button. Updates live on save
+                via refreshControl. Only shown when a note exists. */}
+            {controlMap[detailHotel.id]?.internal_notes?.trim() && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 14, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-line)', background: 'var(--c-bg-soft)' }}>
+                <StickyNote size={14} style={{ color: 'var(--c-accent)', flexShrink: 0, marginTop: 2 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--c-fg-muted)', marginBottom: 2 }}>Internal note</div>
+                  <div style={{ fontSize: 13, color: 'var(--c-fg)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{controlMap[detailHotel.id]!.internal_notes}</div>
+                </div>
+              </div>
+            )}
             {ratesErr && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 10 }}>Error: {ratesErr}</div>}
 
             {/* Hotel info section — appears above the rate list so the
