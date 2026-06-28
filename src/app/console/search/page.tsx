@@ -497,6 +497,9 @@ export default function ConsoleSearchPage() {
   // backend can stamp the row with the booking id later.
   const [searchId, setSearchId]                       = useState<string | null>(null);
   const [recommendedRateKey, setRecommendedRateKey]   = useState<string | null>(null);
+  // API consolidation block (services/presentRates) — source of truth for the
+  // per-room meal/transfer matrix; falls back to the local builder when absent.
+  const [presentation, setPresentation] = useState<any>(null);
   // Prebook state — set when the consultant picks a rate. We verify
   // availability + price BEFORE they fill the form. Per ETG cert §1.1
   // ("Moving prebook to the separate step is also highly recommended").
@@ -873,6 +876,7 @@ export default function ConsoleSearchPage() {
       }
       if (!json.success) throw new Error(json.details ? `${json.error}: ${json.details}` : (json.error || 'rates failed'));
       setRates((json.data.rates || []).map((r: AdminRate) => ({ ...r, _channel: channel })));
+      setPresentation(json.data.presentation || null);
       setDetailContent(json.data.hotel || null);
       // Persist the rate_decisions audit trail id so /choose and
       // /api/bookings can stamp the same row when the consultant
@@ -1717,6 +1721,7 @@ export default function ConsoleSearchPage() {
             {rates.length > 0 && (
               <RoomGroupedRates
                 rates={supplierFocus ? rates.filter(r => r.supplier === supplierFocus) : rates}
+                presentation={presentation}
                 onChoose={(r) => {
                   setChosenRate(r);
                   // Audit: tell the backend which rate the consultant
@@ -3429,12 +3434,36 @@ function buildAdminMatrix(list: AdminRate[]): AdminMatrix | null {
   return { meals, transfers, hasTransfers, byCombo, defaultMeal: meals[0] || '', defaultTransfer: cheapT, from };
 }
 
+// Adapt the API's presentation block (services/presentRates) into the same
+// AdminMatrix shape, resolving rateKeys against the group's rates. Source of
+// truth; buildAdminMatrix above is the fallback for pre-deploy responses.
+function adminMatrixFromPresentation(p: any, list: AdminRate[]): AdminMatrix | null {
+  if (!p || !Array.isArray(p.options) || !p.options.length) return null;
+  const byKey = new Map(list.map((r) => [r.rateKey, r]));
+  const byCombo = new Map<string, AdminRate>();
+  for (const o of p.options) {
+    const r = byKey.get(o.rateKey);
+    if (r) byCombo.set(admKey(o.meal, o.transfer), r);
+  }
+  if (!byCombo.size) return null;
+  const from = byKey.get(p.fromRateKey) || Array.from(byCombo.values())[0]!;
+  const defOpt = p.options.find((o: any) => o.rateKey === p.defaultRateKey);
+  return {
+    meals: p.meals, transfers: p.transfers, hasTransfers: p.hasTransfers, byCombo,
+    defaultMeal: defOpt?.meal ?? (p.meals[0] || ''),
+    defaultTransfer: defOpt?.transfer ?? (p.transfers[0] || ''),
+    from,
+  };
+}
+
 function RoomGroupedRates({
-  rates, onChoose, marginTop = 0, control, rooms = [], roomMap
+  rates, onChoose, marginTop = 0, control, rooms = [], roomMap, presentation
 }: {
   rates: AdminRate[];
   onChoose: (r: AdminRate) => void;
   marginTop?: number;
+  // API consolidation block (services/presentRates), looked up per room by name.
+  presentation?: any;
   // Per-hotel control row (transfer cost) + the search occupancy, so a
   // room-only rate can show the transfer surcharge a transfer-bundled
   // (Hummingbird) rate already includes. Makes the comparison apple-to-apple.
@@ -3567,6 +3596,14 @@ function RoomGroupedRates({
   // falls back to the matrix default (cheapest meal + Speedboat).
   const [selMeal, setSelMeal] = useState<Record<string, string>>({});
   const [selTransfer, setSelTransfer] = useState<Record<string, string>>({});
+  const presByName = useMemo(() => {
+    const m = new Map<string, any>();
+    for (const r of (presentation?.rooms || [])) {
+      if (r?.name) m.set(r.name, r);
+      if (r?.groupKey) m.set(r.groupKey, r);
+    }
+    return m;
+  }, [presentation]);
   // Room-photos lightbox — opened from a per-room "View photos" button.
   const [photoModal, setPhotoModal] = useState<{ name: string; images: string[] } | null>(null);
 
@@ -3602,7 +3639,7 @@ function RoomGroupedRates({
         // Meal × transfer matrix for the collapsed (default) view: one row,
         // dropdowns to switch. Skipped in compare mode (which pairs the
         // Member/Non-Member twins instead) and when expanded.
-        const matrix = buildAdminMatrix(g.rates);
+        const matrix = adminMatrixFromPresentation(presByName.get(g.name), g.rates) || buildAdminMatrix(g.rates);
         const selM = matrix && selMeal[g.name] && matrix.meals.includes(selMeal[g.name]) ? selMeal[g.name] : (matrix?.defaultMeal || '');
         const selT = matrix && selTransfer[g.name] && matrix.transfers.includes(selTransfer[g.name]) ? selTransfer[g.name] : (matrix?.defaultTransfer || '');
         const selectedRate = matrix ? (matrix.byCombo.get(admKey(selM, selT)) || matrix.from) : null;
