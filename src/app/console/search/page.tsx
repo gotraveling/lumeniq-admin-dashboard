@@ -3173,6 +3173,7 @@ type ScanRow = {
   pct: number | null;
   offerName: string | null;
   currency: string | null;
+  fxRate: number | null; // USD→AUD, so the scanner can lead with AUD like the rate table
 };
 
 function DiscountScanner({
@@ -3204,7 +3205,7 @@ function DiscountScanner({
         return { checkIn, checkOut };
       });
       const rows = await Promise.all(windows.map(async (w): Promise<ScanRow> => {
-        const empty: ScanRow = { checkIn: w.checkIn, gross: null, discount: null, nett: null, pct: null, offerName: null, currency: null };
+        const empty: ScanRow = { checkIn: w.checkIn, gross: null, discount: null, nett: null, pct: null, offerName: null, currency: null, fxRate: null };
         try {
           const qs = new URLSearchParams({
             checkIn: w.checkIn, checkOut: w.checkOut,
@@ -3235,6 +3236,7 @@ function DiscountScanner({
             gross, discount, nett, pct,
             offerName: best.offers?.[0]?.name ?? null,
             currency: best.pricing.currency,
+            fxRate: best.pricing.aud?.fxRate ?? null,
           };
         } catch {
           return empty;
@@ -3309,21 +3311,32 @@ function DiscountScanner({
               const hasRate = row.pct != null;
               const isBest = hasRate && maxPct > 0 && row.pct === maxPct;
               const accent = isBest ? 'var(--c-accent)' : 'var(--c-fg)';
-              const num = (v: number | null, suffix = '') =>
-                v == null ? '—' : `${fmtMoney(v)}${suffix}`;
+              // AUD primary (converted via the rate's fxRate) with the supplier
+              // USD small beneath — matches the rate table. Falls back to USD
+              // only when no fxRate is available.
+              const money = (v: number | null) => {
+                if (v == null) return <>—</>;
+                if (row.fxRate) return (
+                  <>
+                    {fmtMoney(v * row.fxRate)} AUD
+                    <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)' }}>{fmtMoney(v)} {row.currency}</div>
+                  </>
+                );
+                return <>{fmtMoney(v)} {row.currency}</>;
+              };
               return (
                 <tr key={i} style={{ borderTop: '1px solid var(--c-line-soft)', background: isBest ? 'rgba(155,123,51,0.06)' : undefined }}>
                   <td style={{ ...tdStyle, fontFamily: 'var(--c-mono)' }}>{fmtScanDate(row.checkIn)}</td>
                   {hasRate ? (
                     <>
                       <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'var(--c-mono)' }}>
-                        {num(row.gross)} {row.currency}
+                        {money(row.gross)}
                       </td>
                       <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'var(--c-mono)', fontWeight: isBest ? 700 : 500, color: accent }}>
                         {row.pct}%
                       </td>
                       <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'var(--c-mono)' }}>
-                        {num(row.nett)} {row.currency}
+                        {money(row.nett)}
                       </td>
                       <td style={{ ...tdStyle, color: 'var(--c-fg-soft)' }}>{row.offerName || '—'}</td>
                     </>
