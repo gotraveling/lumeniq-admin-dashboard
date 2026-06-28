@@ -3341,46 +3341,15 @@ function DiscountScanner({
 }
 
 // ── Meal × transfer matrix (B2B) ─────────────────────────────────────────────
-// A room can carry many rate combos (Patina = 5 meals × 4 transfers). Instead of
-// listing them all, the table collapses to ONE row defaulting to the cheapest
-// meal + Speedboat, with Meal + Transfer dropdowns to switch (full list still
-// reachable via "Show all rates"). Pure + data-driven; supplier-agnostic
-// (RateHawk carries no transfer → that dropdown doesn't render).
-function admMealSeg(r: AdminRate): string {
-  return String(r.ratePlan || 'Room Only').split('·')[0].trim() || 'Room Only';
-}
-function admMealDisplay(seg: string): string {
-  const l = seg.toLowerCase();
-  if (l === 'nomeal' || l === 'room only' || l === 'rate-only') return 'Room Only';
-  return seg.replace(/\b\w/g, (c) => c.toUpperCase());
-}
+// The consolidation rules now live in the booking-engine API
+// (services/presentRates); the console renders that block via
+// adminMatrixFromPresentation below. These two helpers remain for the per-row
+// Enhanced filter and cheapest-recommend ordering.
 function admIsEnhanced(r: AdminRate): boolean {
   return /enhanced/i.test(String(r.ratePlan || ''));
 }
 function admSellTotal(r: AdminRate): number {
   return r.pricing?.sell?.totalAmount ?? Infinity;
-}
-function admTransferRank(t: string): number {
-  const l = (t || '').toLowerCase();
-  if (!l) return 9;
-  if (l.includes('private') && l.includes('speedboat')) return 1;
-  if (l.includes('speedboat')) return 0;
-  if (l.includes('seaplane')) return 2;
-  if (l.includes('yacht')) return 3;
-  return 4;
-}
-function admMealRank(m: string): number {
-  const l = m.toLowerCase();
-  if (l.includes('complimentary')) return 1; // the free-upgrade lead row
-  if (l.includes('room only')) return 0;
-  if (l.includes('breakfast')) return 1;
-  if (l.includes('half')) return 2;
-  if (l.includes('full')) return 3;
-  return 4;
-}
-function admUpgradeLabel(mealLabel: string): string {
-  const name = mealLabel.replace(/\s*included$/i, '').trim() || mealLabel;
-  return `Complimentary ${name} Upgrade`;
 }
 const admKey = (meal: string, transfer: string) => `${meal}|${transfer}`;
 interface AdminMatrix {
@@ -3392,51 +3361,10 @@ interface AdminMatrix {
   defaultTransfer: string;
   from: AdminRate;
 }
-function buildAdminMatrix(list: AdminRate[]): AdminMatrix | null {
-  const usable = (list || []).filter((r) => !admIsEnhanced(r) && admSellTotal(r) < Infinity);
-  if (!usable.length) return null;
-  const byCombo = new Map<string, AdminRate>();
-  for (const r of usable) {
-    const k = admKey(admMealDisplay(admMealSeg(r)), r.transfer || '');
-    const cur = byCombo.get(k);
-    if (!cur || admSellTotal(r) < admSellTotal(cur)) byCombo.set(k, r);
-  }
-  const transfers = Array.from(new Set(usable.map((r) => r.transfer || '').filter(Boolean)))
-    .sort((a, b) => admTransferRank(a) - admTransferRank(b));
-  const hasTransfers = transfers.length > 0;
-  const tKeys = hasTransfers ? transfers : [''];
-  // Collapse equal-priced meal tiers (data-driven): when the cheapest meals tie
-  // in price, keep only the highest tier and label it as a complimentary
-  // upgrade. Fallback: no tie → meals shown as-is.
-  const cheapT = tKeys[0];
-  const mealsAtCheap = Array.from(byCombo.keys()).filter((k) => k.endsWith(`|${cheapT}`)).map((k) => k.split('|')[0]);
-  const priceOfMeal = (mm: string) => admSellTotal(byCombo.get(admKey(mm, cheapT)) || ({} as AdminRate));
-  if (mealsAtCheap.length > 1) {
-    const minP = Math.min(...mealsAtCheap.map(priceOfMeal));
-    const tied = mealsAtCheap.filter((mm) => Math.round(priceOfMeal(mm)) === Math.round(minP));
-    if (tied.length > 1) {
-      const keep = tied.slice().sort((a, b) => admMealRank(b) - admMealRank(a))[0];
-      const upgraded = admUpgradeLabel(keep);
-      for (const t of tKeys) {
-        for (const mm of tied) {
-          const rate = byCombo.get(admKey(mm, t));
-          byCombo.delete(admKey(mm, t));
-          if (mm === keep && rate) byCombo.set(admKey(upgraded, t), rate);
-        }
-      }
-    }
-  }
-  const cheapestForMeal = (m: string) =>
-    Math.min(...tKeys.map((t) => admSellTotal(byCombo.get(admKey(m, t)) || ({} as AdminRate))));
-  const meals = Array.from(new Set(Array.from(byCombo.keys()).map((k) => k.split('|')[0])))
-    .sort((a, b) => admMealRank(a) - admMealRank(b) || cheapestForMeal(a) - cheapestForMeal(b));
-  const from = Array.from(byCombo.values()).reduce((m, r) => (admSellTotal(r) < admSellTotal(m) ? r : m));
-  return { meals, transfers, hasTransfers, byCombo, defaultMeal: meals[0] || '', defaultTransfer: cheapT, from };
-}
 
-// Adapt the API's presentation block (services/presentRates) into the same
-// AdminMatrix shape, resolving rateKeys against the group's rates. Source of
-// truth; buildAdminMatrix above is the fallback for pre-deploy responses.
+// Adapt the API's presentation block (services/presentRates) into the
+// AdminMatrix shape the table renders, resolving rateKeys against the group's
+// rates. Single source of truth.
 function adminMatrixFromPresentation(p: any, list: AdminRate[]): AdminMatrix | null {
   if (!p || !Array.isArray(p.options) || !p.options.length) return null;
   const byKey = new Map(list.map((r) => [r.rateKey, r]));
@@ -3639,7 +3567,7 @@ function RoomGroupedRates({
         // Meal × transfer matrix for the collapsed (default) view: one row,
         // dropdowns to switch. Skipped in compare mode (which pairs the
         // Member/Non-Member twins instead) and when expanded.
-        const matrix = adminMatrixFromPresentation(presByName.get(g.name), g.rates) || buildAdminMatrix(g.rates);
+        const matrix = adminMatrixFromPresentation(presByName.get(g.name), g.rates);
         const selM = matrix && selMeal[g.name] && matrix.meals.includes(selMeal[g.name]) ? selMeal[g.name] : (matrix?.defaultMeal || '');
         const selT = matrix && selTransfer[g.name] && matrix.transfers.includes(selTransfer[g.name]) ? selTransfer[g.name] : (matrix?.defaultTransfer || '');
         const selectedRate = matrix ? (matrix.byCombo.get(admKey(selM, selT)) || matrix.from) : null;
