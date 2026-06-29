@@ -1644,18 +1644,15 @@ export default function ConsoleSearchPage() {
               onSaved={(row) => refreshControl(detailHotel.id, row)}
               onCloseDrawer={() => { setDetailHotel(null); setDetailExpanded(false); setEditingSearch(false); syncUrl({ hotelId: null }); }}
             />
-            {/* Internal note (hotel_control.internal_notes) surfaced for the
-                consultant right under the Manage button. Updates live on save
-                via refreshControl. Only shown when a note exists. */}
-            {controlMap[detailHotel.id]?.internal_notes?.trim() && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 14, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-line)', background: 'var(--c-bg-soft)' }}>
-                <StickyNote size={14} style={{ color: 'var(--c-accent)', flexShrink: 0, marginTop: 2 }} />
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--c-fg-muted)', marginBottom: 2 }}>Internal note</div>
-                  <div style={{ fontSize: 13, color: 'var(--c-fg)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{controlMap[detailHotel.id]!.internal_notes}</div>
-                </div>
-              </div>
-            )}
+            {/* Internal note surfaced + editable right under the Manage button
+                (same control field as the Manage panel + MCP set_hotel_note).
+                Shows an "Add internal note" button when empty. */}
+            <InlineNote
+              hotelId={detailHotel.id}
+              note={controlMap[detailHotel.id]?.internal_notes || ''}
+              userEmail={user?.email || ''}
+              onSaved={(row) => refreshControl(detailHotel.id, row)}
+            />
             {ratesErr && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 10 }}>Error: {ratesErr}</div>}
 
             {/* Hotel info section — appears above the rate list so the
@@ -2086,6 +2083,92 @@ function controlToForm(c: HotelControl | null): ManageForm {
     terms_conditions: str(c?.terms_conditions),
     competitor_comparison: competitors,
   };
+}
+
+// Inline internal-note editor shown under "Manage this hotel". Reads/writes
+// hotel_control.internal_notes via the same control PUT the Manage panel + the
+// MCP set_hotel_note tool use — a partial upsert, so other control fields are
+// untouched. Lets a consultant add/edit a note without opening the full panel.
+function InlineNote({ hotelId, note, userEmail, onSaved }: {
+  hotelId: number;
+  note: string;
+  userEmail: string;
+  onSaved: (row: HotelControl) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(note);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Reset when switching hotels or when the saved note changes externally.
+  useEffect(() => { setDraft(note); setEditing(false); setErr(null); }, [note, hotelId]);
+
+  async function save() {
+    setSaving(true); setErr(null);
+    try {
+      const res = await fetch(`/api/admin/control?hotelId=${hotelId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ internal_notes: draft.trim(), updated_by: userEmail }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error || json?.message || `Save failed (HTTP ${res.status})`);
+      const saved: HotelControl = (json && json.data && typeof json.data === 'object') ? json.data : (json || {});
+      onSaved(saved);
+      setEditing(false);
+    } catch (e: any) {
+      setErr(e?.message || 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div style={{ marginBottom: 14, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-line)', background: 'var(--c-bg-soft)' }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--c-fg-muted)', marginBottom: 6 }}>Internal note</div>
+        <textarea
+          className="c-input"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          rows={3}
+          autoFocus
+          placeholder="e.g. Expedia TAAP ~12% comm; RateHawk cheaper net"
+          style={{ width: '100%', fontSize: 13, resize: 'vertical' }}
+        />
+        {err && <div style={{ color: 'var(--c-danger)', fontSize: 12, marginTop: 4 }}>{err}</div>}
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button className="c-btn c-btn-primary" onClick={() => void save()} disabled={saving} style={{ fontSize: 12.5, padding: '5px 14px' }}>
+            {saving ? 'Saving…' : 'Save note'}
+          </button>
+          <button className="c-btn" onClick={() => { setDraft(note); setEditing(false); setErr(null); }} disabled={saving} style={{ fontSize: 12.5, padding: '5px 14px' }}>Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!note.trim()) {
+    return (
+      <button onClick={() => setEditing(true)} className="c-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 14, fontSize: 12.5 }}>
+        <StickyNote size={13} /> Add internal note
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 14, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-line)', background: 'var(--c-bg-soft)' }}>
+      <StickyNote size={14} style={{ color: 'var(--c-accent)', flexShrink: 0, marginTop: 2 }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 2 }}>
+          <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--c-fg-muted)' }}>Internal note</span>
+          <button onClick={() => setEditing(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-accent)', fontSize: 11, fontWeight: 600 }}>
+            <Pencil size={11} /> Edit
+          </button>
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--c-fg)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{note}</div>
+      </div>
+    </div>
+  );
 }
 
 function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: {
