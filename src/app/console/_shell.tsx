@@ -20,6 +20,7 @@ import {
   FolderOpen,
   SlidersHorizontal,
   Link2,
+  Tag,
 } from 'lucide-react';
 
 /**
@@ -42,6 +43,7 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
     items: [
       { href: '/console/bookings',         label: 'Bookings',        icon: ClipboardList },
       { href: '/console/search',           label: 'B2B Search',      icon: Search },
+      { href: '/console/offers',           label: 'Offers',          icon: Tag },
       // AI Agent search disabled — driven via MCP now (2026-06-28)
       { href: '/console/search-activity',  label: 'Search Activity', icon: BarChart3 },
     ],
