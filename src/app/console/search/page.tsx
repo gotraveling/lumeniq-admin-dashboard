@@ -1841,8 +1841,9 @@ function planSigOf(r: AdminRate): string {
 // Rate-channel badge — Member (CUG, our negotiated price) vs Non-Member
 // (RateHawk's public B2C price). Only shown once the consultant has clicked
 // "Compare Non-Member" so both channels coexist in the list.
-function channelBadgeStyle(channel: 'cug' | 'b2c'): React.CSSProperties {
-  const color = channel === 'cug' ? '#0a7d3e' : '#b45309';
+function channelBadgeStyle(channel: 'cug' | 'b2c' | 'all'): React.CSSProperties {
+  // 'all' = member & non-member price are identical → no member advantage (grey).
+  const color = channel === 'cug' ? '#0a7d3e' : channel === 'b2c' ? '#b45309' : '#6b7280';
   return {
     marginLeft: 5,
     fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
@@ -3804,11 +3805,23 @@ function RoomGroupedRates({
                               (cug vs public b2c). Hummingbird has no such split,
                               so the badge is noise there — show it only for
                               suppliers where the channel is meaningful. */}
-                          {r._channel && (r.supplier || '').toLowerCase() !== 'hummingbird' && (
-                            <span style={channelBadgeStyle(r._channel)}>
-                              {r._channel === 'cug' ? 'Member' : 'Non-Member'}
-                            </span>
-                          )}
+                          {r._channel && (r.supplier || '').toLowerCase() !== 'hummingbird' && (() => {
+                            // When the member (cug) and non-member (b2c) sell are
+                            // the same for this plan, the "member" rate has no
+                            // advantage — tag it "All" so the MEANINGFUL member
+                            // rates (member < non-member) are the ones that stay
+                            // green. Needs both channels loaded (Compare mode).
+                            const pair = g.sellBySig.get(planSigOf(r));
+                            const isAll = pair?.cug != null && pair?.b2c != null && Math.round(pair.cug) === Math.round(pair.b2c);
+                            return (
+                              <span
+                                style={channelBadgeStyle(isAll ? 'all' : r._channel!)}
+                                title={isAll ? 'Member and non-member price are identical — no member advantage' : undefined}
+                              >
+                                {isAll ? 'All' : r._channel === 'cug' ? 'Member' : 'Non-Member'}
+                              </span>
+                            );
+                          })()}
                           {isRecommended && (
                             <div style={{
                               marginTop: 3,
