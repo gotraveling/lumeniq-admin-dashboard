@@ -72,6 +72,34 @@ async function runPool<T>(items: T[], limit: number, worker: (item: T, i: number
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => next()));
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Fetch one combo's rates with rate-limit-aware retry. The booking engine
+// surfaces supplier throttling as HTTP 429 or {error:'rate_limit'} — on either,
+// back off (exponential + jitter) and retry rather than dropping the combo, so
+// a big matrix never fails a hotel just because we queried too fast. Returns
+// { rates, throttled } — throttled=true if we hit a limit at all (for the UI).
+async function fetchRatesRetry(hotelId: number, qs: string, maxTries = 5): Promise<{ rates: any[]; throttled: boolean }> {
+  let throttled = false;
+  for (let attempt = 0; attempt < maxTries; attempt++) {
+    try {
+      const res = await fetch(`/api/admin/search/rates/${hotelId}?${qs}`);
+      const json = await res.json().catch(() => ({}));
+      const limited = res.status === 429 || json?.error === 'rate_limit' || json?.error === 'endpoint_exceeded_limit';
+      if (limited) {
+        throttled = true;
+        // 1.5s, 3s, 6s, 12s (+ up to 1s jitter)
+        await sleep(1500 * Math.pow(2, attempt) + Math.random() * 1000);
+        continue;
+      }
+      return { rates: json?.data?.rates || [], throttled };
+    } catch {
+      await sleep(1000 * (attempt + 1));
+    }
+  }
+  return { rates: [], throttled };
+}
+
 const STAY_OPTIONS = [3, 5, 7, 10];
 
 export default function OffersPage() {
@@ -84,11 +112,12 @@ export default function OffersPage() {
   const months = useMemo(() => nextMonths(12), []);
   const [dest, setDest] = useState('');
   const [hotels, setHotels] = useState<Hotel[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [searching, setSearching] = useState(false);
   const [selMonths, setSelMonths] = useState<string[]>(months.slice(0, 6).map((m) => m.key));
   const [selStays, setSelStays] = useState<number[]>([5, 7]);
   const [adults, setAdults] = useState(2);
-  const [gen, setGen] = useState<{ running: boolean; done: number; total: number } | null>(null);
+  const [gen, setGen] = useState<{ running: boolean; done: number; total: number; throttled: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   async function loadList() {
@@ -111,31 +140,39 @@ export default function OffersPage() {
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error || 'search failed');
-      setHotels((json.data.hits || []).map((h: any) => ({ id: h.id, name: h.name, city: h.city, country: h.country })));
+      const list: Hotel[] = (json.data.hits || []).map((h: any) => ({ id: h.id, name: h.name, city: h.city, country: h.country }));
+      setHotels(list);
+      // Default to a manageable subset selected (first 15) so a big region
+      // doesn't fire hundreds of supplier calls unless the user opts in.
+      setSelectedIds(new Set(list.slice(0, 15).map((h) => h.id)));
     } catch (e: any) { setErr(e?.message || 'Hotel search failed'); } finally { setSearching(false); }
   }
 
+  const selectedHotels = useMemo(() => hotels.filter((h) => selectedIds.has(h.id)), [hotels, selectedIds]);
+  const toggleHotel = (id: number) => setSelectedIds((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
   async function generate() {
     const chosenMonths = months.filter((m) => selMonths.includes(m.key));
-    if (!hotels.length || !chosenMonths.length || !selStays.length) {
-      setErr('Pick hotels (search a destination), at least one month, and one stay length.');
+    if (!selectedHotels.length || !chosenMonths.length || !selStays.length) {
+      setErr('Select at least one hotel, one month, and one stay length.');
       return;
     }
     setErr(null);
-    // Build the matrix of combos.
+    // Build the matrix of combos over the SELECTED hotels only.
     const combos: { hotel: Hotel; checkIn: string; nights: number }[] = [];
-    for (const h of hotels) for (const m of chosenMonths) for (const n of selStays) combos.push({ hotel: h, checkIn: m.checkIn, nights: n });
+    for (const h of selectedHotels) for (const m of chosenMonths) for (const n of selStays) combos.push({ hotel: h, checkIn: m.checkIn, nights: n });
 
-    setGen({ running: true, done: 0, total: combos.length });
+    setGen({ running: true, done: 0, total: combos.length, throttled: 0 });
     const rows: Row[] = [];
     const guests = JSON.stringify([{ adults, children: [] }]);
 
-    await runPool(combos, 6, async ({ hotel, checkIn, nights }) => {
+    // Concurrency 3 + per-combo 429 backoff keeps us comfortably under
+    // Hummingbird's limits even for a few hundred queries.
+    await runPool(combos, 3, async ({ hotel, checkIn, nights }) => {
       const checkOut = addNights(checkIn, nights);
       const qs = new URLSearchParams({ checkIn, checkOut, guests, accountType: 'cug' });
-      const res = await fetch(`/api/admin/search/rates/${hotel.id}?${qs.toString()}`);
-      const json = await res.json();
-      const rates: any[] = json?.data?.rates || [];
+      const { rates, throttled } = await fetchRatesRetry(hotel.id, qs.toString());
+      if (throttled) setGen((g) => g ? { ...g, throttled: g.throttled + 1 } : g);
       if (!rates.length) return;
       // Cheapest bookable rate (the "from" price) — matches the rest of the system.
       const best = rates.reduce((a, b) => {
@@ -162,12 +199,12 @@ export default function OffersPage() {
 
     // Save the assembled report.
     try {
-      const name = `${dest.trim() || 'Offers'} · ${chosenMonths.length}mo · ${selStays.join('/')}n`;
+      const name = `${dest.trim() || 'Offers'} · ${selectedHotels.length} hotels · ${chosenMonths.length}mo · ${selStays.join('/')}n`;
       const res = await fetch('/api/admin/search/offer-reports', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name, region: hotels[0]?.country || dest.trim() || null,
-          params: { months: selMonths, stayLengths: selStays, hotelIds: hotels.map((h) => h.id), adults },
+          name, region: selectedHotels[0]?.country || dest.trim() || null,
+          params: { months: selMonths, stayLengths: selStays, hotelIds: selectedHotels.map((h) => h.id), adults },
           rows,
         }),
       });
@@ -226,8 +263,33 @@ export default function OffersPage() {
             {searching ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
             {searching ? 'Searching…' : 'Find hotels'}
           </button>
-          {hotels.length > 0 && <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>{hotels.length} hotels — all included</span>}
+          {hotels.length > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
+              {selectedIds.size} of {hotels.length} selected
+            </span>
+          )}
         </div>
+
+        {/* Selectable hotel list — pick exactly which properties to include. */}
+        {hotels.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', gap: 12, marginBottom: 6 }}>
+              <button onClick={() => setSelectedIds(new Set(hotels.map((h) => h.id)))} style={linkBtn}>Select all</button>
+              <button onClick={() => setSelectedIds(new Set())} style={linkBtn}>Clear</button>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 200, overflowY: 'auto', padding: 2 }}>
+              {hotels.map((h) => {
+                const on = selectedIds.has(h.id);
+                return (
+                  <button key={h.id} onClick={() => toggleHotel(h.id)} title={[h.city, h.country].filter(Boolean).join(', ')}
+                    style={{ ...pill(on), maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>
+                    {on ? '✓ ' : ''}{h.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Months */}
         <div style={{ marginBottom: 12 }}>
@@ -263,19 +325,24 @@ export default function OffersPage() {
         {err && <div style={{ color: 'var(--c-danger)', fontSize: 12.5, marginBottom: 10 }}>{err}</div>}
 
         {gen?.running ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <Loader2 size={15} className="animate-spin" />
             <span style={{ fontSize: 13 }}>Querying {gen.done}/{gen.total}…</span>
-            <div style={{ flex: 1, maxWidth: 320, height: 6, borderRadius: 999, background: 'var(--c-line-soft)', overflow: 'hidden' }}>
+            <div style={{ flex: 1, minWidth: 160, maxWidth: 320, height: 6, borderRadius: 999, background: 'var(--c-line-soft)', overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${gen.total ? (gen.done / gen.total) * 100 : 0}%`, background: 'var(--c-accent)', transition: 'width 0.2s' }} />
             </div>
+            {gen.throttled > 0 && (
+              <span style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }} title="Hit a supplier rate limit and backed off/retried — the report still completes">
+                slowing down to respect supplier limits ({gen.throttled})
+              </span>
+            )}
           </div>
         ) : (
           <button className="c-btn c-btn-primary" onClick={() => void generate()}
-            disabled={!hotels.length || !selMonths.length || !selStays.length}
+            disabled={!selectedIds.size || !selMonths.length || !selStays.length}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <Tag size={13} /> Generate report
-            {hotels.length > 0 && <span style={{ opacity: 0.8, fontWeight: 400 }}>({hotels.length * selMonths.length * selStays.length} queries)</span>}
+            {selectedIds.size > 0 && <span style={{ opacity: 0.8, fontWeight: 400 }}>({selectedIds.size * selMonths.length * selStays.length} queries)</span>}
           </button>
         )}
       </div>
@@ -442,3 +509,7 @@ function pill(active: boolean): React.CSSProperties {
     color: active ? 'var(--c-accent)' : 'var(--c-fg)',
   };
 }
+const linkBtn: React.CSSProperties = {
+  background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+  fontSize: 11.5, fontWeight: 600, color: 'var(--c-accent)',
+};
