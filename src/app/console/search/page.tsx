@@ -500,6 +500,9 @@ export default function ConsoleSearchPage() {
   // API consolidation block (services/presentRates) — source of truth for the
   // per-room meal/transfer matrix; falls back to the local builder when absent.
   const [presentation, setPresentation] = useState<any>(null);
+  // Non-member (public) cheapest sell per plan signature, auto-fetched on hotel
+  // open — drives the "All" vs "Member" tag without paired compare mode.
+  const [b2cSellBySig, setB2cSellBySig] = useState<Map<string, number>>(new Map());
   // Prebook state — set when the consultant picks a rate. We verify
   // availability + price BEFORE they fill the form. Per ETG cert §1.1
   // ("Moving prebook to the separate step is also highly recommended").
@@ -853,13 +856,14 @@ export default function ConsoleSearchPage() {
     void loadRatesFor(h, 'cug', datesOverride);
   }
 
-  async function loadRatesFor(h: HotelHit, channel: 'cug' | 'b2c' = 'cug', datesOverride?: { checkIn: string; checkOut: string }) {
+  async function loadRatesFor(h: HotelHit, channel: 'cug' | 'b2c' = 'cug', datesOverride?: { checkIn: string; checkOut: string }, opts?: { noCache?: boolean }) {
     const useCheckIn = datesOverride?.checkIn ?? checkIn;
     const useCheckOut = datesOverride?.checkOut ?? checkOut;
     setRatesBusy(true);
     setRatesErr(null);
     setRates([]);
     setB2cLoaded(false);
+    setB2cSellBySig(new Map());
     try {
       // ETG cert §4: send per-room guests so the backend doesn't have
       // to floor-distribute adults or shove all children into room 1.
@@ -869,6 +873,9 @@ export default function ConsoleSearchPage() {
         adults: r.adults,
         children: r.childrenAges || []
       }))));
+      // Bypass the backend rate cache after a markup change so the new sell
+      // price shows immediately (otherwise the ~10 min TTL serves stale rates).
+      if (opts?.noCache) qs.set('noCache', '1');
       const res = await fetch(`/api/admin/search/rates/${h.id}?${qs.toString()}`);
       const json = await res.json();
       if (res.status === 429) {
@@ -885,6 +892,13 @@ export default function ConsoleSearchPage() {
       // border, but we keep it here for the future override-rate dashboard.
       setSearchId(json.data.searchId || null);
       setRecommendedRateKey(json.data.recommendedRateKey || null);
+      // Auto-fetch non-member prices in the background — ONLY to drive the
+      // "All" vs "Member" tag (member==non-member ⇒ no member advantage ⇒ All),
+      // WITHOUT merging into the list (which would flip the view into paired
+      // compare mode and hide the clean matrix). One extra supplier call per
+      // hotel opened; best-effort. The manual "Compare" button still does the
+      // full paired merge for detailed inspection.
+      if (channel === 'cug') void loadB2cTags(h);
     } catch (e: any) {
       setRatesErr(e.message || 'rates failed');
     } finally {
@@ -925,6 +939,27 @@ export default function ConsoleSearchPage() {
     } finally {
       setB2cBusy(false);
     }
+  }
+
+  // Lightweight tag-only non-member fetch: populates b2cSellBySig (plan sig →
+  // cheapest public sell) so each member row can show "All" (member==public,
+  // no advantage) vs "Member" (member cheaper) — WITHOUT merging into the list
+  // or flipping into paired compare view. Best-effort, silent.
+  async function loadB2cTags(h: HotelHit) {
+    try {
+      const qs = new URLSearchParams({ checkIn, checkOut, nationalityCode: citizenship, accountType: 'b2c' });
+      qs.set('guests', JSON.stringify(rooms.map(r => ({ adults: r.adults, children: r.childrenAges || [] }))));
+      const res = await fetch(`/api/admin/search/rates/${h.id}?${qs.toString()}`);
+      const json = await res.json();
+      if (!json.success) return;
+      const m = new Map<string, number>();
+      for (const r of (json.data.rates || []) as AdminRate[]) {
+        const sig = planSigOf(r);
+        const s = r.pricing?.sell?.totalAmount;
+        if (typeof s === 'number' && (!m.has(sig) || s < m.get(sig)!)) m.set(sig, s);
+      }
+      setB2cSellBySig(m);
+    } catch { /* best-effort — tag just falls back to "Member" */ }
   }
 
   // Fetch the cross-supplier room map whenever a hotel detail opens (keyed by
@@ -1641,7 +1676,12 @@ export default function ConsoleSearchPage() {
               hotelId={detailHotel.id}
               hotelName={detailHotel.name}
               userEmail={user?.email || ''}
-              onSaved={(row) => refreshControl(detailHotel.id, row)}
+              onSaved={(row, opts) => {
+                refreshControl(detailHotel.id, row);
+                // Markup changed → re-fetch rates bypassing the backend cache so
+                // the new sell price shows immediately (not after the ~10 min TTL).
+                if (opts?.pricingChanged) void loadRatesFor(detailHotel, 'cug', undefined, { noCache: true });
+              }}
               onCloseDrawer={() => { setDetailHotel(null); setDetailExpanded(false); setEditingSearch(false); syncUrl({ hotelId: null }); }}
             />
             {/* Internal note surfaced + editable right under the Manage button
@@ -1731,6 +1771,7 @@ export default function ConsoleSearchPage() {
               <RoomGroupedRates
                 rates={supplierFocus ? rates.filter(r => r.supplier === supplierFocus) : rates}
                 presentation={presentation}
+                b2cSellBySig={b2cSellBySig}
                 onChoose={(r) => {
                   setChosenRate(r);
                   // Audit: tell the backend which rate the consultant
@@ -2094,7 +2135,7 @@ function InlineNote({ hotelId, note, userEmail, onSaved }: {
   hotelId: number;
   note: string;
   userEmail: string;
-  onSaved: (row: HotelControl) => void;
+  onSaved: (row: HotelControl, opts?: { pricingChanged?: boolean }) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note);
@@ -2477,7 +2518,8 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
       //    note is ready before we report the save.
       let note: string | null = null;
       const pct = body.markup_override_pct;
-      if (typeof pct === 'number' && form.markup_override_pct !== baseline.markup_override_pct) {
+      const pricingChanged = typeof pct === 'number' && form.markup_override_pct !== baseline.markup_override_pct;
+      if (pricingChanged) {
         note = await writePricingRule(pct);
       }
       // 2) Control row (always).
@@ -2494,7 +2536,7 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
       setBaseline(f);
       setSavedAt(Date.now());
       setRuleNote(note);
-      onSaved(saved);
+      onSaved(saved, { pricingChanged });
       // Fast-tag flow: after saving the airport tags, close the drawer so the
       // consultant can immediately open the next hotel from the results list.
       if (fastTag && !note) onCloseDrawer();
@@ -3494,13 +3536,15 @@ function adminMatrixFromPresentation(p: any, list: AdminRate[]): AdminMatrix | n
 }
 
 function RoomGroupedRates({
-  rates, onChoose, marginTop = 0, control, rooms = [], roomMap, presentation
+  rates, onChoose, marginTop = 0, control, rooms = [], roomMap, presentation, b2cSellBySig
 }: {
   rates: AdminRate[];
   onChoose: (r: AdminRate) => void;
   marginTop?: number;
   // API consolidation block (services/presentRates), looked up per room by name.
   presentation?: any;
+  // Non-member cheapest sell per plan sig — drives the "All" vs "Member" tag.
+  b2cSellBySig?: Map<string, number>;
   // Per-hotel control row (transfer cost) + the search occupancy, so a
   // room-only rate can show the transfer surcharge a transfer-bundled
   // (Hummingbird) rate already includes. Makes the comparison apple-to-apple.
@@ -3717,11 +3761,18 @@ function RoomGroupedRates({
                     )}
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 14, fontWeight: 700 }}>{g.name}</div>
-                      {g.supplierCount > 1 && (
-                        <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--c-fg-muted)', marginTop: 2 }}>
-                          {g.supplierCount} suppliers
-                        </div>
-                      )}
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 2 }}>
+                        {(presByName.get(g.name)?.sleeps ?? 0) > 0 && (
+                          <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--c-fg-muted)' }}>
+                            Sleeps {presByName.get(g.name)!.sleeps}
+                          </span>
+                        )}
+                        {g.supplierCount > 1 && (
+                          <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--c-fg-muted)' }}>
+                            {g.supplierCount} suppliers
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   {groupImages.length > 0 && (
@@ -3806,13 +3857,18 @@ function RoomGroupedRates({
                               so the badge is noise there — show it only for
                               suppliers where the channel is meaningful. */}
                           {r._channel && (r.supplier || '').toLowerCase() !== 'hummingbird' && (() => {
-                            // When the member (cug) and non-member (b2c) sell are
-                            // the same for this plan, the "member" rate has no
-                            // advantage — tag it "All" so the MEANINGFUL member
-                            // rates (member < non-member) are the ones that stay
-                            // green. Needs both channels loaded (Compare mode).
-                            const pair = g.sellBySig.get(planSigOf(r));
-                            const isAll = pair?.cug != null && pair?.b2c != null && Math.round(pair.cug) === Math.round(pair.b2c);
+                            // "All" when the member (cug) sell == the non-member
+                            // (b2c) sell for this plan → no member advantage, so we
+                            // only keep "Member" green when it's genuinely cheaper.
+                            // The non-member price is auto-fetched on open
+                            // (b2cSellBySig), so this shows WITHOUT clicking Compare.
+                            // Paired compare-mode rows still use the merged data.
+                            const sig = planSigOf(r);
+                            const memberSell = r.pricing?.sell?.totalAmount;
+                            const pair = g.sellBySig.get(sig);
+                            const b2cSell = pair?.b2c ?? b2cSellBySig?.get(sig);
+                            const isAll = r._channel === 'cug' && typeof memberSell === 'number'
+                              && typeof b2cSell === 'number' && Math.round(memberSell) === Math.round(b2cSell);
                             return (
                               <span
                                 style={channelBadgeStyle(isAll ? 'all' : r._channel!)}

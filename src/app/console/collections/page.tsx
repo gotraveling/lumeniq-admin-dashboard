@@ -212,9 +212,12 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
         <Field label="Subtitle"><input className="c-input" value={value.subtitle || ''} onChange={(e) => set({ subtitle: e.target.value })} /></Field>
         <Field label="Hero image URL"><input className="c-input" value={value.heroImage || ''} onChange={(e) => set({ heroImage: e.target.value })} /></Field>
         <Field label="Member benefit line"><input className="c-input" value={value.memberBenefit || ''} onChange={(e) => set({ memberBenefit: e.target.value })} /></Field>
-        <Field label="Intro paragraphs (one per line)">
-          <textarea className="c-input" rows={4} value={(value.intro || []).join('\n')}
-            onChange={(e) => set({ intro: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} />
+        <Field label="Intro paragraphs (leave a blank line between paragraphs)">
+          {/* Blank line = new paragraph, so paragraphs round-trip with spacing
+              (split on blank lines, join with a blank line). A single newline
+              inside a paragraph is kept as a soft break. */}
+          <textarea className="c-input" rows={6} value={(value.intro || []).join('\n\n')}
+            onChange={(e) => set({ intro: e.target.value.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean) })} />
         </Field>
         <Field label="Quote / reference"><input className="c-input" value={value.quoteRef || ''} onChange={(e) => set({ quoteRef: e.target.value })} /></Field>
       </div>
