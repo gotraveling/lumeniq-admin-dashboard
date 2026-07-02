@@ -134,17 +134,27 @@ export default function OffersPage() {
     if (!dest.trim()) return;
     setSearching(true); setErr(null);
     try {
-      const res = await fetch('/api/admin/search/hotels', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: dest.trim(), limit: 50 }),
-      });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error || 'search failed');
-      const list: Hotel[] = (json.data.hits || []).map((h: any) => ({ id: h.id, name: h.name, city: h.city, country: h.country }));
-      setHotels(list);
-      // Default to a manageable subset selected (first 15) so a big region
-      // doesn't fire hundreds of supplier calls unless the user opts in.
-      setSelectedIds(new Set(list.slice(0, 15).map((h) => h.id)));
+      // The endpoint caps 50/request, so page through ALL matches for the
+      // keyword (up to a safety cap) — we don't want to silently miss hotels.
+      const PAGE = 50, MAX = 400;
+      const all: Hotel[] = [];
+      const seen = new Set<number>();
+      for (let offset = 0; offset < MAX; offset += PAGE) {
+        const res = await fetch('/api/admin/search/hotels', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ q: dest.trim(), limit: PAGE, offset }),
+        });
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error || 'search failed');
+        const hits: any[] = json.data.hits || [];
+        for (const h of hits) if (!seen.has(h.id)) { seen.add(h.id); all.push({ id: h.id, name: h.name, city: h.city, country: h.country }); }
+        // Stop when the page is short (real end — estimatedTotalHits overshoots).
+        if (hits.length < PAGE) break;
+      }
+      setHotels(all);
+      // Select all by default — the goal is completeness. The query count on the
+      // Generate button shows the cost, and you can Clear to trim.
+      setSelectedIds(new Set(all.map((h) => h.id)));
     } catch (e: any) { setErr(e?.message || 'Hotel search failed'); } finally { setSearching(false); }
   }
 
