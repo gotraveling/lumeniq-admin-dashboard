@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Tag, Loader2, Search, Trash2, ArrowLeft, RefreshCw } from 'lucide-react';
+import { Tag, Loader2, Search, Trash2, ArrowLeft, RefreshCw, Link as LinkIcon } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Hotel = { id: number; name: string; city?: string; country?: string };
@@ -119,6 +119,14 @@ export default function OffersPage() {
   const [adults, setAdults] = useState(2);
   const [gen, setGen] = useState<{ running: boolean; done: number; total: number; throttled: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  // Deep-link: on mount, open a report if ?report=ID is in the URL (shareable /
+  // refreshable). openReport/back keep the URL in sync.
+  useEffect(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('report'));
+    if (id) void openReport(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function loadList() {
     setLoadingList(true);
@@ -230,20 +238,25 @@ export default function OffersPage() {
 
   async function openReport(id: number) {
     setView('detail'); setCurrent(null);
+    window.history.replaceState({}, '', `?report=${id}`);   // deep-linkable
     const res = await fetch(`/api/admin/search/offer-reports/${id}`, { cache: 'no-store' });
     setCurrent(await res.json());
+  }
+  function backToList() {
+    setView('list'); setCurrent(null);
+    window.history.replaceState({}, '', window.location.pathname);
   }
 
   async function deleteReport(id: number) {
     if (!confirm('Delete this report?')) return;
     await fetch(`/api/admin/search/offer-reports/${id}`, { method: 'DELETE' });
     await loadList();
-    if (current?.id === id) { setView('list'); setCurrent(null); }
+    if (current?.id === id) backToList();
   }
 
   // ── Detail view ──
   if (view === 'detail') {
-    return <ReportDetail report={current} onBack={() => { setView('list'); setCurrent(null); }} />;
+    return <ReportDetail report={current} onBack={backToList} />;
   }
 
   // ── List + New report ──
@@ -444,9 +457,19 @@ function ReportDetail({ report, onBack }: { report: Report | null; onBack: () =>
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <button onClick={onBack} className="c-btn" style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
-        <ArrowLeft size={13} /> All reports
-      </button>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button onClick={onBack} className="c-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+          <ArrowLeft size={13} /> All reports
+        </button>
+        {report && (
+          <button
+            onClick={() => { navigator.clipboard?.writeText(window.location.href); }}
+            className="c-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}
+            title="Copy a shareable link to this report">
+            <LinkIcon size={13} /> Copy link
+          </button>
+        )}
+      </div>
 
       {!report ? (
         <div style={{ color: 'var(--c-fg-muted)', fontSize: 13, padding: 12 }}>Loading report…</div>
