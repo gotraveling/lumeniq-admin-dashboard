@@ -3,7 +3,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { MapPin, Hotel, Globe2, Loader2, X } from 'lucide-react';
 
-type Hit = { id?: number; hotel_id?: number; name?: string; city?: string; country?: string; main_image?: string | null };
+// The hotel image comes back as `image` (booking-engine admin-search path) or
+// `main_image` (Meili fallback path); consumers should read whichever exists.
+type Hit = { id?: number; hotel_id?: number; name?: string; city?: string; country?: string; main_image?: string | null; image?: string | null };
 
 type Props = {
   value: string;
@@ -36,6 +38,10 @@ const DestinationAutocomplete = forwardRef<DestinationAutocompleteHandle, Props>
   // selected text as a new query, and the user has to click twice
   // because the row they clicked got replaced mid-click.
   const skipNextSearch          = useRef(false);
+  // Only auto-open the dropdown for changes the user makes WHILE focused in the
+  // field. A programmatic value change — e.g. the page restoring q from the URL
+  // on refresh/share — must NOT pop the dropdown open unprompted.
+  const focusedRef              = useRef(false);
 
   useImperativeHandle(ref, () => ({
     setSilent: (s: string) => {
@@ -71,7 +77,9 @@ const DestinationAutocomplete = forwardRef<DestinationAutocompleteHandle, Props>
         setHotels(data.hotels || []);
         setCities(data.cities || []);
         setCountries(data.countries || []);
-        setOpen(true);
+        // Don't force the dropdown open unless the user is actually typing in
+        // the field — otherwise a URL-restored value pops it open on refresh.
+        if (focusedRef.current) setOpen(true);
       } catch { /* ignore */ } finally {
         setBusy(false);
       }
@@ -88,7 +96,8 @@ const DestinationAutocomplete = forwardRef<DestinationAutocompleteHandle, Props>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onFocus={() => { if (hasResults) setOpen(true); }}
+        onFocus={() => { focusedRef.current = true; if (hasResults) setOpen(true); }}
+        onBlur={() => { focusedRef.current = false; }}
         placeholder={placeholder || 'Destination, city or hotel'}
         style={{
           width: '100%', padding: '8px 28px 8px 10px', fontSize: 14,

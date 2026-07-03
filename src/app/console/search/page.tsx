@@ -657,11 +657,14 @@ export default function ConsoleSearchPage() {
   // Sultanahmet"). Editing the box clears the pick (DestinationAutocomplete
   // onChange) so a hand-typed query goes back to the normal name search.
   const [pickedHotel, setPickedHotel] = useState<{ id: number; name: string; city?: string; country?: string; image?: string | null } | null>(null);
-  function pickHotel(h: { id?: number; hotel_id?: number; name?: string; city?: string; country?: string; main_image?: string | null }) {
+  function pickHotel(h: { id?: number; hotel_id?: number; name?: string; city?: string; country?: string; main_image?: string | null; image?: string | null }) {
     const id = h.id ?? h.hotel_id;
     const name = h.name || '';
     setQ(name);
-    setPickedHotel(id != null ? { id, name, city: h.city, country: h.country, image: h.main_image ?? null } : null);
+    // The autocomplete API returns the image as `image` (admin-search path) OR
+    // `main_image` (Meili fallback path) — take whichever is present so the card
+    // thumbnail isn't blank after a pick.
+    setPickedHotel(id != null ? { id, name, city: h.city, country: h.country, image: h.main_image ?? h.image ?? null } : null);
   }
   // Price the exact picked hotel by id (invoked from the Search button). One
   // card, enriched by id — deterministic, always resolves the chosen property.
