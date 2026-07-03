@@ -649,38 +649,44 @@ export default function ConsoleSearchPage() {
     }
   }
 
-  // Consultant picked a SPECIFIC hotel from the autocomplete. We already know
-  // its id, so there's no reason to round-trip through a fuzzy name search (that
-  // was returning 0 for long formal names like "Four Seasons Hotel Istanbul at
-  // Sultanahmet"). Put that one hotel straight into the results and price it by
-  // id — deterministic, always resolves the exact property the consultant chose.
-  // Falls back to a name search only if the autocomplete somehow gave no id.
+  // Consultant picked a SPECIFIC hotel from the autocomplete. We remember it
+  // (with its id) and fill the box, but DON'T search yet — the consultant sets
+  // dates/guests and presses Search. On submit a live pick routes through
+  // searchPickedHotel, which prices the exact id (never a fuzzy name search that
+  // could miss a long formal name like "Four Seasons Hotel Istanbul at
+  // Sultanahmet"). Editing the box clears the pick (DestinationAutocomplete
+  // onChange) so a hand-typed query goes back to the normal name search.
+  const [pickedHotel, setPickedHotel] = useState<{ id: number; name: string; city?: string; country?: string; image?: string | null } | null>(null);
   function pickHotel(h: { id?: number; hotel_id?: number; name?: string; city?: string; country?: string; main_image?: string | null }) {
     const id = h.id ?? h.hotel_id;
     const name = h.name || '';
     setQ(name);
-    if (id == null) { runSearch(name); return; }   // no id → old name-search path
+    setPickedHotel(id != null ? { id, name, city: h.city, country: h.country, image: h.main_image ?? null } : null);
+  }
+  // Price the exact picked hotel by id (invoked from the Search button). One
+  // card, enriched by id — deterministic, always resolves the chosen property.
+  function searchPickedHotel(p: { id: number; name: string; city?: string; country?: string; image?: string | null }) {
     const norm = normalizeRange(checkIn, checkOut);
     if (norm.checkIn !== checkIn) setCheckIn(norm.checkIn);
     if (norm.checkOut !== checkOut) setCheckOut(norm.checkOut);
     setSearchErr(norm.snapped ? `Check-in cannot be in the past — dates adjusted to ${norm.checkIn} → ${norm.checkOut}.` : null);
-    const hit: HotelHit = { id, name, city: h.city, country: h.country, image: h.main_image ?? null, sources: [] };
+    const hit: HotelHit = { id: p.id, name: p.name, city: p.city, country: p.country, image: p.image ?? null, sources: [] };
     setDetailHotel(null);
     setHits([hit]);
     setTotal(1);
     // Mirror what runSearch records so paging/empty-state stay consistent.
-    lastSearchRef.current = { q: name, checkIn: norm.checkIn, checkOut: norm.checkOut };
+    lastSearchRef.current = { q: p.name, checkIn: norm.checkIn, checkOut: norm.checkOut };
     const next = new URLSearchParams(sp.toString());
     next.delete('r'); next.delete('adults'); next.delete('rooms');
     rooms.forEach(rm => next.append('r', `${rm.adults}${(rm.childrenAges && rm.childrenAges.length) ? '|' + rm.childrenAges.join(',') : ''}`));
-    next.set('q', name);
+    next.set('q', p.name);
     next.set('checkIn', norm.checkIn);
     next.set('checkOut', norm.checkOut);
     next.set('citizenship', citizenship);
     next.delete('hotelId');
     router.replace(`/console/search?${next.toString()}`);
     // Price the exact id (compare resolves canonical + all suppliers server-side).
-    void enrichPrices([id], { checkIn: norm.checkIn, checkOut: norm.checkOut });
+    void enrichPrices([p.id], { checkIn: norm.checkIn, checkOut: norm.checkOut });
   }
 
   // Retry budget for transient compare failures. The compare fan-out makes ONE
@@ -1420,7 +1426,13 @@ export default function ConsoleSearchPage() {
 
             <div className="c-card" style={{ padding: 14, marginBottom: 20, overflow: 'visible' }}>
               <form
-                onSubmit={(e) => { e.preventDefault(); runSearch(); }}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  // A live hotel pick (box still holds its name) → price it by
+                  // id; anything else → normal name search.
+                  if (pickedHotel && pickedHotel.name === q.trim()) searchPickedHotel(pickedHotel);
+                  else runSearch();
+                }}
                 style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1.6fr) minmax(200px, 1.3fr) minmax(160px, 1.1fr) minmax(120px, 0.7fr) auto', gap: 10, alignItems: 'end' }}
               >
                 <div>
@@ -1428,10 +1440,12 @@ export default function ConsoleSearchPage() {
                   <DestinationAutocomplete
                     ref={destRef}
                     value={q}
-                    onChange={setQ}
-                    // Picking a specific hotel already gives us its id — price
-                    // that hotel directly instead of re-running a fuzzy name
-                    // search that can miss on long formal names.
+                    // Typing/editing the box drops any previous hotel pick, so a
+                    // hand-typed query does a normal name search on Search.
+                    onChange={(v) => { setQ(v); if (pickedHotel) setPickedHotel(null); }}
+                    // Picking a specific hotel just remembers its id + fills the
+                    // box; the Search button then prices it directly by id
+                    // instead of a fuzzy name search that can miss long names.
                     onSelectHotel={pickHotel}
                   />
                 </div>
