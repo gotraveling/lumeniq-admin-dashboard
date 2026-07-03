@@ -134,7 +134,10 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
             </div>
           ))}
           <div style={{ marginTop: 'auto', paddingTop: 18 }}>
-            <Link href="/admin" className="c-nav-link">
+            {/* Legacy admin has no index route (no /admin/page.tsx) — only
+                sub-pages like /admin/dashboard exist, so linking to /admin 404s.
+                Point at the real landing page. */}
+            <Link href="/admin/dashboard" className="c-nav-link">
               <Settings size={15} /> Legacy admin
             </Link>
             <button
