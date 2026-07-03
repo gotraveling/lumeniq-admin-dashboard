@@ -176,6 +176,13 @@ type LuxuryTier = '5plus' | '5plusplus';
 // Quick star chips next to the profile picker: 4★/5★ filter the real
 // star_rating; 5★+/5★++ filter the curation luxury_tier.
 type StarChip = '4' | '5' | '5plus' | '5plusplus';
+// Single source of truth for the chip labels — used by both the chip row and
+// the empty-state message so the "No hotels match X" line can never drift from
+// the chip that's actually selected (the old inline ternary mislabelled 4★/5★
+// as "5★++").
+const TIER_LABELS: Record<StarChip, string> = { '4': '4★', '5': '5★', '5plus': '5★+', '5plusplus': '5★++' };
+// 4★/5★ filter the real star_rating; 5★+/5★++ filter the curation luxury_tier.
+const isCurationTier = (t: StarChip | null): boolean => t === '5plus' || t === '5plusplus';
 type ProximityTier = 'in-terminal' | 'connected' | 'walkable' | 'short-shuttle' | 'off-airport';
 type HotelControl = {
   hotel_id?: number;
@@ -1420,13 +1427,70 @@ export default function ConsoleSearchPage() {
           </>
         )}
 
+        {/* B2B profile picker + star/tier quick chips — ALWAYS visible, directly
+            under the search form, so the consultant sets them BEFORE hitting
+            Search (they AND into the Meili filter). 4★/5★ filter the real
+            star_rating; 5★+/5★++ filter the curation luxury_tier. Changing any
+            of them re-runs the current query. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+          <Sparkles size={13} style={{ color: 'var(--c-accent)' }} />
+          <select
+            className="c-select"
+            value={activeProfile?.slug || ''}
+            onChange={async (e) => {
+              const pf = await selectProfile(e.target.value);
+              runSearch(undefined, undefined, composedFilter(pf, tierChip));
+            }}
+            style={{ maxWidth: 240, fontSize: 12.5 }}
+          >
+            <option value="">No profile</option>
+            {profiles.map((p) => (
+              <option key={p.slug} value={p.slug}>{p.name || p.title || p.slug}</option>
+            ))}
+          </select>
+          {activeProfile && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--c-fg)', background: 'var(--c-accent-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '3px 10px' }}>
+              {activeProfile.name || activeProfile.title || activeProfile.slug}
+              <button
+                onClick={() => { setActiveProfile(null); setProfileFilter(''); runSearch(undefined, undefined, composedFilter('', tierChip)); }}
+                title="Clear profile"
+                style={{ background: 'none', border: 0, cursor: 'pointer', color: 'var(--c-fg-soft)', padding: 0, display: 'inline-flex' }}
+              ><X size={12} /></button>
+            </span>
+          )}
+          <div style={{ display: 'flex', gap: 4 }}>
+            {(Object.keys(TIER_LABELS) as StarChip[]).map((tier) => {
+              const on = tierChip === tier;
+              return (
+                <button
+                  key={tier}
+                  onClick={() => { const next = on ? null : tier; setTierChip(next); runSearch(undefined, undefined, composedFilter(profileFilter, next)); }}
+                  style={{
+                    fontSize: 12, padding: '4px 12px', borderRadius: 999,
+                    border: '1px solid var(--c-line)', cursor: 'pointer',
+                    background: on ? 'var(--c-accent-soft)' : 'var(--c-bg)',
+                    color: on ? 'var(--c-fg)' : 'var(--c-fg-soft)',
+                    fontWeight: on ? 600 : 500,
+                  }}
+                >{TIER_LABELS[tier]}</button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Errors */}
         {searchErr && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 14 }}>Error: {searchErr}</div>}
 
-        {/* Empty state */}
+        {/* Empty state — distinguish "haven't searched yet" from "searched and
+            found nothing". lastSearchRef is set only after a search runs, so a
+            zero-result search reads as a real "no matches" message instead of
+            the misleading "start searching" prompt (which looked like nothing
+            happened). */}
         {hits.length === 0 && !searching && !tierChip && !activeProfile && (
-          <div className="c-card" style={{ padding: 32, textAlign: 'center', color: 'var(--c-fg-muted)', fontSize: 13 }}>
-            Type a destination or hotel name above to start searching.
+          <div className="c-card" style={{ padding: 32, textAlign: 'center', color: 'var(--c-fg-muted)', fontSize: 13, lineHeight: 1.5 }}>
+            {lastSearchRef.current
+              ? <>No hotels found for “{lastSearchRef.current.q}”. Check the spelling, or try a broader destination (e.g. just the city). A specific property with no bookable rates for these dates will still appear once found — tick “Show unavailable” after searching its city.</>
+              : 'Type a destination or hotel name above to start searching.'}
           </div>
         )}
 
@@ -1435,56 +1499,6 @@ export default function ConsoleSearchPage() {
             and chips stay visible/clearable instead of vanishing. */}
         {(hits.length > 0 || tierChip || activeProfile) && (
           <>
-            {/* B2B profile picker + 5★ tier quick chips. Selecting a profile
-                resolves its compiled Meili filter; the tier chips add a
-                luxury_tier clause. Both compose (AND) into the search request,
-                so changing either re-runs the search. */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
-              <Sparkles size={13} style={{ color: 'var(--c-accent)' }} />
-              <select
-                className="c-select"
-                value={activeProfile?.slug || ''}
-                onChange={async (e) => {
-                  const pf = await selectProfile(e.target.value);
-                  runSearch(undefined, undefined, composedFilter(pf, tierChip));
-                }}
-                style={{ maxWidth: 240, fontSize: 12.5 }}
-              >
-                <option value="">No profile</option>
-                {profiles.map((p) => (
-                  <option key={p.slug} value={p.slug}>{p.name || p.title || p.slug}</option>
-                ))}
-              </select>
-              {activeProfile && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--c-fg)', background: 'var(--c-accent-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '3px 10px' }}>
-                  {activeProfile.name || activeProfile.title || activeProfile.slug}
-                  <button
-                    onClick={() => { setActiveProfile(null); setProfileFilter(''); runSearch(undefined, undefined, composedFilter('', tierChip)); }}
-                    title="Clear profile"
-                    style={{ background: 'none', border: 0, cursor: 'pointer', color: 'var(--c-fg-soft)', padding: 0, display: 'inline-flex' }}
-                  ><X size={12} /></button>
-                </span>
-              )}
-              <div style={{ display: 'flex', gap: 4 }}>
-                {([['4', '4★'], ['5', '5★'], ['5plus', '5★+'], ['5plusplus', '5★++']] as Array<[StarChip, string]>).map(([tier, label]) => {
-                  const on = tierChip === tier;
-                  return (
-                    <button
-                      key={tier}
-                      onClick={() => { const next = on ? null : tier; setTierChip(next); runSearch(undefined, undefined, composedFilter(profileFilter, next)); }}
-                      style={{
-                        fontSize: 12, padding: '4px 12px', borderRadius: 999,
-                        border: '1px solid var(--c-line)', cursor: 'pointer',
-                        background: on ? 'var(--c-accent-soft)' : 'var(--c-bg)',
-                        color: on ? 'var(--c-fg)' : 'var(--c-fg-soft)',
-                        fontWeight: on ? 600 : 500,
-                      }}
-                    >{label}</button>
-                  );
-                })}
-              </div>
-            </div>
-
             {/* Filter row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
               <Filter size={13} style={{ color: 'var(--c-fg-muted)' }} />
@@ -1527,12 +1541,14 @@ export default function ConsoleSearchPage() {
                 Keeps the chips above visible so the user can clear them. */}
             {hits.length === 0 && !searching && (tierChip || activeProfile) && (
               <div className="c-card" style={{ padding: 24, textAlign: 'center', color: 'var(--c-fg-muted)', fontSize: 13, lineHeight: 1.5 }}>
-                No hotels match {tierChip ? (tierChip === '5plus' ? '5★+' : '5★++') : 'this profile'}
+                No hotels match {tierChip ? TIER_LABELS[tierChip] : 'this profile'}
                 {activeProfile && tierChip ? ' + the active profile' : ''}.
                 <br />
-                {tierChip
+                {isCurationTier(tierChip)
                   ? 'No hotels are tagged this tier yet — tag them in a hotel’s Manage → Curation, or clear the chip above.'
-                  : 'Try another profile or clear it above.'}
+                  : tierChip
+                    ? `No hotels in this search are rated ${TIER_LABELS[tierChip]} — this filters the real star rating (villas & apartments often carry no star rating). Clear the chip above or try a broader destination.`
+                    : 'Try another profile or clear it above.'}
               </div>
             )}
 
@@ -2985,6 +3001,10 @@ function ControlBadge({ control }: { control: HotelControl }) {
 }
 
 function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHit; control?: HotelControl; onOpen: (supplier: string | null) => void; showUnavailable: boolean }) {
+  // "Why this price?" inline breakdown — clicking it must NOT open the drawer
+  // (the whole card is a button), so the trigger stops propagation and toggles
+  // this local popover instead.
+  const [showWhy, setShowWhy] = useState(false);
   // Use the per-supplier quotes when present; otherwise synthesise a single
   // quote from the legacy priced fields so single-supplier hotels render in
   // the same card (one unified layout for the whole list).
@@ -3021,7 +3041,8 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
         display: 'grid', gridTemplateColumns: '150px 1fr auto', gap: 16, alignItems: 'stretch',
         padding: 12, width: '100%', textAlign: 'left', cursor: 'pointer',
         background: 'var(--c-bg)', border: '1px solid var(--c-line)',
-        opacity: best ? 1 : 0.6
+        opacity: best ? 1 : 0.6,
+        position: 'relative', overflow: 'visible'
       }}
     >
       {/* Image */}
@@ -3091,27 +3112,60 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
           <span style={{ fontSize: 13, color: 'var(--c-fg-soft)', fontStyle: 'italic' }}>Price on request</span>
         ) : (
           <>
-            {/* Hover breakdown: spells out how the "from" AUD/nt is derived —
-                NET → +markup% → SELL USD → × FX → AUD/nt → × nights = total —
-                straight from the rate's own fields. Answers "where's this price
-                coming from" without opening the drawer. */}
-            <div
-              style={{ fontSize: 10, color: 'var(--c-fg-muted)', letterSpacing: '0.04em', fontWeight: 700, cursor: 'help', display: 'inline-block' }}
-              title={(() => {
+            {/* "Why this price?" — CLICK to reveal the derivation inline
+                (NET → +markup% → SELL USD → × FX → AUD/nt → × nights = total),
+                straight from the rate's own fields. stopPropagation so it opens
+                the little breakdown box instead of bubbling up and opening the
+                whole detail drawer. */}
+            <div style={{ position: 'relative', alignSelf: 'flex-end' }}>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); e.preventDefault(); setShowWhy(v => !v); }}
+                style={{ fontSize: 10.5, color: showWhy ? 'var(--c-accent)' : 'var(--c-fg-muted)', letterSpacing: '0.02em', fontWeight: 700, cursor: 'pointer', display: 'inline-block', textDecoration: 'underline dotted', textUnderlineOffset: 2 }}
+              >Why this price? ⓘ</span>
+              {showWhy && (() => {
                 const nights = (best.sellTotalAud && best.sellNightlyAud)
                   ? Math.max(1, Math.round(best.sellTotalAud / best.sellNightlyAud)) : 1;
-                const L: string[] = ['How this "From" price is calculated (per night):'];
-                if (best.netNightly != null) L.push(`  NET  ${fmtMoney(best.netNightly)} USD  (supplier cost)`);
+                const rows: Array<[string, string]> = [];
+                if (best.netNightly != null) rows.push(['NET (supplier cost)', `${fmtMoney(best.netNightly)} USD`]);
                 if (best.markupPct != null && best.sellNightly != null)
-                  L.push(`  + ${best.markupPct}% markup  →  ${fmtMoney(best.sellNightly)} USD  (sell)`);
+                  rows.push([`+ ${best.markupPct}% markup → sell`, `${fmtMoney(best.sellNightly)} USD`]);
                 if (best.fxRate != null && best.sellNightlyAud != null)
-                  L.push(`  × FX ${best.fxRate} (USD→AUD)  →  ${fmtMoney(best.sellNightlyAud)} AUD / nt`);
+                  rows.push([`× FX ${best.fxRate} (USD→AUD)`, `${fmtMoney(best.sellNightlyAud)} AUD / nt`]);
                 if (best.sellTotalAud != null)
-                  L.push(`  × ${nights} night${nights !== 1 ? 's' : ''}  =  ${fmtMoney(best.sellTotalAud)} AUD total`);
-                L.push('', 'FX is set in Console → Settings. Markup: hotel override or global rule.');
-                return L.join('\n');
+                  rows.push([`× ${nights} night${nights !== 1 ? 's' : ''}`, `${fmtMoney(best.sellTotalAud)} AUD total`]);
+                return (
+                  <div
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); }}
+                    style={{
+                      position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 30,
+                      width: 280, textAlign: 'left', cursor: 'default',
+                      background: 'var(--c-bg)', border: '1px solid var(--c-line)', borderRadius: 8,
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: '10px 12px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-fg)' }}>How this “From” price is built</span>
+                      <span
+                        role="button"
+                        onClick={(e) => { e.stopPropagation(); e.preventDefault(); setShowWhy(false); }}
+                        style={{ cursor: 'pointer', color: 'var(--c-fg-soft)', display: 'inline-flex' }}
+                      ><X size={12} /></span>
+                    </div>
+                    {rows.map(([k, v], i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)', padding: '2px 0' }}>
+                        <span style={{ color: 'var(--c-fg-muted)' }}>{k}</span>
+                        <span style={{ color: 'var(--c-fg)', fontWeight: 600, whiteSpace: 'nowrap' }}>{v}</span>
+                      </div>
+                    ))}
+                    <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', marginTop: 8, lineHeight: 1.4 }}>
+                      FX is set in Console → Settings. Markup: hotel override or global rule.
+                    </div>
+                  </div>
+                );
               })()}
-            >FROM ⓘ</div>
+            </div>
             {/* AUD primary (from pricing.aud) with USD small beneath; fall back
                 to USD as the primary when no AUD block came back. Display only —
                 booking still uses the USD basis. */}
