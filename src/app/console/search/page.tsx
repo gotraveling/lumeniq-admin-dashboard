@@ -869,11 +869,16 @@ export default function ConsoleSearchPage() {
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error || 'search failed');
-      const newInitial: HotelHit[] = (json.data.hits || []).map((h: any) => ({ ...h }));
+      const raw: HotelHit[] = (json.data.hits || []).map((h: any) => ({ ...h }));
+      // Dedupe against what's already on screen. Canonical collapse runs
+      // per-request on the backend, so a later page can re-surface a hotel
+      // already in the list (same id). Appending it blindly gives React two rows
+      // with the same key — which crashed to a blank page (Tina, 30 Jun). Drop
+      // the dupes; if nothing new survives, we've hit the real end (Meili's
+      // estimatedTotalHits overshoots), so pin total and hide the button.
+      const existing = new Set(hits.map(h => h.id));
+      const newInitial = raw.filter(h => h && h.id != null && !existing.has(h.id));
       if (newInitial.length === 0) {
-        // Meili estimatedTotalHits is an estimate that can overshoot the real
-        // result count — a page with 0 new hits means we've hit the real end,
-        // so pin total to what we have and hide the button.
         setTotal(hits.length);
         return;
       }
@@ -1328,7 +1333,9 @@ export default function ConsoleSearchPage() {
   // user flagged on /console/search.
   const filteredHits = useMemo(() => {
     return hits.filter(h => {
-      if (filterSupplier !== 'all' && !h.sources.includes(filterSupplier)) return false;
+      // Guard sources: a malformed/undefined sources array here would throw in
+      // render and blank the whole page. Coerce to [] defensively.
+      if (filterSupplier !== 'all' && !(Array.isArray(h.sources) ? h.sources : []).includes(filterSupplier)) return false;
       // Still loading prices on this hit — hide unless the user has
       // explicitly asked to see everything.
       if (!showUnavailable && h.priced === undefined) return false;
