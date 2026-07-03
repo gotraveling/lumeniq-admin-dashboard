@@ -130,6 +130,12 @@ type AdminRate = {
   matchTier?: 'strict' | 'class_bedding' | 'class' | 'name' | 'none' | null;
   cancellationPolicy?: string | null;
   cancellationDeadlineUtc?: string | null;
+  // On-request vs instant. Hummingbird stamps availabilityType='on_request'
+  // when the property must confirm before booking; onRequest is the truthful
+  // boolean the UI gates on — badge it and present as a REQUEST, never an
+  // instant book/charge. RateHawk rates are free-sell → onRequest false.
+  availabilityType?: string | null;
+  onRequest?: boolean;
   // ETG cert §6 — included/excluded split from supplier. Sidebar
   // itemises excluded taxes on top of the rate; included taxes are
   // already in pricing.sell.totalAmount and must never be re-summed.
@@ -3187,6 +3193,14 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
           {best?.breakfastIncluded && <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>· Breakfast</span>}
           {/* Transfer-bundled note — the card "from" price already includes this transfer. */}
           {best?.transferLabel && <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>· incl. {best.transferLabel}</span>}
+          {/* On-request: this property must confirm before booking — flag it on
+              the card so it's obvious before opening the detail. */}
+          {h.priced?.onRequest && (
+            <span
+              title="Supplier must confirm this rate before booking — it is NOT instant and must not be charged until confirmed."
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', color: '#92600a', background: 'rgba(245,177,66,0.18)', border: '1px solid rgba(245,177,66,0.5)', borderRadius: 999, padding: '1px 7px', cursor: 'help' }}
+            ><AlertTriangle size={10} /> On request</span>
+          )}
         </div>
         {/* Why a supplier is blocked — the consultant's note, shown inline so the
             rationale (e.g. "RateHawk excludes Harbour meals; book via Expedia")
@@ -4141,6 +4155,15 @@ function RoomGroupedRates({
                           )}
                         </td>
                         <td style={tdStyle}>
+                          {/* On-request rates need supplier confirmation — flag it
+                              here (amber) so the consultant treats it as a request,
+                              not an instant book. */}
+                          {r.onRequest && (
+                            <div
+                              title="Supplier must confirm this rate before it's booked — it is NOT instant, and must not be charged until confirmed."
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 3, marginBottom: 4, padding: '1px 7px', borderRadius: 999, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#92600a', background: 'rgba(245,177,66,0.18)', border: '1px solid rgba(245,177,66,0.5)', cursor: 'help' }}
+                            ><AlertTriangle size={10} /> On request</div>
+                          )}
                           {r.refundable
                             ? (
                               <div style={{ lineHeight: 1.3 }}>
@@ -4264,8 +4287,19 @@ function RoomGroupedRates({
                           </div>
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <button className="c-btn c-btn-primary" onClick={() => onChoose(r)} style={{ padding: '5px 12px', fontSize: 12 }}>
-                            Choose
+                          {/* On-request rate → present as a REQUEST, not an instant
+                              "Choose". Still proceeds to the booking form (the
+                              consultant raises the request), but the amber label +
+                              tooltip make clear it isn't confirmed/charged yet. */}
+                          <button
+                            className={r.onRequest ? 'c-btn' : 'c-btn c-btn-primary'}
+                            onClick={() => onChoose(r)}
+                            title={r.onRequest ? 'On-request rate — raises a booking request for supplier confirmation; do not charge until confirmed' : undefined}
+                            style={r.onRequest
+                              ? { padding: '5px 12px', fontSize: 12, color: '#92600a', background: 'rgba(245,177,66,0.15)', border: '1px solid rgba(245,177,66,0.6)', fontWeight: 700 }
+                              : { padding: '5px 12px', fontSize: 12 }}
+                          >
+                            {r.onRequest ? 'Request' : 'Choose'}
                           </button>
                         </td>
                       </tr>
