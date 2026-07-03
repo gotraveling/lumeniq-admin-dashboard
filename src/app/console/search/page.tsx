@@ -3208,9 +3208,14 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                 const nights = (best.sellTotalAud && best.sellNightlyAud)
                   ? Math.max(1, Math.round(best.sellTotalAud / best.sellNightlyAud)) : 1;
                 const rows: Array<[string, string]> = [];
+                // Which markup produced this %? A per-hotel override
+                // (control.markup_override_pct set) takes priority over the
+                // global rule — surface it so the consultant knows where to
+                // change it, instead of a generic "hotel override or global" note.
+                const hasMarkupOverride = control?.markup_override_pct != null && String(control.markup_override_pct).trim() !== '';
                 if (best.netNightly != null) rows.push(['NET (supplier cost)', `${fmtMoney(best.netNightly)} USD`]);
                 if (best.markupPct != null && best.sellNightly != null)
-                  rows.push([`+ ${best.markupPct}% markup → sell`, `${fmtMoney(best.sellNightly)} USD`]);
+                  rows.push([`+ ${best.markupPct}% markup (${hasMarkupOverride ? 'hotel override' : 'global rule'}) → sell`, `${fmtMoney(best.sellNightly)} USD`]);
                 if (best.fxRate != null && best.sellNightlyAud != null)
                   rows.push([`× FX ${best.fxRate} (USD→AUD)`, `${fmtMoney(best.sellNightlyAud)} AUD / nt`]);
                 if (best.sellTotalAud != null)
@@ -3239,9 +3244,6 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                         <span style={{ color: 'var(--c-fg)', fontWeight: 600, whiteSpace: 'nowrap' }}>{v}</span>
                       </div>
                     ))}
-                    <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', marginTop: 8, lineHeight: 1.4 }}>
-                      FX is set in Console → Settings. Markup: hotel override or global rule.
-                    </div>
                   </div>
                 );
               })()}
