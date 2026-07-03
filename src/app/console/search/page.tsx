@@ -3086,7 +3086,27 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
           <span style={{ fontSize: 13, color: 'var(--c-fg-soft)', fontStyle: 'italic' }}>Price on request</span>
         ) : (
           <>
-            <div style={{ fontSize: 10, color: 'var(--c-fg-muted)', letterSpacing: '0.04em', fontWeight: 700 }}>FROM</div>
+            {/* Hover breakdown: spells out how the "from" AUD/nt is derived —
+                NET → +markup% → SELL USD → × FX → AUD/nt → × nights = total —
+                straight from the rate's own fields. Answers "where's this price
+                coming from" without opening the drawer. */}
+            <div
+              style={{ fontSize: 10, color: 'var(--c-fg-muted)', letterSpacing: '0.04em', fontWeight: 700, cursor: 'help', display: 'inline-block' }}
+              title={(() => {
+                const nights = (best.sellTotalAud && best.sellNightlyAud)
+                  ? Math.max(1, Math.round(best.sellTotalAud / best.sellNightlyAud)) : 1;
+                const L: string[] = ['How this "From" price is calculated (per night):'];
+                if (best.netNightly != null) L.push(`  NET  ${fmtMoney(best.netNightly)} USD  (supplier cost)`);
+                if (best.markupPct != null && best.sellNightly != null)
+                  L.push(`  + ${best.markupPct}% markup  →  ${fmtMoney(best.sellNightly)} USD  (sell)`);
+                if (best.fxRate != null && best.sellNightlyAud != null)
+                  L.push(`  × FX ${best.fxRate} (USD→AUD)  →  ${fmtMoney(best.sellNightlyAud)} AUD / nt`);
+                if (best.sellTotalAud != null)
+                  L.push(`  × ${nights} night${nights !== 1 ? 's' : ''}  =  ${fmtMoney(best.sellTotalAud)} AUD total`);
+                L.push('', 'FX is set in Console → Settings. Markup: hotel override or global rule.');
+                return L.join('\n');
+              })()}
+            >FROM ⓘ</div>
             {/* AUD primary (from pricing.aud) with USD small beneath; fall back
                 to USD as the primary when no AUD block came back. Display only —
                 booking still uses the USD basis. */}
