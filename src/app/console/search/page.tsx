@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
-import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle, X, Plus, Maximize2, Minimize2, Image as ImageIcon, StickyNote } from 'lucide-react';
+import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle, X, Plus, Maximize2, Minimize2, Image as ImageIcon, StickyNote, Ban } from 'lucide-react';
 import DestinationAutocomplete, { type DestinationAutocompleteHandle } from '@/components/console/DestinationAutocomplete';
 import CountryPicker from '@/components/console/CountryPicker';
 import ReactMarkdown from 'react-markdown';
@@ -3046,7 +3046,7 @@ function Field({ label, children, style }: { label: string; children: React.Reac
 // opening the drawer.
 function ControlBadge({ control }: { control: HotelControl }) {
   const s = control.network_status;
-  const labels: Array<{ text: string; color: string; title?: string }> = [];
+  const labels: Array<{ text: string; color: string; title?: string; blocked?: boolean }> = [];
   // Luxury curation tier — surfaced even on otherwise-active hotels.
   if (control.luxury_tier === '5plus')     labels.push({ text: '5★+',  color: '#9a6a00' });
   if (control.luxury_tier === '5plusplus') labels.push({ text: '5★++', color: '#9a6a00' });
@@ -3060,10 +3060,14 @@ function ControlBadge({ control }: { control: HotelControl }) {
   for (const key of blockedSuppliersOf(control)) {
     const known = BLOCKABLE_SUPPLIERS.find(b => b.key === key);
     const name = known ? known.label : (key.charAt(0).toUpperCase() + key.slice(1));
+    // A blocked supplier is a WARNING, not a brand tag — render it red with a
+    // ⊘ icon so a consultant instantly sees "this supplier is switched off here"
+    // instead of a subtle purple chip that reads like a normal supplier badge.
     labels.push({
-      text: `No ${name}`,
-      color: known?.color || '#7c3aed',
-      title: blockReason ? `Blocked — ${blockReason}` : `${name} blocked for this hotel`,
+      text: `${name} blocked`,
+      color: '#b91c1c',
+      blocked: true,
+      title: blockReason ? `Blocked — ${blockReason}` : `${name} is blocked for this hotel (won't be sold)`,
     });
   }
   if (labels.length === 0) return null;
@@ -3071,10 +3075,14 @@ function ControlBadge({ control }: { control: HotelControl }) {
     <>
       {labels.map((l) => (
         <span key={l.text} title={l.title} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 3,
           fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
-          color: l.color, border: `1px solid ${l.color}33`, background: `${l.color}11`,
+          color: l.color,
+          // Blocked = solid-ish red fill so it stands out from the soft brand chips.
+          border: `1px solid ${l.color}${l.blocked ? '66' : '33'}`,
+          background: `${l.color}${l.blocked ? '1f' : '11'}`,
           padding: '2px 8px', borderRadius: 999, cursor: l.title ? 'help' : undefined
-        }}>{l.text}</span>
+        }}>{l.blocked && <Ban size={11} />}{l.text}</span>
       ))}
     </>
   );
