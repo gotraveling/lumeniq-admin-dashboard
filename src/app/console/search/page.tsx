@@ -1590,6 +1590,31 @@ export default function ConsoleSearchPage() {
               </div>
             )}
 
+            {/* Found-but-all-unavailable. The search matched hotels but none are
+                bookable for these dates, so filteredHits is empty and the only
+                signal was a tiny "N unavailable hidden" count line — picking a
+                specific hotel that's sold out for the dates looked like nothing
+                happened. Say it plainly and offer one click to reveal them (and
+                a nudge that the fix is usually different dates, not the search). */}
+            {!searching && !enrichingPrices && pendingCount === 0 && filteredHits.length === 0 && unavailableCount > 0 && !showUnavailable && (
+              <div className="c-card" style={{ padding: 20, textAlign: 'center', fontSize: 13, lineHeight: 1.6, color: 'var(--c-fg-muted)' }}>
+                <div style={{ color: 'var(--c-fg)', fontWeight: 600 }}>
+                  {unavailableCount === 1 ? 'Found the hotel' : `Found ${unavailableCount} hotels`}, but no bookable rates for {checkIn} → {checkOut}.
+                </div>
+                <div style={{ marginTop: 4 }}>
+                  Usually the fix is different dates (inventory this far out can be thin), not the search.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowUnavailable(true)}
+                  className="c-btn"
+                  style={{ marginTop: 12, fontSize: 12.5 }}
+                >
+                  Show {unavailableCount === 1 ? 'it' : 'them'} anyway
+                </button>
+              </div>
+            )}
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
               {filteredHits.map((h) => (
                 <MultiSupplierCard
