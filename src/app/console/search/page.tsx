@@ -649,6 +649,40 @@ export default function ConsoleSearchPage() {
     }
   }
 
+  // Consultant picked a SPECIFIC hotel from the autocomplete. We already know
+  // its id, so there's no reason to round-trip through a fuzzy name search (that
+  // was returning 0 for long formal names like "Four Seasons Hotel Istanbul at
+  // Sultanahmet"). Put that one hotel straight into the results and price it by
+  // id — deterministic, always resolves the exact property the consultant chose.
+  // Falls back to a name search only if the autocomplete somehow gave no id.
+  function pickHotel(h: { id?: number; hotel_id?: number; name?: string; city?: string; country?: string; main_image?: string | null }) {
+    const id = h.id ?? h.hotel_id;
+    const name = h.name || '';
+    setQ(name);
+    if (id == null) { runSearch(name); return; }   // no id → old name-search path
+    const norm = normalizeRange(checkIn, checkOut);
+    if (norm.checkIn !== checkIn) setCheckIn(norm.checkIn);
+    if (norm.checkOut !== checkOut) setCheckOut(norm.checkOut);
+    setSearchErr(norm.snapped ? `Check-in cannot be in the past — dates adjusted to ${norm.checkIn} → ${norm.checkOut}.` : null);
+    const hit: HotelHit = { id, name, city: h.city, country: h.country, image: h.main_image ?? null, sources: [] };
+    setDetailHotel(null);
+    setHits([hit]);
+    setTotal(1);
+    // Mirror what runSearch records so paging/empty-state stay consistent.
+    lastSearchRef.current = { q: name, checkIn: norm.checkIn, checkOut: norm.checkOut };
+    const next = new URLSearchParams(sp.toString());
+    next.delete('r'); next.delete('adults'); next.delete('rooms');
+    rooms.forEach(rm => next.append('r', `${rm.adults}${(rm.childrenAges && rm.childrenAges.length) ? '|' + rm.childrenAges.join(',') : ''}`));
+    next.set('q', name);
+    next.set('checkIn', norm.checkIn);
+    next.set('checkOut', norm.checkOut);
+    next.set('citizenship', citizenship);
+    next.delete('hotelId');
+    router.replace(`/console/search?${next.toString()}`);
+    // Price the exact id (compare resolves canonical + all suppliers server-side).
+    void enrichPrices([id], { checkIn: norm.checkIn, checkOut: norm.checkOut });
+  }
+
   // Retry budget for transient compare failures. The compare fan-out makes ONE
   // bulk supplier call per page; a single supplier timeout / 429 / cold start
   // marks the WHOLE page unavailable even though the hotels are bookable (the
@@ -1395,17 +1429,10 @@ export default function ConsoleSearchPage() {
                     ref={destRef}
                     value={q}
                     onChange={setQ}
-                    onSelectHotel={(h) => {
-                      // Picking a specific hotel from the dropdown should SEARCH
-                      // it, not just drop the name in the box and wait. Pass the
-                      // name straight into runSearch (setQ is async and wouldn't
-                      // have flushed yet). Backend falls back to a looser match
-                      // if the full formal name is too strict, so the property
-                      // the consultant literally selected always resolves.
-                      const name = h.name || '';
-                      setQ(name);
-                      runSearch(name);
-                    }}
+                    // Picking a specific hotel already gives us its id — price
+                    // that hotel directly instead of re-running a fuzzy name
+                    // search that can miss on long formal names.
+                    onSelectHotel={pickHotel}
                   />
                 </div>
                 <div>
