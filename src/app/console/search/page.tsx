@@ -173,6 +173,9 @@ type AudBlock = {
 // as STRINGS from postgres numeric/int columns — Number() them at the edge.
 type NetworkStatus = 'active' | 'paused' | 'hidden' | 'deleted';
 type LuxuryTier = '5plus' | '5plusplus';
+// Quick star chips next to the profile picker: 4★/5★ filter the real
+// star_rating; 5★+/5★++ filter the curation luxury_tier.
+type StarChip = '4' | '5' | '5plus' | '5plusplus';
 type ProximityTier = 'in-terminal' | 'connected' | 'walkable' | 'short-shuttle' | 'off-airport';
 type HotelControl = {
   hotel_id?: number;
@@ -408,7 +411,7 @@ export default function ConsoleSearchPage() {
   const [profiles, setProfiles]           = useState<ProfileLite[]>([]);
   const [activeProfile, setActiveProfile] = useState<ProfileLite | null>(null);
   const [profileFilter, setProfileFilter] = useState<string>('');  // compiled Meili filter for the active profile
-  const [tierChip, setTierChip]           = useState<LuxuryTier | null>(null);
+  const [tierChip, setTierChip]           = useState<StarChip | null>(null);
 
   // Load the profile list once on mount (cheap, read-only).
   useEffect(() => {
@@ -449,10 +452,12 @@ export default function ConsoleSearchPage() {
   // (AND-joined). Args default to current state, but callers can pass the
   // freshly-resolved values when their state-setters haven't flushed yet.
   // Returns undefined when neither is set so the search body omits `filter`.
-  function composedFilter(pf: string = profileFilter, tc: LuxuryTier | null = tierChip): string | undefined {
+  function composedFilter(pf: string = profileFilter, tc: StarChip | null = tierChip): string | undefined {
     const clauses: string[] = [];
     if (pf.trim()) clauses.push(`(${pf.trim()})`);
-    if (tc) clauses.push(`luxury_tier = "${tc}"`);
+    // 4★/5★ filter the real star_rating; 5★+/5★++ filter the curation tier.
+    if (tc === '4' || tc === '5') clauses.push(`star_rating = ${tc}`);
+    else if (tc) clauses.push(`luxury_tier = "${tc}"`);
     return clauses.length ? clauses.join(' AND ') : undefined;
   }
 
@@ -1461,7 +1466,7 @@ export default function ConsoleSearchPage() {
                 </span>
               )}
               <div style={{ display: 'flex', gap: 4 }}>
-                {([['5plus', '5★+'], ['5plusplus', '5★++']] as Array<[LuxuryTier, string]>).map(([tier, label]) => {
+                {([['4', '4★'], ['5', '5★'], ['5plus', '5★+'], ['5plusplus', '5★++']] as Array<[StarChip, string]>).map(([tier, label]) => {
                   const on = tierChip === tier;
                   return (
                     <button
