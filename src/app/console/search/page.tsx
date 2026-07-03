@@ -1395,7 +1395,17 @@ export default function ConsoleSearchPage() {
                     ref={destRef}
                     value={q}
                     onChange={setQ}
-                    onSelectHotel={(h) => setQ(h.name || '')}
+                    onSelectHotel={(h) => {
+                      // Picking a specific hotel from the dropdown should SEARCH
+                      // it, not just drop the name in the box and wait. Pass the
+                      // name straight into runSearch (setQ is async and wouldn't
+                      // have flushed yet). Backend falls back to a looser match
+                      // if the full formal name is too strict, so the property
+                      // the consultant literally selected always resolves.
+                      const name = h.name || '';
+                      setQ(name);
+                      runSearch(name);
+                    }}
                   />
                 </div>
                 <div>
@@ -1423,60 +1433,61 @@ export default function ConsoleSearchPage() {
                   {searching ? 'Searching…' : 'Search'}
                 </button>
               </form>
+
+              {/* Star / profile filters live INSIDE the search card — they're
+                  part of the same search unit, not a floating row below it.
+                  Separated from the inputs by a hairline. 4★/5★ filter the real
+                  star_rating; 5★+/5★++ filter the curation luxury_tier; both AND
+                  into the Meili query. Changing any re-runs the current search. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--c-line)', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', letterSpacing: '0.03em', textTransform: 'uppercase', fontWeight: 700, marginRight: 2 }}>Filters</span>
+                <select
+                  className="c-select"
+                  value={activeProfile?.slug || ''}
+                  onChange={async (e) => {
+                    const pf = await selectProfile(e.target.value);
+                    runSearch(undefined, undefined, composedFilter(pf, tierChip));
+                  }}
+                  style={{ maxWidth: 220, fontSize: 12.5 }}
+                >
+                  <option value="">No profile</option>
+                  {profiles.map((p) => (
+                    <option key={p.slug} value={p.slug}>{p.name || p.title || p.slug}</option>
+                  ))}
+                </select>
+                {activeProfile && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--c-fg)', background: 'var(--c-accent-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '3px 10px' }}>
+                    {activeProfile.name || activeProfile.title || activeProfile.slug}
+                    <button
+                      onClick={() => { setActiveProfile(null); setProfileFilter(''); runSearch(undefined, undefined, composedFilter('', tierChip)); }}
+                      title="Clear profile"
+                      style={{ background: 'none', border: 0, cursor: 'pointer', color: 'var(--c-fg-soft)', padding: 0, display: 'inline-flex' }}
+                    ><X size={12} /></button>
+                  </span>
+                )}
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {(Object.keys(TIER_LABELS) as StarChip[]).map((tier) => {
+                    const on = tierChip === tier;
+                    return (
+                      <button
+                        type="button"
+                        key={tier}
+                        onClick={() => { const next = on ? null : tier; setTierChip(next); runSearch(undefined, undefined, composedFilter(profileFilter, next)); }}
+                        style={{
+                          fontSize: 12, padding: '4px 12px', borderRadius: 999,
+                          border: '1px solid var(--c-line)', cursor: 'pointer',
+                          background: on ? 'var(--c-accent-soft)' : 'var(--c-bg)',
+                          color: on ? 'var(--c-fg)' : 'var(--c-fg-soft)',
+                          fontWeight: on ? 600 : 500,
+                        }}
+                      >{TIER_LABELS[tier]}</button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           </>
         )}
-
-        {/* B2B profile picker + star/tier quick chips — ALWAYS visible, directly
-            under the search form, so the consultant sets them BEFORE hitting
-            Search (they AND into the Meili filter). 4★/5★ filter the real
-            star_rating; 5★+/5★++ filter the curation luxury_tier. Changing any
-            of them re-runs the current query. */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-          <Sparkles size={13} style={{ color: 'var(--c-accent)' }} />
-          <select
-            className="c-select"
-            value={activeProfile?.slug || ''}
-            onChange={async (e) => {
-              const pf = await selectProfile(e.target.value);
-              runSearch(undefined, undefined, composedFilter(pf, tierChip));
-            }}
-            style={{ maxWidth: 240, fontSize: 12.5 }}
-          >
-            <option value="">No profile</option>
-            {profiles.map((p) => (
-              <option key={p.slug} value={p.slug}>{p.name || p.title || p.slug}</option>
-            ))}
-          </select>
-          {activeProfile && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--c-fg)', background: 'var(--c-accent-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '3px 10px' }}>
-              {activeProfile.name || activeProfile.title || activeProfile.slug}
-              <button
-                onClick={() => { setActiveProfile(null); setProfileFilter(''); runSearch(undefined, undefined, composedFilter('', tierChip)); }}
-                title="Clear profile"
-                style={{ background: 'none', border: 0, cursor: 'pointer', color: 'var(--c-fg-soft)', padding: 0, display: 'inline-flex' }}
-              ><X size={12} /></button>
-            </span>
-          )}
-          <div style={{ display: 'flex', gap: 4 }}>
-            {(Object.keys(TIER_LABELS) as StarChip[]).map((tier) => {
-              const on = tierChip === tier;
-              return (
-                <button
-                  key={tier}
-                  onClick={() => { const next = on ? null : tier; setTierChip(next); runSearch(undefined, undefined, composedFilter(profileFilter, next)); }}
-                  style={{
-                    fontSize: 12, padding: '4px 12px', borderRadius: 999,
-                    border: '1px solid var(--c-line)', cursor: 'pointer',
-                    background: on ? 'var(--c-accent-soft)' : 'var(--c-bg)',
-                    color: on ? 'var(--c-fg)' : 'var(--c-fg-soft)',
-                    fontWeight: on ? 600 : 500,
-                  }}
-                >{TIER_LABELS[tier]}</button>
-              );
-            })}
-          </div>
-        </div>
 
         {/* Errors */}
         {searchErr && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 14 }}>Error: {searchErr}</div>}
@@ -1489,7 +1500,7 @@ export default function ConsoleSearchPage() {
         {hits.length === 0 && !searching && !tierChip && !activeProfile && (
           <div className="c-card" style={{ padding: 32, textAlign: 'center', color: 'var(--c-fg-muted)', fontSize: 13, lineHeight: 1.5 }}>
             {lastSearchRef.current
-              ? <>No hotels found for “{lastSearchRef.current.q}”. Check the spelling, or try a broader destination (e.g. just the city). A specific property with no bookable rates for these dates will still appear once found — tick “Show unavailable” after searching its city.</>
+              ? <>No hotels found for “{lastSearchRef.current.q}”. Try just the city name, or pick the hotel from the dropdown as you type.</>
               : 'Type a destination or hotel name above to start searching.'}
           </div>
         )}
