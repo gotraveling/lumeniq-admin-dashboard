@@ -22,12 +22,12 @@ interface CollectionListRow {
   status: 'draft' | 'published'; hotelCount: number; updatedAt?: string;
 }
 interface CollectionHotel {
-  hotelId?: number; name: string; atoll?: string; image?: string;
+  hotelId?: number; name: string; atoll?: string; image?: string; images?: string[];
   offer?: string; bookBy?: string; editorial?: string; customisable?: boolean;
 }
 interface CollectionFull {
   id: number; slug: string; title: string; subtitle?: string; heroImage?: string;
-  intro: string[]; memberBenefit?: string; quoteRef?: string;
+  intro: string[]; memberBenefit?: string; quoteRef?: string; searchDestination?: string;
   status: 'draft' | 'published'; hotels: CollectionHotel[];
 }
 
@@ -76,7 +76,8 @@ export default function CollectionsPage() {
       const meta = {
         slug: editing.slug, title: editing.title, subtitle: editing.subtitle,
         heroImage: editing.heroImage, intro: editing.intro, memberBenefit: editing.memberBenefit,
-        quoteRef: editing.quoteRef, status: editing.status, updatedBy: 'console',
+        quoteRef: editing.quoteRef, status: editing.status,
+        searchDestination: editing.searchDestination, updatedBy: 'console',
       };
       let id = editing.id;
       if (id) {
@@ -212,6 +213,9 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
         <Field label="Subtitle"><input className="c-input" value={value.subtitle || ''} onChange={(e) => set({ subtitle: e.target.value })} /></Field>
         <Field label="Hero image URL"><input className="c-input" value={value.heroImage || ''} onChange={(e) => set({ heroImage: e.target.value })} /></Field>
         <Field label="Member benefit line"><input className="c-input" value={value.memberBenefit || ''} onChange={(e) => set({ memberBenefit: e.target.value })} /></Field>
+        <Field label="Search destination — fills the “Discover {this} like never before” heading and scopes the hero search box (e.g. Maldives, Cairo). Clear the intro below to hide the heading entirely.">
+          <input className="c-input" value={value.searchDestination || ''} onChange={(e) => set({ searchDestination: e.target.value })} placeholder="Maldives" />
+        </Field>
         <Field label="Intro paragraphs (leave a blank line between paragraphs)">
           {/* Blank line = new paragraph, so paragraphs round-trip with spacing
               (split on blank lines, join with a blank line). A single newline
@@ -248,6 +252,10 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
                   </label>
                 </Field>
                 <Field label="Editorial blurb"><textarea className="c-input" rows={2} value={h.editorial || ''} onChange={(e) => setHotel(i, { editorial: e.target.value })} /></Field>
+                <Field label="Extra photos — one URL per line (2+ → card shows a carousel; first is the primary)">
+                  <textarea className="c-input" rows={2} value={(h.images || []).join('\n')}
+                    onChange={(e) => setHotel(i, { images: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} />
+                </Field>
               </div>
             </div>
           ))}
