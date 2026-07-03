@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
+import { useConsoleRole } from '@/lib/useConsoleRole';
 import {
   Calendar,
   ClipboardList,
@@ -37,46 +38,60 @@ import {
 // admin layout. They're surfaced here so consultants don't have to
 // remember the two-URL split. Will be migrated into /console/* over
 // time and then the hrefs swap without consumers noticing.
-const NAV: Array<{ section: string; items: Array<{ href: string; label: string; icon: any }> }> = [
+// adminOnly items are hidden from consultants (and the routes are guarded below).
+// Consultants keep: Bookings + B2B Search (their job — search, book, notes).
+const NAV: Array<{ section: string; items: Array<{ href: string; label: string; icon: any; adminOnly?: boolean }> }> = [
   {
     section: 'Operations',
     items: [
       { href: '/console/bookings',         label: 'Bookings',        icon: ClipboardList },
       { href: '/console/search',           label: 'B2B Search',      icon: Search },
-      { href: '/console/offers',           label: 'Offers',          icon: Tag },
+      { href: '/console/offers',           label: 'Offers',          icon: Tag, adminOnly: true },
       // AI Agent search disabled — driven via MCP now (2026-06-28)
-      { href: '/console/search-activity',  label: 'Search Activity', icon: BarChart3 },
+      { href: '/console/search-activity',  label: 'Search Activity', icon: BarChart3, adminOnly: true },
     ],
   },
   {
     section: 'Catalog',
     items: [
-      { href: '/console/collections',      label: 'Collections',       icon: FolderOpen },
-      { href: '/console/room-mappings',    label: 'Room Mappings',     icon: Link2 },
-      { href: '/console/profiles',         label: 'Profiles',          icon: SlidersHorizontal },
-      { href: '/console/editorial',        label: 'Editorial Content', icon: Sparkles },
-      { href: '/console/hotels/visibility', label: 'Hotel Visibility', icon: EyeOff },
+      { href: '/console/collections',      label: 'Collections',       icon: FolderOpen, adminOnly: true },
+      { href: '/console/room-mappings',    label: 'Room Mappings',     icon: Link2, adminOnly: true },
+      { href: '/console/profiles',         label: 'Profiles',          icon: SlidersHorizontal, adminOnly: true },
+      { href: '/console/editorial',        label: 'Editorial Content', icon: Sparkles, adminOnly: true },
+      { href: '/console/hotels/visibility', label: 'Hotel Visibility', icon: EyeOff, adminOnly: true },
     ],
   },
   {
     section: 'Pricing',
     items: [
-      { href: '/console/rules',            label: 'Pricing rules',     icon: DollarSign },
+      { href: '/console/rules',            label: 'Pricing rules',     icon: DollarSign, adminOnly: true },
     ],
   },
   {
     section: 'Setup',
     items: [
-      { href: '/console/suppliers',        label: 'Suppliers', icon: Globe },
-      { href: '/console/settings',         label: 'Settings',  icon: Settings },
+      { href: '/console/suppliers',        label: 'Suppliers', icon: Globe, adminOnly: true },
+      { href: '/console/settings',         label: 'Settings',  icon: Settings, adminOnly: true },
     ],
   },
 ];
+
+// A consultant may only reach the overview, bookings, and B2B search (+ its
+// sub-routes). Everything else under /console is admin-only. Kept as a function
+// (not a prefix list) so "/console/search" is allowed but "/console/search-activity"
+// is NOT, despite the shared prefix.
+function consultantMayAccess(pathname: string): boolean {
+  if (pathname === '/console' || pathname === '/console/') return true;
+  if (pathname === '/console/bookings' || pathname.startsWith('/console/bookings/')) return true;
+  if (pathname === '/console/search' || pathname.startsWith('/console/search/')) return true;
+  return false;
+}
 
 export function ConsoleShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [user, loading] = useAuthState(auth);
+  const { isAdmin, loading: roleLoading } = useConsoleRole();
 
   // Same auth gate /admin uses — push the visitor to /auth/login the
   // moment we know they're not signed in. Without this, /console/*
@@ -87,6 +102,15 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
       router.push('/auth/login');
     }
   }, [loading, user, router]);
+
+  // Role gate: a consultant who deep-links (or is redirected) to an admin-only
+  // route is bounced to B2B Search. UI-level guard — Tina's concern is
+  // consultants ACCIDENTALLY changing settings, not a determined attacker.
+  useEffect(() => {
+    if (!loading && user && !roleLoading && !isAdmin && !consultantMayAccess(pathname)) {
+      router.replace('/console/search');
+    }
+  }, [loading, user, roleLoading, isAdmin, pathname, router]);
 
   // Block render until firebase has answered. Otherwise the shell
   // flashes briefly before the redirect on slow connections — that
@@ -115,10 +139,14 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
           >
             <Calendar size={15} /> Overview
           </Link>
-          {NAV.map((section) => (
+          {NAV.map((section) => {
+            // Hide admin-only items (and any section left empty) from consultants.
+            const items = section.items.filter((it) => isAdmin || !it.adminOnly);
+            if (items.length === 0) return null;
+            return (
             <div key={section.section}>
               <div className="c-nav-section">{section.section}</div>
-              {section.items.map((it) => {
+              {items.map((it) => {
                 const Icon = it.icon;
                 const active = pathname === it.href || pathname.startsWith(it.href + '/');
                 return (
@@ -132,14 +160,17 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
                 );
               })}
             </div>
-          ))}
+            );
+          })}
           <div style={{ marginTop: 'auto', paddingTop: 18 }}>
             {/* Legacy admin has no index route (no /admin/page.tsx) — only
                 sub-pages like /admin/dashboard exist, so linking to /admin 404s.
-                Point at the real landing page. */}
-            <Link href="/admin/dashboard" className="c-nav-link">
-              <Settings size={15} /> Legacy admin
-            </Link>
+                Point at the real landing page. Admin-only. */}
+            {isAdmin && (
+              <Link href="/admin/dashboard" className="c-nav-link">
+                <Settings size={15} /> Legacy admin
+              </Link>
+            )}
             <button
               type="button"
               onClick={() => auth.signOut().then(() => router.push('/auth/login'))}

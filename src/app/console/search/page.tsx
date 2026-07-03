@@ -11,6 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import DateRangePicker from '@/components/console/DateRangePicker';
 import GuestSelector, { type RoomGuests } from '@/components/console/GuestSelector';
+import { useConsoleRole } from '@/lib/useConsoleRole';
 
 // Pre-fill pills — the agent panel handles open-ended discovery; these
 // pills are for the consultant who already knows the brief.
@@ -364,6 +365,10 @@ function normalizeRange(ci: string, co: string): { checkIn: string; checkOut: st
 
 export default function ConsoleSearchPage() {
   const [user] = useAuthState(auth);
+  // Consultants (non-admins) can search, book, see net+markup, and add internal
+  // notes — but NOT the full "Manage hotel" panel (visibility/pricing/transfer/
+  // curation). Gated below.
+  const { isAdmin } = useConsoleRole();
   const sp = useSearchParams();
   const router = useRouter();
 
@@ -1784,8 +1789,10 @@ export default function ConsoleSearchPage() {
                   the drawer to near-full-width for the booking step). */}
               <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', padding: 18 }}>
             {/* Per-hotel "Manage" controls — visibility, pricing, transfer,
-                airport proximity, notes. Collapsible so it doesn't crowd the
-                rate table; refreshes the result-card badges on save. */}
+                airport proximity, curation. ADMIN ONLY: consultants must not be
+                able to change hotel/rate settings (Tina). The internal note below
+                stays available to everyone. */}
+            {isAdmin && (
             <ManagePanel
               hotelId={detailHotel.id}
               hotelName={detailHotel.name}
@@ -1798,6 +1805,7 @@ export default function ConsoleSearchPage() {
               }}
               onCloseDrawer={() => { setDetailHotel(null); setDetailExpanded(false); setEditingSearch(false); syncUrl({ hotelId: null }); }}
             />
+            )}
             {/* Internal note surfaced + editable right under the Manage button
                 (same control field as the Manage panel + MCP set_hotel_note).
                 Shows an "Add internal note" button when empty. */}
