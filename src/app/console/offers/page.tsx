@@ -100,7 +100,7 @@ async function fetchRatesRetry(hotelId: number, qs: string, maxTries = 5): Promi
   return { rates: [], throttled };
 }
 
-const STAY_OPTIONS = [3, 5, 7, 10];
+const STAY_OPTIONS = [1, 2, 3, 4, 5, 7, 10];
 
 export default function OffersPage() {
   const [view, setView] = useState<'list' | 'detail'>('list');
@@ -116,9 +116,18 @@ export default function OffersPage() {
   const [searching, setSearching] = useState(false);
   const [selMonths, setSelMonths] = useState<string[]>(months.slice(0, 6).map((m) => m.key));
   const [selStays, setSelStays] = useState<number[]>([5, 7]);
+  const [customStay, setCustomStay] = useState('');
   const [adults, setAdults] = useState(2);
   const [gen, setGen] = useState<{ running: boolean; done: number; total: number; throttled: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  // Add an arbitrary stay length (1–60 nights) so Tina isn't limited to the presets.
+  const addCustomStay = () => {
+    const n = Math.round(Number(customStay));
+    if (!Number.isFinite(n) || n < 1 || n > 60) return;
+    setSelStays((s) => (s.includes(n) ? s : [...s, n].sort((a, b) => a - b)));
+    setCustomStay('');
+  };
 
   // Deep-link: on mount, open a report if ?report=ID is in the URL (shareable /
   // refreshable). openReport/back keep the URL in sync.
@@ -332,11 +341,23 @@ export default function OffersPage() {
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 14 }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.04, color: 'var(--c-fg-muted)', marginBottom: 6 }}>Stay length</div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              {STAY_OPTIONS.map((n) => {
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              {Array.from(new Set([...STAY_OPTIONS, ...selStays])).sort((a, b) => a - b).map((n) => {
                 const on = selStays.includes(n);
-                return <button key={n} onClick={() => setSelStays((s) => on ? s.filter((x) => x !== n) : [...s, n])} style={pill(on)}>{n} nights</button>;
+                return <button key={n} onClick={() => setSelStays((s) => on ? s.filter((x) => x !== n) : [...s, n].sort((a, b) => a - b))} style={pill(on)}>{n} nights</button>;
               })}
+              <input
+                className="c-input"
+                type="number"
+                min={1}
+                max={60}
+                placeholder="custom"
+                value={customStay}
+                onChange={(e) => setCustomStay(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomStay(); } }}
+                style={{ width: 84 }}
+              />
+              <button onClick={addCustomStay} style={pill(false)}>Add</button>
             </div>
           </div>
           <div>
