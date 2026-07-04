@@ -3944,6 +3944,8 @@ function RoomGroupedRates({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Per-room "Matrix" view: pivot this room's rates by meal (rows) × transfer (cols).
   const [matrixView, setMatrixView] = useState<Set<string>>(new Set());
+  // Per-room "Why this rate?" selection trace (from the API's presentation block).
+  const [whyView, setWhyView] = useState<Set<string>>(new Set());
   // Per-room meal/transfer dropdown selections (keyed by group name). Empty →
   // falls back to the matrix default (cheapest meal + Speedboat).
   const [selMeal, setSelMeal] = useState<Record<string, string>>({});
@@ -3999,6 +4001,10 @@ function RoomGroupedRates({
         // A pivot table is worth offering when there's more than one meal or any transfer choice.
         const canMatrix = !!matrix && (matrix.meals.length > 1 || matrix.hasTransfers);
         const inMatrix = matrixView.has(g.name);
+        const trace = presByName.get(g.name)?.trace as
+          | { considered: number; shown: number; chosen: string; chosenReason: string; hidden: Array<{ option: string; beatenBy: string }> }
+          | undefined;
+        const inWhy = whyView.has(g.name);
         let visibleRates: AdminRate[];
         if (isExpanded) {
           visibleRates = g.rates;
@@ -4066,6 +4072,22 @@ function RoomGroupedRates({
                         ▦ Matrix
                       </button>
                     )}
+                    {trace && (
+                      <button
+                        onClick={() => setWhyView(s => { const n = new Set(s); n.has(g.name) ? n.delete(g.name) : n.add(g.name); return n; })}
+                        title="Why we picked this rate — how many were weighed and which were hidden"
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
+                          fontSize: 11.5, fontWeight: 600,
+                          color: inWhy ? 'var(--c-accent)' : 'var(--c-fg)',
+                          background: inWhy ? 'rgba(155,123,51,0.08)' : 'none',
+                          border: inWhy ? '1px solid var(--c-accent)' : '1px solid var(--c-line)',
+                          borderRadius: 6, padding: '3px 9px', cursor: 'pointer'
+                        }}
+                      >
+                        Why this rate?
+                      </button>
+                    )}
                     {groupImages.length > 0 && (
                       <button
                         onClick={() => setPhotoModal({ name: g.name, images: groupImages })}
@@ -4081,6 +4103,27 @@ function RoomGroupedRates({
                     )}
                   </div>
                 </div>
+                {inWhy && trace && (
+                  <div style={{
+                    marginBottom: 10, padding: '8px 10px', borderRadius: 6,
+                    background: 'var(--c-bg-soft)', border: '1px solid var(--c-line-soft)',
+                    fontSize: 11.5, lineHeight: 1.5
+                  }}>
+                    <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                      Weighed {trace.considered} rate{trace.considered !== 1 ? 's' : ''} · showing {trace.shown} · picked{' '}
+                      <span style={{ color: 'var(--c-accent)' }}>{trace.chosen}</span> ({trace.chosenReason})
+                    </div>
+                    {trace.hidden.length > 0 ? (
+                      <ul style={{ margin: 0, paddingLeft: 16, color: 'var(--c-fg-muted)' }}>
+                        {trace.hidden.map((h, i) => (
+                          <li key={i}>Hid <strong>{h.option}</strong> — <strong>{h.beatenBy}</strong> is cheaper for the same or better board</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div style={{ color: 'var(--c-fg-muted)' }}>No rates hidden — every meal / transfer option is shown.</div>
+                    )}
+                  </div>
+                )}
                 {showMatrix && matrix && (() => {
                   const pillStyle = (active: boolean) => ({
                     fontSize: 11.5, fontWeight: 600, padding: '3px 10px', borderRadius: 999,
