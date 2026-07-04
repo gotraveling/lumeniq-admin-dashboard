@@ -3921,6 +3921,8 @@ function RoomGroupedRates({
     });
   }, [rates, comparing, roomMap]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // Per-room "Matrix" view: pivot this room's rates by meal (rows) × transfer (cols).
+  const [matrixView, setMatrixView] = useState<Set<string>>(new Set());
   // Per-room meal/transfer dropdown selections (keyed by group name). Empty →
   // falls back to the matrix default (cheapest meal + Speedboat).
   const [selMeal, setSelMeal] = useState<Record<string, string>>({});
@@ -3973,6 +3975,9 @@ function RoomGroupedRates({
         const selT = matrix && selTransfer[g.name] && matrix.transfers.includes(selTransfer[g.name]) ? selTransfer[g.name] : (matrix?.defaultTransfer || '');
         const selectedRate = matrix ? (matrix.byCombo.get(admKey(selM, selT)) || matrix.from) : null;
         const showMatrix = !comparing && !isExpanded && !!matrix && (matrix.meals.length > 1 || matrix.hasTransfers);
+        // A pivot table is worth offering when there's more than one meal or any transfer choice.
+        const canMatrix = !!matrix && (matrix.meals.length > 1 || matrix.hasTransfers);
+        const inMatrix = matrixView.has(g.name);
         let visibleRates: AdminRate[];
         if (isExpanded) {
           visibleRates = g.rates;
@@ -4023,19 +4028,37 @@ function RoomGroupedRates({
                       </div>
                     </div>
                   </div>
-                  {groupImages.length > 0 && (
-                    <button
-                      onClick={() => setPhotoModal({ name: g.name, images: groupImages })}
-                      style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
-                        fontSize: 11.5, fontWeight: 600, color: 'var(--c-accent)',
-                        background: 'none', border: '1px solid var(--c-line)', borderRadius: 6,
-                        padding: '3px 9px', cursor: 'pointer'
-                      }}
-                    >
-                      <ImageIcon size={12} /> {groupImages.length} photo{groupImages.length > 1 ? 's' : ''}
-                    </button>
-                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                    {canMatrix && (
+                      <button
+                        onClick={() => setMatrixView(s => { const n = new Set(s); n.has(g.name) ? n.delete(g.name) : n.add(g.name); return n; })}
+                        title="Show a grid of rates by meal plan × transfer"
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
+                          fontSize: 11.5, fontWeight: 600,
+                          color: inMatrix ? 'var(--c-accent)' : 'var(--c-fg)',
+                          background: inMatrix ? 'rgba(155,123,51,0.08)' : 'none',
+                          border: inMatrix ? '1px solid var(--c-accent)' : '1px solid var(--c-line)',
+                          borderRadius: 6, padding: '3px 9px', cursor: 'pointer'
+                        }}
+                      >
+                        ▦ Matrix
+                      </button>
+                    )}
+                    {groupImages.length > 0 && (
+                      <button
+                        onClick={() => setPhotoModal({ name: g.name, images: groupImages })}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
+                          fontSize: 11.5, fontWeight: 600, color: 'var(--c-accent)',
+                          background: 'none', border: '1px solid var(--c-line)', borderRadius: 6,
+                          padding: '3px 9px', cursor: 'pointer'
+                        }}
+                      >
+                        <ImageIcon size={12} /> {groupImages.length} photo{groupImages.length > 1 ? 's' : ''}
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {showMatrix && matrix && (() => {
                   const pillStyle = (active: boolean) => ({
@@ -4063,6 +4086,53 @@ function RoomGroupedRates({
                           ))}
                         </div>
                       )}
+                    </div>
+                  );
+                })()}
+                {inMatrix && matrix && (() => {
+                  const cols = matrix.hasTransfers && matrix.transfers.length ? matrix.transfers : [''];
+                  const rows = matrix.meals.length ? matrix.meals : [''];
+                  const money = (n: number | null | undefined) => (n == null ? '—' : Math.round(n).toLocaleString('en-AU'));
+                  const sellOf = (r?: AdminRate) => (r ? (r.pricing?.aud?.totalAmount ?? r.pricing?.sell?.totalAmount ?? null) : null);
+                  const netOf = (r?: AdminRate) => (r ? (r.pricing?.net?.aud?.totalAmount ?? r.pricing?.net?.totalAmount ?? null) : null);
+                  return (
+                    <div style={{ marginBottom: 12, overflowX: 'auto' }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', marginBottom: 6 }}>
+                        Sell / net total (AUD) — meal plan × transfer
+                      </div>
+                      <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 320 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ ...thStyle, textAlign: 'left' }}>Meal / Transfer</th>
+                            {cols.map((c) => (
+                              <th key={c || 'rate'} style={{ ...thStyle, textAlign: 'right' }}>{c || 'Rate'}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((m) => (
+                            <tr key={m || 'meal'} style={{ borderTop: '1px solid var(--c-line-soft)' }}>
+                              <td style={{ ...tdStyle, fontWeight: 600 }}>{m || 'Room only'}</td>
+                              {cols.map((c) => {
+                                const r = matrix.byCombo.get(admKey(m, c));
+                                const sell = sellOf(r);
+                                return (
+                                  <td key={(m || 'meal') + '|' + (c || 'rate')} style={{ ...tdStyle, textAlign: 'right', fontFamily: 'var(--c-mono)' }}>
+                                    {sell == null ? (
+                                      <span style={{ color: 'var(--c-fg-soft)' }}>—</span>
+                                    ) : (
+                                      <>
+                                        <div style={{ fontWeight: 700, color: 'var(--c-accent)' }}>{money(sell)}</div>
+                                        <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)' }}>net {money(netOf(r))}</div>
+                                      </>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   );
                 })()}
