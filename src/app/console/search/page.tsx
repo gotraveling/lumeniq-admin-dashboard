@@ -3307,7 +3307,7 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                 // change it, instead of a generic "hotel override or global" note.
                 const hasMarkupOverride = control?.markup_override_pct != null && String(control.markup_override_pct).trim() !== '';
                 rows.push(['Supplier', String(best.supplier || '—')]);
-                rows.push(['Rate channel', 'Member / CUG']);
+                rows.push(['Rate channel', 'Member (CUG)']);
                 if (best.roomTypeName) rows.push(['Room', best.roomTypeName]);
                 if (best.ratePlan) rows.push(['Plan', best.ratePlan === 'nomeal' ? 'Room only' : best.ratePlan]);
                 if (best.refundable != null) {
@@ -3333,7 +3333,8 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                     onClick={(e) => { e.stopPropagation(); e.preventDefault(); }}
                     style={{
                       position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 30,
-                      width: 460, maxWidth: '92vw', textAlign: 'left', cursor: 'default',
+                      width: 460, maxWidth: '92vw', textAlign: 'left', cursor: 'auto',
+                      userSelect: 'text', WebkitUserSelect: 'text',
                       background: 'var(--c-bg)', border: '1px solid var(--c-line)', borderRadius: 8,
                       boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: '10px 12px'
                     }}
