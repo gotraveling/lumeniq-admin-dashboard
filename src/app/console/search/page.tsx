@@ -1962,6 +1962,7 @@ export default function ConsoleSearchPage() {
                 rates={supplierFocus ? rates.filter(r => r.supplier === supplierFocus) : rates}
                 presentation={presentation}
                 b2cSellBySig={b2cSellBySig}
+                country={detailHotel?.country}
                 onChoose={(r) => {
                   setChosenRate(r);
                   // Audit: tell the backend which rate the consultant
@@ -3839,7 +3840,7 @@ function adminMatrixFromPresentation(p: any, list: AdminRate[]): AdminMatrix | n
 }
 
 function RoomGroupedRates({
-  rates, onChoose, marginTop = 0, control, rooms = [], roomMap, presentation, b2cSellBySig
+  rates, onChoose, marginTop = 0, control, rooms = [], roomMap, presentation, b2cSellBySig, country
 }: {
   rates: AdminRate[];
   onChoose: (r: AdminRate) => void;
@@ -3848,6 +3849,7 @@ function RoomGroupedRates({
   presentation?: any;
   // Non-member cheapest sell per plan sig — drives the "All" vs "Member" tag.
   b2cSellBySig?: Map<string, number>;
+  country?: string;
   // Per-hotel control row (transfer cost) + the search occupancy, so a
   // room-only rate can show the transfer surcharge a transfer-bundled
   // (Hummingbird) rate already includes. Makes the comparison apple-to-apple.
@@ -3891,6 +3893,9 @@ function RoomGroupedRates({
   // Compare mode kicks in once the consultant has pulled the Non-Member
   // channel in — it changes how rates are ordered (pair the twins) and how
   // many we surface when collapsed (top plan-pairs, not top rows).
+  // Maldives: show package totals only in the rate rows (hide per-night). The
+  // per-night figures still live in the list card's "Why this price?" breakdown.
+  const isMaldives = /maldives/i.test(country || '');
   const comparing = useMemo(() => rates.some(r => r._channel === 'b2c'), [rates]);
   const groups = useMemo(() => {
     // Each bucket carries its rate list + a display label. The label is the
@@ -4442,18 +4447,22 @@ function RoomGroupedRates({
                                 <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
                                   {fmtMoney(r.pricing.net?.totalAmount)} {r.pricing.currency}
                                 </div>
-                                <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                  {fmtMoney(r.pricing.net.aud.nightlyAmount ?? undefined)} AUD/nt · {fmtMoney(r.pricing.net?.nightlyAmount)} {r.pricing.currency}/nt
-                                </div>
+                                {!isMaldives && (
+                                  <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
+                                    {fmtMoney(r.pricing.net.aud.nightlyAmount ?? undefined)} AUD/nt · {fmtMoney(r.pricing.net?.nightlyAmount)} {r.pricing.currency}/nt
+                                  </div>
+                                )}
                               </>
                             ) : (
                               <>
                                 <div style={{ fontWeight: 600 }}>
                                   {fmtMoney(r.pricing.net?.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>{r.pricing.currency} total</span>
                                 </div>
-                                <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                  {fmtMoney(r.pricing.net?.nightlyAmount)} {r.pricing.currency}/nt
-                                </div>
+                                {!isMaldives && (
+                                  <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
+                                    {fmtMoney(r.pricing.net?.nightlyAmount)} {r.pricing.currency}/nt
+                                  </div>
+                                )}
                               </>
                             )}
                           </div>
@@ -4505,18 +4514,22 @@ function RoomGroupedRates({
                                 <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
                                   {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency}
                                 </div>
-                                <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                  {fmtMoney(r.pricing.aud.nightlyAmount ?? undefined)} AUD/nt · {fmtMoney(r.pricing.sell?.nightlyAmount)} {r.pricing.currency}/nt
-                                </div>
+                                {!isMaldives && (
+                                  <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
+                                    {fmtMoney(r.pricing.aud.nightlyAmount ?? undefined)} AUD/nt · {fmtMoney(r.pricing.sell?.nightlyAmount)} {r.pricing.currency}/nt
+                                  </div>
+                                )}
                               </>
                             ) : (
                               <>
                                 <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
                                   {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>total</span>
                                 </div>
-                                <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                  {fmtMoney(r.pricing.sell?.nightlyAmount)} {r.pricing.currency}/nt
-                                </div>
+                                {!isMaldives && (
+                                  <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
+                                    {fmtMoney(r.pricing.sell?.nightlyAmount)} {r.pricing.currency}/nt
+                                  </div>
+                                )}
                               </>
                             )}
                             {(() => {
