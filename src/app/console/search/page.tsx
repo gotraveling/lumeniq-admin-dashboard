@@ -84,6 +84,7 @@ type Quote = {
   supplier: string | null;
   available: boolean;
   reason?: string;
+  roomTypeName?: string;
   sellNightly?: number;
   sellTotal?: number;
   // Derived AUD (from cheapestRate.pricing.aud) — display only.
@@ -783,6 +784,7 @@ export default function ConsoleSearchPage() {
             supplier:                q.supplier,
             available:               !!q.available,
             reason:                  q.reason,
+            roomTypeName:            q.cheapestRate?.roomTypeName,
             sellNightly:             sell?.nightlyAmount,
             sellTotal:               sell?.totalAmount,
             sellNightlyAud:          aud?.nightlyAmount ?? undefined,
@@ -814,6 +816,35 @@ export default function ConsoleSearchPage() {
         const sell = r.cheapestRate?.pricing?.sell;
         const net  = r.cheapestRate?.pricing?.net;
         const aud  = r.cheapestRate?.pricing?.aud;   // derived AUD (display)
+        const headlineQuote: Quote = {
+          supplier:                r.cheapestSupplier || r.supplier || null,
+          available:               true,
+          roomTypeName:            r.cheapestRate?.roomTypeName,
+          sellNightly:             sell?.nightlyAmount,
+          sellTotal:               sell?.totalAmount,
+          sellNightlyAud:          aud?.nightlyAmount ?? undefined,
+          sellTotalAud:            aud?.totalAmount ?? undefined,
+          fxRate:                  aud?.fxRate ?? undefined,
+          netNightly:              net?.nightlyAmount,
+          markupPct:               r.cheapestRate?.pricing?.markup?.value,
+          markupAmount:            r.cheapestRate?.pricing?.markup?.amount,
+          currency:                sell?.currency,
+          ratePlan:                r.cheapestRate?.ratePlan,
+          refundable:              r.cheapestRate?.refundable,
+          breakfastIncluded:       r.cheapestRate?.breakfastIncluded,
+          cancellationDeadlineUtc: r.cheapestRate?.cancellationDeadlineUtc,
+          ratesCount:              r.ratesCount,
+          offers:                  r.cheapestRate?.offers,
+          transferLabel:           r.cheapestRate?.transfer ?? null
+        };
+        const displayQuotes = (() => {
+          if (!quotes.length) return [headlineQuote];
+          const matchIdx = quotes.findIndex(q => q.supplier === headlineQuote.supplier);
+          if (matchIdx === -1) return [headlineQuote, ...quotes];
+          const next = quotes.slice();
+          next[matchIdx] = { ...next[matchIdx], ...headlineQuote };
+          return next;
+        })();
         return {
           ...h,
           priced: {
@@ -835,7 +866,7 @@ export default function ConsoleSearchPage() {
             cancellationDeadlineUtc: r.cheapestRate?.cancellationDeadlineUtc,
             transferLabel:           r.cheapestRate?.transfer ?? null,
             ratesCount:              r.ratesCount,
-            quotes:                  quotes.length ? quotes : undefined
+            quotes:                  displayQuotes
           }
         };
       }).sort((a, b) => {
@@ -1741,7 +1772,14 @@ export default function ConsoleSearchPage() {
                   <p className="c-page-sub" style={{ margin: '2px 0 0' }}>
                     {[detailHotel.city, detailHotel.country].filter(Boolean).join(', ')}
                     {' · '}{checkIn} → {checkOut}{' · '}
-                    {rooms.reduce((s, r) => s + r.adults, 0)} adult{rooms.reduce((s, r) => s + r.adults, 0) > 1 ? 's' : ''}
+                    {(() => {
+                      const totalAdults = rooms.reduce((s, r) => s + r.adults, 0);
+                      const childAges = rooms.flatMap(r => r.childrenAges || []);
+                      const childText = childAges.length
+                        ? ` · ${childAges.length} child${childAges.length === 1 ? '' : 'ren'} (${childAges.join(', ')}y)`
+                        : '';
+                      return `${totalAdults} adult${totalAdults === 1 ? '' : 's'}${childText}`;
+                    })()}
                     {' · '}{rooms.length} room{rooms.length > 1 ? 's' : ''}
                     {' · '}
                     <button
@@ -3129,18 +3167,11 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
         cancellationDeadlineUtc: h.priced.cancellationDeadlineUtc, ratesCount: h.priced.ratesCount,
         transferLabel: h.priced.transferLabel ?? null,
       }] : []);
-  // Score the quotes so the highest-scored gets the Recommended border.
-  const minSell = Math.min(...quotes
-    .filter(q => q.available && typeof q.sellTotal === 'number')
-    .map(q => q.sellTotal as number));
-  const scored = quotes.map(q => ({
-    q,
-    score: scoreRate({
-      pricing: { sell: { totalAmount: q.sellTotal, nightlyAmount: q.sellNightly }, markup: { amount: q.markupAmount } },
-      refundable: q.refundable, cancellationDeadlineUtc: q.cancellationDeadlineUtc
-    }, minSell, { isB2B: true })
-  }));
-  const best = scored.filter(s => s.q.available).sort((a, b) => b.score - a.score)[0]?.q;
+  // The result-card headline is a "From" price, so it must be the cheapest
+  // available sell quote. Recommendation scoring stays in the detail room table.
+  const best = quotes
+    .filter(q => q.available)
+    .sort((a, b) => (a.sellTotal ?? Infinity) - (b.sellTotal ?? Infinity))[0];
 
   return (
     <button
