@@ -3422,21 +3422,22 @@ function HotelInfo({ content }: { content: any }) {
   // tags suppliers actually emit into their markdown equivalents,
   // then strip anything residual so we never render `<tag>` as
   // visible text.
-  const cleanDesc = desc
-    ? desc
-        .replace(/<\s*(em|i)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/gi, '*$2*')
-        .replace(/<\s*(strong|b)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/gi, '**$2**')
-        .replace(/<\s*br\s*\/?\s*>/gi, '\n')
-        .replace(/<\s*p\s*>/gi, '\n\n')
-        .replace(/<\s*\/\s*p\s*>/gi, '')
-        .replace(/<[^>]+>/g, '')   // strip anything else
-        // Suppliers use non-standard bullet glyphs (◘ • ● ◦ ▪ ‣ ►) that markdown
-        // renders as literal characters. Turn each into a real list item so notes
-        // like the renovation "uplift" list format properly instead of running on.
-        .replace(/[ \t]*[◘•●◦▪‣►][ \t]*/g, '\n- ')
-        .replace(/\n{3,}/g, '\n\n')   // collapse excess blank lines
-        .trim()
-    : null;
+  // Prefer the API's pre-cleaned markdown (single source of truth, shared with the
+  // B2C site + MCP). Fall back to cleaning client-side only for older/cached responses.
+  const cleanDesc = (typeof content.description_md === 'string' && content.description_md.trim())
+    ? content.description_md.trim()
+    : (desc
+        ? desc
+            .replace(/<\s*(em|i)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/gi, '*$2*')
+            .replace(/<\s*(strong|b)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/gi, '**$2**')
+            .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+            .replace(/<\s*p\s*>/gi, '\n\n')
+            .replace(/<\s*\/\s*p\s*>/gi, '')
+            .replace(/<[^>]+>/g, '')
+            .replace(/[ \t]*[◘•●◦▪‣►][ \t]*/g, '\n- ')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim()
+        : null);
   const trimmedDesc = cleanDesc && cleanDesc.length > 320 && !descExpanded ? cleanDesc.slice(0, 320) + '…' : cleanDesc;
 
   return (
@@ -3450,7 +3451,7 @@ function HotelInfo({ content }: { content: any }) {
           <div className="agent-md" style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--c-fg)' }}>
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{trimmedDesc}</ReactMarkdown>
           </div>
-          {desc.length > 320 && (
+          {cleanDesc.length > 320 && (
             <button onClick={() => setDescExpanded(x => !x)} style={{ marginTop: 4, fontSize: 12, color: 'var(--c-accent)', background: 'none', border: 0, cursor: 'pointer', padding: 0, fontWeight: 600 }}>
               {descExpanded ? 'Show less' : 'Read more'}
             </button>
