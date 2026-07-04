@@ -3203,6 +3203,9 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
   const best = quotes
     .filter(q => q.available)
     .sort((a, b) => (a.sellTotal ?? Infinity) - (b.sellTotal ?? Infinity))[0];
+  // Maldives: lead with the package TOTAL, not per-night (per-night is still in
+  // the "Why this price?" breakdown). Transfer/meal make nightly misleading there.
+  const isMaldives = /maldives/i.test(h.country || '');
 
   return (
     <button
@@ -3387,15 +3390,15 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
             {best.sellNightlyAud != null ? (
               <>
                 <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
-                  {fmtMoney(best.sellNightlyAud)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> AUD / nt</span>
+                  {fmtMoney(isMaldives ? (best.sellTotalAud ?? best.sellNightlyAud) : best.sellNightlyAud)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> AUD {isMaldives ? 'total' : '/ nt'}</span>
                 </div>
-                {best.sellTotalAud != null && best.sellTotalAud !== best.sellNightlyAud && (
+                {!isMaldives && best.sellTotalAud != null && best.sellTotalAud !== best.sellNightlyAud && (
                   <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
                     {fmtMoney(best.sellTotalAud)} AUD total
                   </div>
                 )}
                 <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
-                  {fmtMoney(best.sellNightly)} USD / nt{best.fxRate != null ? ` · @ ${best.fxRate}` : ''}
+                  {fmtMoney(isMaldives ? best.sellTotal : best.sellNightly)} USD {isMaldives ? 'total' : '/ nt'}{best.fxRate != null ? ` · @ ${best.fxRate}` : ''}
                 </div>
               </>
             ) : (
