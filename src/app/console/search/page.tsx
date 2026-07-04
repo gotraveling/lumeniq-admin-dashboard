@@ -3878,11 +3878,48 @@ function RoomGroupedRates({
       m.get(k)!.list.push(r);
     }
     return Array.from(m.entries()).map(([, { list, label: name }]) => {
-      const sellTotals = list
+      // sellBySig: for each plan, the Member + Non-Member sell totals so a row
+      // can show "−$X vs non-member" inline. Built from the FULL list (both channels)
+      // BEFORE channel dominance drops the redundant row below.
+      const sellBySig = new Map<string, { cug?: number; b2c?: number }>();
+      for (const r of list) {
+        const sig = planSigOf(r);
+        const cur = sellBySig.get(sig) || {};
+        const ch = r._channel === 'b2c' ? 'b2c' : 'cug';
+        const s = r.pricing?.sell?.totalAmount;
+        if (typeof s === 'number' && (cur[ch] === undefined || s < cur[ch]!)) cur[ch] = s;
+        sellBySig.set(sig, cur);
+      }
+
+      // Channel dominance (Tina): per supplier+plan, when BOTH a Member (cug) and
+      // a Non-Member (b2c) rate exist, keep only the cheaper channel — never show
+      // a Member rate when the public/"All" price is equal or lower (tie → public,
+      // as the member then has no advantage). Same-channel rows are untouched, so
+      // the default (Member-only) view is unchanged.
+      const chanGroups = new Map<string, AdminRate[]>();
+      for (const r of list) {
+        const key = `${r.supplier || ''}|${planSigOf(r)}`;
+        if (!chanGroups.has(key)) chanGroups.set(key, []);
+        chanGroups.get(key)!.push(r);
+      }
+      const displayList: AdminRate[] = [];
+      for (const rs of chanGroups.values()) {
+        const cug = rs.filter(r => r._channel !== 'b2c');
+        const b2c = rs.filter(r => r._channel === 'b2c');
+        if (cug.length && b2c.length) {
+          const minC = Math.min(...cug.map(admSellTotal));
+          const minB = Math.min(...b2c.map(admSellTotal));
+          displayList.push(...(minB <= minC ? b2c : cug)); // tie → public
+        } else {
+          displayList.push(...rs);
+        }
+      }
+
+      const sellTotals = displayList
         .map(r => r.pricing?.sell?.totalAmount)
         .filter((v): v is number => typeof v === 'number' && v > 0);
       const poolMin = sellTotals.length ? Math.min(...sellTotals) : 0;
-      const scored = list.map(r => ({
+      const scored = displayList.map(r => ({
         r,
         score: scoreRate({
           pricing: {
@@ -3896,43 +3933,14 @@ function RoomGroupedRates({
       const byScore = [...scored].sort((a, b) => b.score - a.score);
       // Recommend the lead-in (cheapest SELL), not the highest composite score —
       // consultants expect the headline to be the cheapest bookable rate.
-      const recommendedKey = [...list]
+      const recommendedKey = [...displayList]
         .sort((a, b) => admSellTotal(a) - admSellTotal(b))[0]?.rateKey || null;
 
-      // sellBySig: for each plan-pair, the Member + Non-Member sell totals so
-      // a Member row can show "−$X vs non-member" inline.
-      const sellBySig = new Map<string, { cug?: number; b2c?: number }>();
-      for (const r of list) {
-        const sig = planSigOf(r);
-        const cur = sellBySig.get(sig) || {};
-        const ch = r._channel === 'b2c' ? 'b2c' : 'cug';
-        const s = r.pricing?.sell?.totalAmount;
-        if (typeof s === 'number' && (cur[ch] === undefined || s < cur[ch]!)) cur[ch] = s;
-        sellBySig.set(sig, cur);
-      }
-
-      let ordered: AdminRate[];
-      if (comparing) {
-        // Pair Member + Non-Member of the same plan adjacently; order the
-        // pairs by their cheapest sell, Member first within a pair.
-        const sigMin = new Map<string, number>();
-        for (const r of list) {
-          const sig = planSigOf(r);
-          const s = r.pricing?.sell?.totalAmount ?? Infinity;
-          if (!sigMin.has(sig) || s < sigMin.get(sig)!) sigMin.set(sig, s);
-        }
-        ordered = [...list].sort((a, b) => {
-          const am = sigMin.get(planSigOf(a)) ?? Infinity;
-          const bm = sigMin.get(planSigOf(b)) ?? Infinity;
-          if (am !== bm) return am - bm;
-          const ac = a._channel === 'b2c' ? 1 : 0;
-          const bc = b._channel === 'b2c' ? 1 : 0;
-          if (ac !== bc) return ac - bc;
-          return (a.pricing?.sell?.totalAmount ?? Infinity) - (b.pricing?.sell?.totalAmount ?? Infinity);
-        });
-      } else {
-        ordered = byScore.map(s => s.r);   // highest score first
-      }
+      // One row per plan now, so order by cheapest sell when comparing, else by
+      // composite score.
+      const ordered: AdminRate[] = comparing
+        ? [...displayList].sort((a, b) => admSellTotal(a) - admSellTotal(b))
+        : byScore.map(s => s.r);
       // Distinct suppliers in this (possibly merged) group — drives the
       // subtle "N suppliers" hint on merged cards.
       const supplierCount = new Set(
