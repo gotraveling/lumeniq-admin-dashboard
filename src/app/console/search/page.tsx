@@ -1454,7 +1454,7 @@ export default function ConsoleSearchPage() {
                   if (pickedHotel && pickedHotel.name === q.trim()) searchPickedHotel(pickedHotel);
                   else runSearch();
                 }}
-                style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1.6fr) minmax(200px, 1.3fr) minmax(160px, 1.1fr) minmax(120px, 0.7fr) auto', gap: 10, alignItems: 'end' }}
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 1.35fr) minmax(180px, 1.1fr) minmax(215px, 1.7fr) minmax(110px, 0.7fr) auto', gap: 10, alignItems: 'end' }}
               >
                 <div>
                   <label style={labelStyle}>Destination or hotel name</label>
