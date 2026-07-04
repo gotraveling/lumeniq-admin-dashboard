@@ -107,6 +107,10 @@ type Quote = {
   // Transfer-bundled label on the cheapest rate (Hummingbird, e.g. "Seaplane").
   // Present means the card price already includes that transfer; null = room-only.
   transferLabel?: string | null;
+  // Promo economics on the cheapest rate (Hummingbird), admin/cug only, so the
+  // "Why this price?" popover can show gross − discount = net.
+  grossTotal?: number;
+  discountAmount?: number;
 };
 
 type AdminRate = {
@@ -802,7 +806,9 @@ export default function ConsoleSearchPage() {
             cancellationDeadlineUtc: q.cheapestRate?.cancellationDeadlineUtc,
             ratesCount:              q.ratesCount,
             offers:                  q.cheapestRate?.offers,
-            transferLabel:           q.cheapestRate?.transfer ?? null
+            transferLabel:           q.cheapestRate?.transfer ?? null,
+            grossTotal:              q.cheapestRate?.grossTotal,
+            discountAmount:          q.cheapestRate?.discountAmount
           };
         });
         if (!r.cheapestRate) {
@@ -3306,8 +3312,22 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                 // global rule — surface it so the consultant knows where to
                 // change it, instead of a generic "hotel override or global" note.
                 const hasMarkupOverride = control?.markup_override_pct != null && String(control.markup_override_pct).trim() !== '';
+                // Selection context: what this "From" was chosen over. Computed from
+                // all quotes the card already holds — cheapest wins, runner-up is the
+                // next-cheapest across suppliers (neutral wording, not a contest).
+                const avail = quotes.filter(q => q.available).sort((a, b) => (a.sellTotal ?? Infinity) - (b.sellTotal ?? Infinity));
+                const runnerUp = avail[1];
+                const considered = avail.reduce((n, q) => n + (q.ratesCount || 0), 0);
                 rows.push(['Supplier', String(best.supplier || '—')]);
                 rows.push(['Rate channel', 'Member (CUG)']);
+                if (considered > 1) rows.push(['Selected', `cheapest of ${considered} bookable rates`]);
+                if (runnerUp) {
+                  const rn = runnerUp.roomTypeName || runnerUp.ratePlan || runnerUp.supplier || 'another rate';
+                  const rp = runnerUp.sellNightlyAud ?? runnerUp.sellNightly;
+                  rows.push(['Next cheapest', rp != null
+                    ? `${rn} · ${fmtMoney(rp)} ${runnerUp.sellNightlyAud != null ? 'AUD' : (runnerUp.currency || 'USD')}/nt`
+                    : String(rn)]);
+                }
                 if (best.roomTypeName) rows.push(['Room', best.roomTypeName]);
                 if (best.ratePlan) rows.push(['Plan', best.ratePlan === 'nomeal' ? 'Room only' : best.ratePlan]);
                 if (best.refundable != null) {
@@ -3319,6 +3339,10 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                 if (best.transferLabel) rows.push(['Transfer', `Included: ${best.transferLabel}`]);
                 if (best.offers?.[0]?.name) {
                   rows.push(['Offer', [best.offers[0].name, best.offers[0].code ? `code ${best.offers[0].code}` : null].filter(Boolean).join(' · ')]);
+                }
+                if (best.grossTotal && best.discountAmount) {
+                  const cur = best.currency || 'USD';
+                  rows.push(['Discount', `${cur} ${fmtMoney(best.grossTotal)} gross − ${fmtMoney(best.discountAmount)} = ${fmtMoney(best.grossTotal - best.discountAmount)} net`]);
                 }
                 if (best.rateKey) rows.push(['Rate key', best.rateKey]);
                 if (best.netNightly != null) rows.push(['NET (supplier cost)', `${fmtMoney(best.netNightly)} USD`]);
