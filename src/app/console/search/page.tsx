@@ -84,6 +84,7 @@ type Quote = {
   supplier: string | null;
   available: boolean;
   reason?: string;
+  rateKey?: string;
   roomTypeName?: string;
   sellNightly?: number;
   sellTotal?: number;
@@ -784,6 +785,7 @@ export default function ConsoleSearchPage() {
             supplier:                q.supplier,
             available:               !!q.available,
             reason:                  q.reason,
+            rateKey:                 q.cheapestRate?.rateKey,
             roomTypeName:            q.cheapestRate?.roomTypeName,
             sellNightly:             sell?.nightlyAmount,
             sellTotal:               sell?.totalAmount,
@@ -819,6 +821,7 @@ export default function ConsoleSearchPage() {
         const headlineQuote: Quote = {
           supplier:                r.cheapestSupplier || r.supplier || null,
           available:               true,
+          rateKey:                 r.cheapestRate?.rateKey,
           roomTypeName:            r.cheapestRate?.roomTypeName,
           sellNightly:             sell?.nightlyAmount,
           sellTotal:               sell?.totalAmount,
@@ -2056,13 +2059,6 @@ function fmtMoney(n?: number) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
-// Round a money figure to whole dollars for the decluttered rate-table cells
-// (NET/SELL show totals-first; cents add noise). Passes undefined/null through
-// so fmtMoney renders its em-dash placeholder.
-function roundOrUndef(n?: number | null) {
-  return n === undefined || n === null || isNaN(n) ? undefined : Math.round(n);
-}
-
 // Composite rate scorer — Valentin's recommendation (2026-05-28) is
 // "don't optimize only for lowest price; surface 3–5 rates with
 // different conditions per room type." This scores each rate so the
@@ -3281,6 +3277,21 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                 // global rule — surface it so the consultant knows where to
                 // change it, instead of a generic "hotel override or global" note.
                 const hasMarkupOverride = control?.markup_override_pct != null && String(control.markup_override_pct).trim() !== '';
+                rows.push(['Supplier', String(best.supplier || '—')]);
+                rows.push(['Rate channel', 'Member / CUG']);
+                if (best.roomTypeName) rows.push(['Room', best.roomTypeName]);
+                if (best.ratePlan) rows.push(['Plan', best.ratePlan === 'nomeal' ? 'Room only' : best.ratePlan]);
+                if (best.refundable != null) {
+                  rows.push(['Cancellation', best.refundable
+                    ? `Refundable${best.cancellationDeadlineUtc ? ` until ${fmtCancelDate(best.cancellationDeadlineUtc)}` : ''}`
+                    : 'Non-refundable']);
+                }
+                if (best.breakfastIncluded) rows.push(['Breakfast', 'Included']);
+                if (best.transferLabel) rows.push(['Transfer', `Included: ${best.transferLabel}`]);
+                if (best.offers?.[0]?.name) {
+                  rows.push(['Offer', [best.offers[0].name, best.offers[0].code ? `code ${best.offers[0].code}` : null].filter(Boolean).join(' · ')]);
+                }
+                if (best.rateKey) rows.push(['Rate key', best.rateKey]);
                 if (best.netNightly != null) rows.push(['NET (supplier cost)', `${fmtMoney(best.netNightly)} USD`]);
                 if (best.markupPct != null && best.sellNightly != null)
                   rows.push([`+ ${best.markupPct}% markup (${hasMarkupOverride ? 'hotel override' : 'global rule'}) → sell`, `${fmtMoney(best.sellNightly)} USD`]);
@@ -3293,13 +3304,13 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                     onClick={(e) => { e.stopPropagation(); e.preventDefault(); }}
                     style={{
                       position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 30,
-                      width: 280, textAlign: 'left', cursor: 'default',
+                      width: 360, textAlign: 'left', cursor: 'default',
                       background: 'var(--c-bg)', border: '1px solid var(--c-line)', borderRadius: 8,
                       boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: '10px 12px'
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-fg)' }}>How this “From” price is built</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-fg)' }}>Why this “From” price</span>
                       <span
                         role="button"
                         onClick={(e) => { e.stopPropagation(); e.preventDefault(); setShowWhy(false); }}
@@ -3307,9 +3318,9 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                       ><X size={12} /></span>
                     </div>
                     {rows.map(([k, v], i) => (
-                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)', padding: '2px 0' }}>
+                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '112px minmax(0, 1fr)', gap: 10, fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)', padding: '2px 0' }}>
                         <span style={{ color: 'var(--c-fg-muted)' }}>{k}</span>
-                        <span style={{ color: 'var(--c-fg)', fontWeight: 600, whiteSpace: 'nowrap' }}>{v}</span>
+                        <span style={{ color: 'var(--c-fg)', fontWeight: 600, overflowWrap: 'anywhere' }}>{v}</span>
                       </div>
                     ))}
                   </div>
@@ -4225,22 +4236,22 @@ function RoomGroupedRates({
                             {r.pricing.net?.aud?.totalAmount != null ? (
                               <>
                                 <div style={{ fontWeight: 600 }}>
-                                  {fmtMoney(roundOrUndef(r.pricing.net.aud.totalAmount))} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>AUD total</span>
+                                  {fmtMoney(r.pricing.net.aud.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>AUD total</span>
                                 </div>
                                 <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
-                                  {fmtMoney(roundOrUndef(r.pricing.net?.totalAmount))} {r.pricing.currency}
+                                  {fmtMoney(r.pricing.net?.totalAmount)} {r.pricing.currency}
                                 </div>
                                 <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                  {fmtMoney(roundOrUndef(r.pricing.net.aud.nightlyAmount ?? undefined))} AUD/nt · {fmtMoney(roundOrUndef(r.pricing.net?.nightlyAmount))} {r.pricing.currency}/nt
+                                  {fmtMoney(r.pricing.net.aud.nightlyAmount ?? undefined)} AUD/nt · {fmtMoney(r.pricing.net?.nightlyAmount)} {r.pricing.currency}/nt
                                 </div>
                               </>
                             ) : (
                               <>
                                 <div style={{ fontWeight: 600 }}>
-                                  {fmtMoney(roundOrUndef(r.pricing.net?.totalAmount))} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>{r.pricing.currency} total</span>
+                                  {fmtMoney(r.pricing.net?.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>{r.pricing.currency} total</span>
                                 </div>
                                 <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                  {fmtMoney(roundOrUndef(r.pricing.net?.nightlyAmount))} {r.pricing.currency}/nt
+                                  {fmtMoney(r.pricing.net?.nightlyAmount)} {r.pricing.currency}/nt
                                 </div>
                               </>
                             )}
@@ -4267,8 +4278,8 @@ function RoomGroupedRates({
                               const wasSell = sellTotal * gross / nett;
                               const fx = r.pricing.aud?.fxRate;
                               const wasLabel = fx
-                                ? `${fmtMoney(Math.round(wasSell * fx))} AUD`
-                                : `${fmtMoney(Math.round(wasSell))} ${r.pricing.currency}`;
+                                ? `${fmtMoney(wasSell * fx)} AUD`
+                                : `${fmtMoney(wasSell)} ${r.pricing.currency}`;
                               return (
                                 <div style={{
                                   fontSize: 11,
@@ -4288,22 +4299,22 @@ function RoomGroupedRates({
                             {r.pricing.aud?.totalAmount != null ? (
                               <>
                                 <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
-                                  {fmtMoney(roundOrUndef(r.pricing.aud.totalAmount))} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>AUD total</span>
+                                  {fmtMoney(r.pricing.aud.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>AUD total</span>
                                 </div>
                                 <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
-                                  {fmtMoney(roundOrUndef(r.pricing.sell?.totalAmount))} {r.pricing.currency}
+                                  {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency}
                                 </div>
                                 <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                  {fmtMoney(roundOrUndef(r.pricing.aud.nightlyAmount ?? undefined))} AUD/nt · {fmtMoney(roundOrUndef(r.pricing.sell?.nightlyAmount))} {r.pricing.currency}/nt
+                                  {fmtMoney(r.pricing.aud.nightlyAmount ?? undefined)} AUD/nt · {fmtMoney(r.pricing.sell?.nightlyAmount)} {r.pricing.currency}/nt
                                 </div>
                               </>
                             ) : (
                               <>
                                 <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
-                                  {fmtMoney(roundOrUndef(r.pricing.sell?.totalAmount))} {r.pricing.currency} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>total</span>
+                                  {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>total</span>
                                 </div>
                                 <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                  {fmtMoney(roundOrUndef(r.pricing.sell?.nightlyAmount))} {r.pricing.currency}/nt
+                                  {fmtMoney(r.pricing.sell?.nightlyAmount)} {r.pricing.currency}/nt
                                 </div>
                               </>
                             )}
