@@ -1930,6 +1930,27 @@ export default function ConsoleSearchPage() {
                 defaultNights={Number(controlMap[detailHotel.id]?.package_nights) || 5}
               />
             )}
+            {rates.length > 0 && (() => {
+              const sups = Array.from(new Set(rates.map(r => (r.supplier || '').trim()).filter(Boolean)));
+              if (sups.length < 2) return null;
+              const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+              const supPill = (active: boolean) => ({
+                fontSize: 11.5, fontWeight: 600, padding: '3px 12px', borderRadius: 999,
+                cursor: 'pointer', whiteSpace: 'nowrap' as const,
+                border: active ? '1px solid var(--c-accent)' : '1px solid var(--c-line)',
+                background: active ? 'rgba(155,123,51,0.08)' : 'var(--c-bg)',
+                color: active ? 'var(--c-accent)' : 'var(--c-fg)',
+              });
+              return (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', minWidth: 52 }}>Supplier</span>
+                  <button onClick={() => { setSupplierFocus(null); syncUrl({ supplier: null }); }} style={supPill(!supplierFocus)}>All</button>
+                  {sups.map(s => (
+                    <button key={s} onClick={() => { setSupplierFocus(s); syncUrl({ supplier: s }); }} style={supPill(supplierFocus === s)}>{cap(s)}</button>
+                  ))}
+                </div>
+              );
+            })()}
             {rates.length > 0 && (
               <RoomGroupedRates
                 rates={supplierFocus ? rates.filter(r => r.supplier === supplierFocus) : rates}
@@ -3312,7 +3333,7 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                     onClick={(e) => { e.stopPropagation(); e.preventDefault(); }}
                     style={{
                       position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 30,
-                      width: 360, textAlign: 'left', cursor: 'default',
+                      width: 460, maxWidth: '92vw', textAlign: 'left', cursor: 'default',
                       background: 'var(--c-bg)', border: '1px solid var(--c-line)', borderRadius: 8,
                       boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: '10px 12px'
                     }}
@@ -4100,24 +4121,24 @@ function RoomGroupedRates({
                       <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', marginBottom: 6 }}>
                         Sell / net total (AUD) — meal plan × transfer
                       </div>
-                      <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 320 }}>
+                      <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 320, border: '1px solid var(--c-line)' }}>
                         <thead>
                           <tr>
-                            <th style={{ ...thStyle, textAlign: 'left' }}>Meal / Transfer</th>
+                            <th style={{ ...thStyle, textAlign: 'left', border: '1px solid var(--c-line-soft)', background: 'var(--c-bg-soft)' }}>Meal / Transfer</th>
                             {cols.map((c) => (
-                              <th key={c || 'rate'} style={{ ...thStyle, textAlign: 'right' }}>{c || 'Rate'}</th>
+                              <th key={c || 'rate'} style={{ ...thStyle, textAlign: 'right', border: '1px solid var(--c-line-soft)', background: 'var(--c-bg-soft)' }}>{c || 'Rate'}</th>
                             ))}
                           </tr>
                         </thead>
                         <tbody>
                           {rows.map((m) => (
-                            <tr key={m || 'meal'} style={{ borderTop: '1px solid var(--c-line-soft)' }}>
-                              <td style={{ ...tdStyle, fontWeight: 600 }}>{m || 'Room only'}</td>
+                            <tr key={m || 'meal'}>
+                              <td style={{ ...tdStyle, fontWeight: 600, border: '1px solid var(--c-line-soft)' }}>{m || 'Room only'}</td>
                               {cols.map((c) => {
                                 const r = matrix.byCombo.get(admKey(m, c));
                                 const sell = sellOf(r);
                                 return (
-                                  <td key={(m || 'meal') + '|' + (c || 'rate')} style={{ ...tdStyle, textAlign: 'right', fontFamily: 'var(--c-mono)' }}>
+                                  <td key={(m || 'meal') + '|' + (c || 'rate')} style={{ ...tdStyle, textAlign: 'right', fontFamily: 'var(--c-mono)', border: '1px solid var(--c-line-soft)' }}>
                                     {sell == null ? (
                                       <span style={{ color: 'var(--c-fg-soft)' }}>—</span>
                                     ) : (
