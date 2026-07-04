@@ -2107,16 +2107,24 @@ function scoreRate(rate: ScorableRate, poolMinSellTotal: number, opts?: { isB2B?
   return score;
 }
 
-// Short cancellation deadline rendering for the search list. Full ISO
-// timestamp would crowd the card — consultants only need date + time
-// in local format ("25 Jun 14:00"). Detail page shows the full UTC
-// timestamp per ETG cert §5.
+// Short cancellation deadline rendering for the search list. Supplier deadlines
+// are stored as UTC instants; show them in Sydney time and include the zone so
+// consultants do not read a browser-local time as a supplier deadline.
 function fmtCancelDate(iso?: string | null) {
   if (!iso) return '';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) +
-    ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  const parts = new Intl.DateTimeFormat('en-AU', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Australia/Sydney',
+    timeZoneName: 'short',
+  }).formatToParts(d);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value || '';
+  return `${get('day')} ${get('month')} ${get('hour')}:${get('minute')} ${get('timeZoneName')}`.trim();
 }
 
 function Row({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
