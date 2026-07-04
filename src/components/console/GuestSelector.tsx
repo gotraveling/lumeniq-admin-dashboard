@@ -32,7 +32,7 @@ export default function GuestSelector({ rooms, onChange }: Props) {
   // (a 4-yr-old and a 12-yr-old can price very differently). e.g. "1 child (age 4)".
   const childAges      = rooms.flatMap(r => r.childrenAges);
   const agesLabel      = childAges.length
-                         ? ` (age${childAges.length !== 1 ? 's' : ''} ${[...childAges].sort((a, b) => a - b).join(', ')})`
+                         ? ` (${[...childAges].sort((a, b) => a - b).join(', ')}y)`
                          : '';
   const summary        = `${totalAdults} adult${totalAdults !== 1 ? 's' : ''}` +
                          (totalChildren ? ` · ${totalChildren} child${totalChildren !== 1 ? 'ren' : ''}${agesLabel}` : '') +
@@ -56,9 +56,9 @@ export default function GuestSelector({ rooms, onChange }: Props) {
           cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8
         }}
       >
-        <Users size={14} style={{ color: 'var(--c-fg-muted)' }} />
-        <span style={{ flex: 1 }}>{summary}</span>
-        <ChevronDown size={14} style={{ color: 'var(--c-fg-muted)' }} />
+        <Users size={14} style={{ color: 'var(--c-fg-muted)', flexShrink: 0 }} />
+        <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{summary}</span>
+        <ChevronDown size={14} style={{ color: 'var(--c-fg-muted)', flexShrink: 0 }} />
       </button>
       {open && (
         <div style={{
