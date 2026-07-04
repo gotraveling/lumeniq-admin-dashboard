@@ -28,8 +28,14 @@ export default function GuestSelector({ rooms, onChange }: Props) {
 
   const totalAdults    = rooms.reduce((s, r) => s + r.adults, 0);
   const totalChildren  = rooms.reduce((s, r) => s + r.childrenAges.length, 0);
+  // Show the actual child ages so a consultant can see exactly what was priced
+  // (a 4-yr-old and a 12-yr-old can price very differently). e.g. "1 child (age 4)".
+  const childAges      = rooms.flatMap(r => r.childrenAges);
+  const agesLabel      = childAges.length
+                         ? ` (age${childAges.length !== 1 ? 's' : ''} ${[...childAges].sort((a, b) => a - b).join(', ')})`
+                         : '';
   const summary        = `${totalAdults} adult${totalAdults !== 1 ? 's' : ''}` +
-                         (totalChildren ? ` · ${totalChildren} child${totalChildren !== 1 ? 'ren' : ''}` : '') +
+                         (totalChildren ? ` · ${totalChildren} child${totalChildren !== 1 ? 'ren' : ''}${agesLabel}` : '') +
                          ` · ${rooms.length} room${rooms.length !== 1 ? 's' : ''}`;
 
   function patchRoom(idx: number, patch: Partial<RoomGuests>) {
