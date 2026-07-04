@@ -3401,7 +3401,7 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
 function HotelInfo({ content }: { content: any }) {
   const desc = typeof content.description === 'string'
     ? content.description
-    : (Array.isArray(content.description) ? content.description.map((s: any) => s.paragraphs?.join(' ') || '').join('\n\n').trim() : null);
+    : (Array.isArray(content.description) ? content.description.map((s: any) => s.paragraphs?.join('\n\n') || '').join('\n\n').trim() : null);
   const ag: any[] = Array.isArray(content.amenity_groups) ? content.amenity_groups : [];
   const topAmenities = ag.flatMap(g => Array.isArray(g.amenities) ? g.amenities : []).slice(0, 12);
   const mp = content.metapolicy_struct || {};
@@ -3430,6 +3430,11 @@ function HotelInfo({ content }: { content: any }) {
         .replace(/<\s*p\s*>/gi, '\n\n')
         .replace(/<\s*\/\s*p\s*>/gi, '')
         .replace(/<[^>]+>/g, '')   // strip anything else
+        // Suppliers use non-standard bullet glyphs (◘ • ● ◦ ▪ ‣ ►) that markdown
+        // renders as literal characters. Turn each into a real list item so notes
+        // like the renovation "uplift" list format properly instead of running on.
+        .replace(/[ \t]*[◘•●◦▪‣►][ \t]*/g, '\n- ')
+        .replace(/\n{3,}/g, '\n\n')   // collapse excess blank lines
         .trim()
     : null;
   const trimmedDesc = cleanDesc && cleanDesc.length > 320 && !descExpanded ? cleanDesc.slice(0, 320) + '…' : cleanDesc;
