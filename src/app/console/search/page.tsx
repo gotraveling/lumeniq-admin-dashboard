@@ -4128,14 +4128,12 @@ function RoomGroupedRates({
                       Weighed {trace.considered} rate{trace.considered !== 1 ? 's' : ''} · showing {trace.shown} · picked{' '}
                       <span style={{ color: 'var(--c-accent)' }}>{trace.chosen}</span> ({trace.chosenReason})
                     </div>
-                    {trace.hidden.length > 0 ? (
+                    {trace.hidden.length > 0 && (
                       <ul style={{ margin: 0, paddingLeft: 16, color: 'var(--c-fg-muted)' }}>
                         {trace.hidden.map((h, i) => (
                           <li key={i}>Hid <strong>{h.option}</strong> — <strong>{h.beatenBy}</strong> is cheaper for the same or better board</li>
                         ))}
                       </ul>
-                    ) : (
-                      <div style={{ color: 'var(--c-fg-muted)' }}>No rates hidden — every meal / transfer option is shown.</div>
                     )}
                   </div>
                 )}
