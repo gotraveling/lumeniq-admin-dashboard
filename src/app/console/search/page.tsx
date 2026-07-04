@@ -4244,25 +4244,44 @@ function RoomGroupedRates({
                               rate currency; convert to AUD when an fxRate exists. */}
                           {(r.offers?.length || (r.discountAmount ?? 0) > 0) && (() => {
                             const fx = r.pricing.aud?.fxRate;
+                            const cur = r.pricing.currency || 'USD';
                             const disc = r.discountAmount ?? 0;
+                            const gross = r.grossTotal ?? 0;
+                            const netTot = r.pricing.net?.totalAmount ?? (gross > 0 ? gross - disc : undefined);
                             const savedLabel = disc > 0
                               ? (fx
                                   ? `saved A$${fmtMoney(disc * fx)}`
-                                  : `saved ${r.pricing.currency} ${fmtMoney(disc)}`)
+                                  : `saved ${cur} ${fmtMoney(disc)}`)
                               : '';
                             const offer = r.offers?.[0];
                             const name = offer?.name || undefined;
                             const code = offer?.code ? `code ${offer.code}` : undefined;
                             return (
-                              <div style={{
-                                marginTop: 3,
-                                fontSize: 11,
-                                fontWeight: 600,
-                                color: 'var(--c-success)',
-                                lineHeight: 1.3
-                              }}>
-                                ★ {[name, code, savedLabel].filter(Boolean).join(' · ')}
-                              </div>
+                              <>
+                                <div style={{
+                                  marginTop: 3,
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  color: 'var(--c-success)',
+                                  lineHeight: 1.3
+                                }}>
+                                  ★ {[name, code, savedLabel].filter(Boolean).join(' · ')}
+                                </div>
+                                {/* Transparent derivation so the NET can be reconciled against a
+                                    supplier sheet: it IS the supplier gross minus the campaign
+                                    discount, not an arbitrary number. */}
+                                {gross > 0 && disc > 0 && netTot != null && (
+                                  <div style={{
+                                    marginTop: 2,
+                                    fontSize: 10.5,
+                                    color: 'var(--c-fg-muted)',
+                                    lineHeight: 1.3,
+                                    fontFamily: 'var(--c-mono)'
+                                  }}>
+                                    {cur} {fmtMoney(gross)} gross − {fmtMoney(disc)} disc = {fmtMoney(netTot)} net
+                                  </div>
+                                )}
+                              </>
                             );
                           })()}
                           {/* Transfer inclusion tag — make Maldives apple-to-apple.
