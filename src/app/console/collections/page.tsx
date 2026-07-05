@@ -30,6 +30,7 @@ interface CollectionFull {
   intro: string[]; memberBenefit?: string; quoteRef?: string; searchDestination?: string;
   campaignMinStay?: number | null; campaignPackageNights?: number | null;
   campaignAdvertiseFrom?: string | null; campaignAdvertiseTo?: string | null;
+  travelGuideLabel?: string; travelGuideUrl?: string;
   status: 'draft' | 'published'; hotels: CollectionHotel[];
 }
 
@@ -84,6 +85,8 @@ export default function CollectionsPage() {
         campaignPackageNights: editing.campaignPackageNights ?? null,
         campaignAdvertiseFrom: editing.campaignAdvertiseFrom || null,
         campaignAdvertiseTo: editing.campaignAdvertiseTo || null,
+        travelGuideLabel: editing.travelGuideLabel || null,
+        travelGuideUrl: editing.travelGuideUrl || null,
       };
       let id = editing.id;
       if (id) {
@@ -250,6 +253,8 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
           <textarea className="c-input" rows={6} value={(value.intro || []).join('\n\n')}
             onChange={(e) => set({ intro: e.target.value.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean) })} />
         </Field>
+        <Field label="Travel guide button — label"><input className="c-input" value={value.travelGuideLabel || ''} onChange={(e) => set({ travelGuideLabel: e.target.value })} placeholder="Best of Maldives Travel Guide" /></Field>
+        <Field label="Travel guide button — URL (opens in a new tab)"><input className="c-input" value={value.travelGuideUrl || ''} onChange={(e) => set({ travelGuideUrl: e.target.value })} placeholder="https://firstclass.com.au/destination/…" /></Field>
         <Field label="Quote / reference"><input className="c-input" value={value.quoteRef || ''} onChange={(e) => set({ quoteRef: e.target.value })} /></Field>
       </div>
 
