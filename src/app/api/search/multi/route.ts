@@ -34,7 +34,12 @@ async function meili(index: string, q: string, limit: number) {
   const r = await fetch(`${MEILI_HOST}/indexes/${index}/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${MEILI_KEY}` },
-    body: JSON.stringify({ q, limit }),
+    // matchingStrategy:'all' → EVERY typed word must match. Without it Meili's
+    // default 'last' matches any subset, so "gili lankanfu" surfaced Gili
+    // Air/Meno/Trawangan (only "gili") + Vilin'gili. For a specific hotel query
+    // there is correctly no city matching every word, so we don't loose-fallback
+    // here (that would re-open the noise); single-word city queries still match.
+    body: JSON.stringify({ q, limit, matchingStrategy: 'all' }),
   });
   if (!r.ok) return [];
   const json = await r.json();
