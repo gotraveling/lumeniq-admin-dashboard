@@ -28,6 +28,8 @@ interface CollectionHotel {
 interface CollectionFull {
   id: number; slug: string; title: string; subtitle?: string; heroImage?: string;
   intro: string[]; memberBenefit?: string; quoteRef?: string; searchDestination?: string;
+  campaignMinStay?: number | null; campaignPackageNights?: number | null;
+  campaignAdvertiseFrom?: string | null; campaignAdvertiseTo?: string | null;
   status: 'draft' | 'published'; hotels: CollectionHotel[];
 }
 
@@ -78,6 +80,10 @@ export default function CollectionsPage() {
         heroImage: editing.heroImage, intro: editing.intro, memberBenefit: editing.memberBenefit,
         quoteRef: editing.quoteRef, status: editing.status,
         searchDestination: editing.searchDestination, updatedBy: 'console',
+        campaignMinStay: editing.campaignMinStay ?? null,
+        campaignPackageNights: editing.campaignPackageNights ?? null,
+        campaignAdvertiseFrom: editing.campaignAdvertiseFrom || null,
+        campaignAdvertiseTo: editing.campaignAdvertiseTo || null,
       };
       let id = editing.id;
       if (id) {
@@ -216,6 +222,27 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
         <Field label="Search destination — fills the “Discover {this} like never before” heading and scopes the hero search box (e.g. Maldives, Cairo). Clear the intro below to hide the heading entirely.">
           <input className="c-input" value={value.searchDestination || ''} onChange={(e) => set({ searchDestination: e.target.value })} placeholder="Maldives" />
         </Field>
+        {/* Advertised-package campaign — drives the collection cards' "from $X ·
+            N nights · stays till <date>". Leave blank for no campaign. Enter the
+            advertise cutoff (e.g. 30 Sep) even if the offer terms run later. */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+          <Field label="Campaign · min stay (nights)">
+            <input className="c-input" type="number" min={1} value={value.campaignMinStay ?? ''}
+              onChange={(e) => set({ campaignMinStay: e.target.value === '' ? null : Number(e.target.value) })} placeholder="4" />
+          </Field>
+          <Field label="Campaign · package nights (from-rate is for this stay length)">
+            <input className="c-input" type="number" min={1} value={value.campaignPackageNights ?? ''}
+              onChange={(e) => set({ campaignPackageNights: e.target.value === '' ? null : Number(e.target.value) })} placeholder="7" />
+          </Field>
+          <Field label="Campaign · advertise stays from">
+            <input className="c-input" type="date" value={(value.campaignAdvertiseFrom || '').slice(0, 10)}
+              onChange={(e) => set({ campaignAdvertiseFrom: e.target.value || null })} />
+          </Field>
+          <Field label="Campaign · advertise stays until (advertise cutoff)">
+            <input className="c-input" type="date" value={(value.campaignAdvertiseTo || '').slice(0, 10)}
+              onChange={(e) => set({ campaignAdvertiseTo: e.target.value || null })} />
+          </Field>
+        </div>
         <Field label="Intro paragraphs (leave a blank line between paragraphs)">
           {/* Blank line = new paragraph, so paragraphs round-trip with spacing
               (split on blank lines, join with a blank line). A single newline
