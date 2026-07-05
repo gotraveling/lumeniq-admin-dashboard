@@ -3399,7 +3399,7 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                   </div>
                 )}
                 <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
-                  {fmtMoney(isMaldives ? best.sellTotal : best.sellNightly)} USD {isMaldives ? 'total' : '/ nt'}{best.fxRate != null ? ` · @ ${best.fxRate}` : ''}
+                  {fmtMoney(isMaldives ? best.sellTotal : best.sellNightly)} USD {isMaldives ? 'total' : '/ nt'}
                 </div>
               </>
             ) : (
