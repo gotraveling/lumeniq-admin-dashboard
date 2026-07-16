@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
@@ -2893,6 +2893,11 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                 </p>
               </ManageGroup>
 
+              {/* ── Rate comparison (own endpoint, like Editorial) ── */}
+              <ManageGroup title="Rate comparison">
+                <RateComparisonLog hotelId={hotelId} userEmail={userEmail} />
+              </ManageGroup>
+
               {/* ── Transfer ── */}
               <ManageGroup title="Transfer (Maldives etc.)">
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
@@ -3114,6 +3119,163 @@ const checkLabelStyle: React.CSSProperties = {
 // a thin divider rule under it, separated from the next by generous whitespace.
 // No enclosing border/box — clean sectioning (à la Luxury Escapes) so the long
 // form reads as distinct groups without feeling boxy.
+// Sources a consultant can compare our "from" rate against. RateHawk and
+// Hummingbird are ours (we book them); Expedia and the hotel direct are
+// benchmarks we can't book but need to know about — that asymmetry is the whole
+// reason the comparison is worth recording by hand.
+const RATE_SOURCES: Array<{ key: string; label: string }> = [
+  { key: 'ratehawk',     label: 'RateHawk' },
+  { key: 'expedia',      label: 'Expedia' },
+  { key: 'hotel_direct', label: 'Hotel direct' },
+  { key: 'hummingbird',  label: 'Hummingbird' },
+];
+
+type RateObservation = {
+  id: number;
+  hotel_id: number | string;
+  better_sources: string[];
+  note: string | null;
+  observed_by: string | null;
+  observed_at: string;
+};
+
+/**
+ * Manual rate-comparison log for one hotel. Own endpoint, own state — it never
+ * touches the control PUT, so nothing here can break saving the rest of the
+ * drawer.
+ *
+ * Append-only on purpose: each row is what someone saw on a given day, not a
+ * setting. Rates move, so the date is part of the fact — hence "checked 15 Jul",
+ * never a bare "Expedia is cheaper". Records only; drives no pricing today.
+ */
+function RateComparisonLog({ hotelId, userEmail }: { hotelId: number; userEmail: string }) {
+  const [rows, setRows] = useState<RateObservation[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [sources, setSources] = useState<string[]>([]);
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try {
+      const res = await fetch(`/api/admin/rate-observations?hotelId=${hotelId}`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      setRows(Array.isArray(data) ? data : []);
+    } catch (e: any) { setErr(e.message); } finally { setLoading(false); }
+  }, [hotelId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const save = async () => {
+    setSaving(true); setErr(null);
+    try {
+      const res = await fetch('/api/admin/rate-observations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hotel_id: hotelId,
+          better_sources: sources,
+          note: note.trim() || null,
+          observed_by: userEmail || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      setSources([]); setNote('');
+      await load();
+    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+  };
+
+  const remove = async (id: number) => {
+    try {
+      await fetch(`/api/admin/rate-observations?id=${id}`, { method: 'DELETE' });
+      await load();
+    } catch { /* leave the row; a failed delete is not worth breaking the drawer */ }
+  };
+
+  const label = (k: string) => RATE_SOURCES.find(s => s.key === k)?.label || k;
+  const when = (iso: string) =>
+    new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-soft)', marginBottom: 6 }}>
+        Which “from” rate was better? Tick one or more.
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+        {RATE_SOURCES.map((s) => (
+          <label key={s.key} style={checkLabelStyle}>
+            <input
+              type="checkbox"
+              checked={sources.includes(s.key)}
+              onChange={(e) => setSources(
+                e.target.checked
+                  ? Array.from(new Set([...sources, s.key]))
+                  : sources.filter(k => k !== s.key)
+              )}
+            />
+            {s.label}
+          </label>
+        ))}
+      </div>
+      <Field label="Note (optional)" style={{ marginTop: 10 }}>
+        <input
+          className="c-input"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="e.g. Expedia ~8% under us on Deluxe, we win on suites"
+        />
+      </Field>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+        <button
+          className="c-btn"
+          onClick={save}
+          disabled={saving || (!sources.length && !note.trim())}
+        >
+          {saving ? 'Saving…' : 'Log comparison'}
+        </button>
+        <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>
+          Dated and attributed to you. Recorded for reference — it does not change pricing.
+        </span>
+      </div>
+      {err && <div style={{ fontSize: 11.5, color: 'var(--c-danger, #c33)', marginTop: 8 }}>{err}</div>}
+
+      <div style={{ marginTop: 14 }}>
+        {loading && !rows.length ? (
+          <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>Loading…</div>
+        ) : !rows.length ? (
+          <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>No comparisons logged yet.</div>
+        ) : (
+          rows.map((r) => (
+            <div key={r.id} style={{
+              display: 'flex', alignItems: 'baseline', gap: 8, padding: '6px 0',
+              borderTop: '1px solid var(--c-line)', fontSize: 12.5
+            }}>
+              <span style={{ fontWeight: 600 }}>
+                {r.better_sources.length ? r.better_sources.map(label).join(' + ') : '—'}
+              </span>
+              {r.note && <span style={{ color: 'var(--c-fg-soft)' }}>{r.note}</span>}
+              <span style={{ marginLeft: 'auto', color: 'var(--c-fg-muted)', fontSize: 11, whiteSpace: 'nowrap' }}>
+                {when(r.observed_at)}{r.observed_by ? ` · ${r.observed_by.split('@')[0]}` : ''}
+              </span>
+              <button
+                className="c-btn"
+                style={{ padding: '1px 6px', fontSize: 10 }}
+                onClick={() => remove(r.id)}
+                title="Delete this entry"
+              >
+                ✕
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ManageGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
