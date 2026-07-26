@@ -1408,6 +1408,15 @@ export default function ConsoleSearchPage() {
     () => hits.filter(h => h.priced && !h.priced.available && !h.priced.retryable).length,
     [hits]
   );
+  // reason='unconfirmed' means the API could NOT check HP (rate-limit, or the
+  // page was too large to rescue) — not that the hotel is unsold. Telling a
+  // consultant "no bookable rates" there is wrong: opening the hotel usually
+  // shows rates, which is exactly the confusion Tina reported (22 Jul).
+  const unconfirmedCount = useMemo(
+    () => hits.filter(h => h.priced && !h.priced.available && !h.priced.retryable
+                            && h.priced.reason === 'unconfirmed').length,
+    [hits]
+  );
 
   // Bulk-load control rows for the visible hits so each card can show a
   // state badge. Keyed on the comma-joined id list so it only re-fires when
@@ -1674,10 +1683,14 @@ export default function ConsoleSearchPage() {
             {!searching && !enrichingPrices && pendingCount === 0 && filteredHits.length === 0 && unavailableCount > 0 && !showUnavailable && (
               <div className="c-card" style={{ padding: 20, textAlign: 'center', fontSize: 13, lineHeight: 1.6, color: 'var(--c-fg-muted)' }}>
                 <div style={{ color: 'var(--c-fg)', fontWeight: 600 }}>
-                  {unavailableCount === 1 ? 'Found the hotel' : `Found ${unavailableCount} hotels`}, but no bookable rates for {checkIn} → {checkOut}.
+                  {unconfirmedCount === unavailableCount
+                    ? `${unavailableCount === 1 ? 'Found the hotel' : `Found ${unavailableCount} hotels`} — couldn't confirm rates for ${checkIn} → ${checkOut}.`
+                    : `${unavailableCount === 1 ? 'Found the hotel' : `Found ${unavailableCount} hotels`}, but no bookable rates for ${checkIn} → ${checkOut}.`}
                 </div>
                 <div style={{ marginTop: 4 }}>
-                  Usually the fix is different dates (inventory this far out can be thin), not the search.
+                  {unconfirmedCount > 0
+                    ? 'The live rate check was rate-limited, so this is not a sold-out — open the hotel to check.'
+                    : 'Usually the fix is different dates (inventory this far out can be thin), not the search.'}
                 </div>
                 <button
                   type="button"
