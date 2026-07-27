@@ -2428,7 +2428,7 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
   hotelId: number;
   hotelName: string;
   userEmail: string;
-  onSaved: (row: HotelControl) => void;
+  onSaved: (row: HotelControl, opts?: { pricingChanged?: boolean }) => void;
   // Fast-tag "Save & next": close the drawer so Tina opens the next hotel.
   onCloseDrawer: () => void;
 }) {

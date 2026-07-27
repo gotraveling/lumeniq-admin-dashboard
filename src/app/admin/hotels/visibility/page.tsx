@@ -43,8 +43,8 @@ export default function HotelVisibilityPage() {
   const [editingRule, setEditingRule] = useState<VisibilityRule | null>(null);
   const [ruleForm, setRuleForm] = useState({
     rule_name: '',
-    rule_type: 'star_rating' as const,
-    action: 'hide' as const,
+    rule_type: 'star_rating' as VisibilityRule['rule_type'],
+    action: 'hide' as VisibilityRule['action'],
     priority: 0,
     notes: '',
     // Star rating condition
