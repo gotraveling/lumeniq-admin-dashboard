@@ -2873,12 +2873,19 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                     </select>
                   </Field>
                   <Field label="Recommended rank">
-                    <input className="c-input" type="number" inputMode="numeric"
-                      value={form.recommend_rank}
-                      onChange={(e) => set('recommend_rank', e.target.value)}
-                      placeholder="0 = auto" />
+                    {/* A free number field invited arbitrary values (7? 20?),
+                        so editors could not tell what any of them meant. Fixed
+                        steps per Tina, 12 Jul — same scale for everyone. */}
+                    <select className="c-select" value={form.recommend_rank}
+                      onChange={(e) => set('recommend_rank', e.target.value)}>
+                      <option value="">0 — automatic (by price)</option>
+                      <option value="1">1 — above automatic</option>
+                      <option value="3">3 — secondary feature</option>
+                      <option value="5">5 — featured first</option>
+                    </select>
                     <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', marginTop: 4 }}>
-                      Pins this hotel higher in public “Recommended”. Beats collection + tier. 0 = automatic.
+                      Higher wins, then cheapest. Applies wherever the hotel appears publicly,
+                      not just this collection.
                     </div>
                   </Field>
                 </div>
