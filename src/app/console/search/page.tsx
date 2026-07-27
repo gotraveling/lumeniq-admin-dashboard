@@ -1323,8 +1323,14 @@ export default function ConsoleSearchPage() {
     const norm = normalizeRange(sp.get('checkIn') || '', sp.get('checkOut') || '');
     setCheckIn(norm.checkIn);
     setCheckOut(norm.checkOut);
-    // Primary: r=2|3&r=4|5,8 per-room composition (lossless).
-    const rParams = sp.getAll('r');
+    // Guests deliberately do NOT restore from the URL on a plain search link.
+    // r= is still written on search (support can see what was run), but reading
+    // it back made the pax mix sticky: search once for 1 adult + 1 child and
+    // every later visit silently reopened with that mix, quietly changing
+    // results (Tina, 26 Jul). A new search starts at the 2-adult default.
+    // Deep links INTO a hotel keep it — there the pax mix is the point of the
+    // link, and the drawer would otherwise price a different party.
+    const rParams = sp.get('hotelId') ? sp.getAll('r') : [];
     if (rParams.length > 0) {
       const parsed: RoomGuests[] = rParams.map(v => {
         const [aStr, kStr] = v.split('|');
