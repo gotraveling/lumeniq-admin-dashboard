@@ -22,6 +22,7 @@ import {
   SlidersHorizontal,
   Link2,
   Tag,
+  LayoutList,
 } from 'lucide-react';
 
 /**
@@ -54,6 +55,7 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
   {
     section: 'Catalog',
     items: [
+      { href: '/console/pages',            label: 'Pages',             icon: LayoutList, adminOnly: true },
       { href: '/console/collections',      label: 'Collections',       icon: FolderOpen, adminOnly: true },
       { href: '/console/room-mappings',    label: 'Room Mappings',     icon: Link2, adminOnly: true },
       { href: '/console/profiles',         label: 'Profiles',          icon: SlidersHorizontal, adminOnly: true },
