@@ -240,7 +240,16 @@ type HotelControl = {
 };
 
 // A single competitor rate row for the featured-product comparison table.
-type CompetitorRow = { name: string; rate: number | null; currency: string; transfer_included?: boolean };
+// `inclusions` is the free text shown beside the price ("Room only, no
+// transfer") — the whole point of the table is that competitors quote a lower
+// number for less, so the price alone argues against us.
+// `checked_at` is required in practice: publishing a rival's price is
+// comparative advertising, and a stale figure is a problem, not just untidy.
+// The card hides rows older than the staleness window rather than showing them.
+type CompetitorRow = {
+  name: string; rate: number | null; currency: string;
+  transfer_included?: boolean; inclusions?: string; checked_at?: string;
+};
 
 // Suppliers an admin can block per-hotel. Scales: add a supplier here and it
 // shows up in the Manage panel + badges with no other code changes.
@@ -2248,7 +2257,10 @@ type ManageForm = {
 // EXCLUDE the seaplane/speedboat transfer our package price includes, so
 // comparing them straight overstates the saving. '' stays unknown rather than
 // defaulting either way — a wrong assumption here becomes a false saving claim.
-type CompetitorFormRow = { name: string; rate: string; currency: string; transferIncluded: '' | 'yes' | 'no' };
+type CompetitorFormRow = {
+  name: string; rate: string; currency: string;
+  transferIncluded: '' | 'yes' | 'no'; inclusions: string; checkedAt: string;
+};
 
 // ── Editorial overrides (subset surfaced in the ManagePanel) ──
 // Full media/reviews live on /console/editorial; here we expose the
@@ -2307,6 +2319,8 @@ function controlToForm(c: HotelControl | null): ManageForm {
         currency: str(r?.currency) || 'AUD',
         transferIncluded: r?.transfer_included === true ? 'yes'
                         : r?.transfer_included === false ? 'no' : '',
+        inclusions: str(r?.inclusions),
+        checkedAt: dateStr(r?.checked_at),
       }))
     : [];
   return {
@@ -2632,7 +2646,7 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
 
   // Competitor-comparison repeater helpers.
   const addCompetitor = () =>
-    setForm(prev => ({ ...prev, competitor_comparison: [...prev.competitor_comparison, { name: '', rate: '', currency: 'AUD', transferIncluded: '' }] }));
+    setForm(prev => ({ ...prev, competitor_comparison: [...prev.competitor_comparison, { name: '', rate: '', currency: 'AUD', transferIncluded: '', inclusions: '', checkedAt: '' }] }));
   const removeCompetitor = (i: number) =>
     setForm(prev => ({ ...prev, competitor_comparison: prev.competitor_comparison.filter((_, idx) => idx !== i) }));
   const setCompetitor = (i: number, patch: Partial<CompetitorFormRow>) =>
@@ -2660,6 +2674,8 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
         // omitted entirely when unknown, so the card can tell "not stated"
         // apart from an explicit "transfers excluded"
         ...(r.transferIncluded === '' ? {} : { transfer_included: r.transferIncluded === 'yes' }),
+        ...(r.inclusions.trim() ? { inclusions: r.inclusions.trim() } : {}),
+        ...(r.checkedAt ? { checked_at: r.checkedAt } : {}),
       }))
       .filter(r => r.name !== '' || r.rate !== null);
     // Send the generalized array AND keep use_ratehawk in sync for back-compat
@@ -3017,7 +3033,7 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                   <label className="c-label">Competitor comparison</label>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {form.competitor_comparison.map((row, i) => (
-                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 90px 120px auto', gap: 8, alignItems: 'center' }}>
+                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 90px 120px 1.4fr 140px auto', gap: 8, alignItems: 'center' }}>
                         <input
                           className="c-input" value={row.name} placeholder="Competitor name"
                           onChange={(e) => setCompetitor(i, { name: e.target.value })}
@@ -3039,6 +3055,17 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                           <option value="yes">Incl. transfer</option>
                           <option value="no">Excl. transfer</option>
                         </select>
+                        <input
+                          className="c-input" value={row.inclusions}
+                          placeholder="Inclusions e.g. Breakfast only, no transfers"
+                          title="Shown beside their price. This is what makes the comparison fair — their number is lower because it includes less."
+                          onChange={(e) => setCompetitor(i, { inclusions: e.target.value })}
+                        />
+                        <input
+                          className="c-input" type="date" value={row.checkedAt}
+                          title="When you checked this price. Rows without a recent date are hidden on the public card — quoting a stale competitor price is comparative advertising."
+                          onChange={(e) => setCompetitor(i, { checkedAt: e.target.value })}
+                        />
                         <button
                           type="button" className="c-btn" title="Remove row"
                           onClick={() => removeCompetitor(i)}
