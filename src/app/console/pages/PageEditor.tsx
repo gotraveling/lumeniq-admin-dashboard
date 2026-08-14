@@ -18,6 +18,20 @@ const HOTEL_API = process.env.NEXT_PUBLIC_HOTEL_API_URL
 // with the CHECK in migration 033 and PREWARM_LOS in routes/pages.js.
 const PREWARM_LOS = [1, 3, 7];
 
+// Keep in step with LAYOUTS in hotel-api routes/pages.js, the CHECK in
+// migration 034, and the renderer in HotelMerchCollectionSection.tsx.
+const LAYOUTS: Array<{ value: string; label: string; hint: string }> = [
+  { value: 'rail', label: 'Rail', hint: 'one scrolling row of cards' },
+  { value: 'feature', label: 'Feature', hint: 'one large card + a grid beside it' },
+  { value: 'grid', label: 'Grid', hint: 'even grid, no sideways scrolling' },
+  { value: 'spotlight', label: 'Spotlight', hint: 'one hero + a short stacked list' },
+  { value: 'editorial', label: 'Editorial', hint: 'full-width bands, image alternating sides' },
+];
+
+// Cards rendered in this row. "All" keeps today's behaviour (everything the
+// collection resolves); the row is framing only — "View all" still shows the lot.
+const CARD_COUNTS = [3, 4, 5, 6, 8, 12];
+
 interface BlockCollection {
   slug: string; title: string; subtitle?: string; type: string;
   status: string; layout: string; los: number | null; hotelCount: number;
@@ -31,6 +45,7 @@ interface Block {
   subtitleOverride?: string | null;
   layoutOverride?: string | null;
   losOverride?: number | null;
+  maxCards?: number | null;
   collection: BlockCollection | null;
 }
 interface CollectionListRow {
@@ -175,8 +190,18 @@ export default function PageEditor({ slug }: { slug: string }) {
                   <select className="c-select" value={b.layoutOverride || ''}
                     onChange={(e) => setBlock(i, { layoutOverride: e.target.value || null })}>
                     <option value="">Inherit ({inherited?.layout || 'rail'})</option>
-                    <option value="rail">Rail</option>
-                    <option value="feature">Feature</option>
+                    {LAYOUTS.map((l) => (
+                      <option key={l.value} value={l.value}>{l.label} — {l.hint}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Cards shown in this row">
+                  <select className="c-select" value={b.maxCards == null ? '' : String(b.maxCards)}
+                    onChange={(e) => setBlock(i, { maxCards: e.target.value ? Number(e.target.value) : null })}>
+                    <option value="">All ({inherited?.hotelCount || 0} in the collection)</option>
+                    {CARD_COUNTS.map((n) => (
+                      <option key={n} value={n}>First {n}</option>
+                    ))}
                   </select>
                 </Field>
                 <Field label="Advertised nights">
@@ -214,6 +239,8 @@ export default function PageEditor({ slug }: { slug: string }) {
         </div>
         <p style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', margin: '8px 0 0' }}>
           The same collection can appear more than once — give each block its own headline and advertised nights.
+          Cards shown only shortens the row; the collection page behind &ldquo;View all&rdquo; still lists everything.
+          Card order is the collection&rsquo;s own hotel order — reorder it in Collections.
           Advertised nights is limited to {PREWARM_LOS.join(', ')} because those are the stay lengths we pre-price;
           anything else would show a price for a different number of nights.
         </p>
