@@ -68,6 +68,9 @@ type HotelHit = {
     refundable?: boolean;
     breakfastIncluded?: boolean | null;
     cancellationDeadlineUtc?: string | null;
+    supplierCancellationDeadlineUtc?: string | null;
+    cancellationWindowClosed?: boolean | null;
+    cancellationBufferDays?: number | null;
     // Transfer-bundled label on the cheapest rate (Hummingbird, e.g. "Seaplane");
     // null = room-only. Feeds the subtle "incl." note on the card.
     transferLabel?: string | null;
@@ -100,6 +103,9 @@ type Quote = {
   refundable?: boolean | null;
   breakfastIncluded?: boolean | null;
   cancellationDeadlineUtc?: string | null;
+  supplierCancellationDeadlineUtc?: string | null;
+  cancellationWindowClosed?: boolean | null;
+  cancellationBufferDays?: number | null;
   ratesCount?: number;
   // Promo offer on the cheapest rate (the one the card price reflects), so the
   // search card can badge "offer applied". [{name, code}], Hummingbird only.
@@ -127,7 +133,7 @@ type AdminRate = {
   // separate cards instead of getting flattened.
   roomGroupName?: string | null;
   ratePlan: string;
-  refundable: boolean;
+  refundable: boolean | null;
   breakfastIncluded: boolean;
   roomImage?: string | null;
   // Tier of rg_ext / name match that resolved roomImage + roomGroupName.
@@ -137,6 +143,9 @@ type AdminRate = {
   matchTier?: 'strict' | 'class_bedding' | 'class' | 'name' | 'none' | null;
   cancellationPolicy?: string | null;
   cancellationDeadlineUtc?: string | null;
+  supplierCancellationDeadlineUtc?: string | null;
+  cancellationWindowClosed?: boolean | null;
+  cancellationBufferDays?: number | null;
   // On-request vs instant. Hummingbird stamps availabilityType='on_request'
   // when the property must confirm before booking; onRequest is the truthful
   // boolean the UI gates on — badge it and present as a REQUEST, never an
@@ -813,6 +822,9 @@ export default function ConsoleSearchPage() {
             refundable:              q.cheapestRate?.refundable,
             breakfastIncluded:       q.cheapestRate?.breakfastIncluded,
             cancellationDeadlineUtc: q.cheapestRate?.cancellationDeadlineUtc,
+            supplierCancellationDeadlineUtc: q.cheapestRate?.supplierCancellationDeadlineUtc,
+            cancellationWindowClosed:       q.cheapestRate?.cancellationWindowClosed,
+            cancellationBufferDays:         q.cheapestRate?.cancellationBufferDays,
             ratesCount:              q.ratesCount,
             offers:                  q.cheapestRate?.offers,
             transferLabel:           q.cheapestRate?.transfer ?? null,
@@ -851,6 +863,9 @@ export default function ConsoleSearchPage() {
           refundable:              r.cheapestRate?.refundable,
           breakfastIncluded:       r.cheapestRate?.breakfastIncluded,
           cancellationDeadlineUtc: r.cheapestRate?.cancellationDeadlineUtc,
+          supplierCancellationDeadlineUtc: r.cheapestRate?.supplierCancellationDeadlineUtc,
+          cancellationWindowClosed:       r.cheapestRate?.cancellationWindowClosed,
+          cancellationBufferDays:         r.cheapestRate?.cancellationBufferDays,
           ratesCount:              r.ratesCount,
           offers:                  r.cheapestRate?.offers,
           transferLabel:           r.cheapestRate?.transfer ?? null
@@ -882,6 +897,9 @@ export default function ConsoleSearchPage() {
             refundable:              r.cheapestRate?.refundable,
             breakfastIncluded:       r.cheapestRate?.breakfastIncluded,
             cancellationDeadlineUtc: r.cheapestRate?.cancellationDeadlineUtc,
+            supplierCancellationDeadlineUtc: r.cheapestRate?.supplierCancellationDeadlineUtc,
+            cancellationWindowClosed:       r.cheapestRate?.cancellationWindowClosed,
+            cancellationBufferDays:         r.cheapestRate?.cancellationBufferDays,
             transferLabel:           r.cheapestRate?.transfer ?? null,
             ratesCount:              r.ratesCount,
             quotes:                  displayQuotes
@@ -973,7 +991,26 @@ export default function ConsoleSearchPage() {
     setBookingErr(null);
     setSupplierFocus(supplier || null);
     syncUrl({ hotelId: h.id, supplier: supplier || null });
+    // Content and rates in PARALLEL. The drawer used to take its content out of
+    // the rates response, so the property name, address, amenities and photos
+    // waited on a live supplier call — 27s for Atlantis The Royal, where
+    // RateHawk returns 174 rates, against 0.35s for the same content from
+    // hotel-api. The rates response still carries a copy and still sets this
+    // (whichever lands first wins), so a content failure changes nothing.
+    void loadContentFor(h);
     void loadRatesFor(h, 'cug', datesOverride);
+  }
+
+  /** Static content only — fast, and independent of the supplier round-trip. */
+  async function loadContentFor(h: HotelHit) {
+    try {
+      const res = await fetch(`/api/admin/hotel-content/${h.id}`);
+      if (!res.ok) return;
+      const json = await res.json();
+      // Don't clobber the richer copy if rates somehow got back first, and
+      // don't paint a hotel the consultant has already navigated away from.
+      setDetailContent((prev: any) => (prev ? prev : (json && !json.error ? json : prev)));
+    } catch { /* best-effort — the rates response still carries content */ }
   }
 
   async function loadRatesFor(h: HotelHit, channel: 'cug' | 'b2c' = 'cug', datesOverride?: { checkIn: string; checkOut: string }, opts?: { noCache?: boolean }) {
@@ -1018,7 +1055,11 @@ export default function ConsoleSearchPage() {
       // compare mode and hide the clean matrix). One extra supplier call per
       // hotel opened; best-effort. The manual "Compare" button still does the
       // full paired merge for detailed inspection.
-      if (channel === 'cug') void loadB2cTags(h);
+      // NOT fetched here any more. This is a second, equally expensive
+      // supplier round-trip (another 27s at RateHawk for a big property) whose
+      // only job is to decide whether a badge reads "Member" or "All". Opening
+      // a hotel was costing two full rate calls. It now runs when the
+      // consultant actually asks to compare channels — see loadB2cTags.
     } catch (e: any) {
       setRatesErr(e.message || 'rates failed');
     } finally {
@@ -1030,6 +1071,9 @@ export default function ConsoleSearchPage() {
   // and merge them (tagged) into the Member list so the consultant sees both
   // — without paying the 2x ETG cost on every search.
   async function addB2CRates(h: HotelHit) {
+    // Channel badges need the non-member prices. Open no longer fetches them,
+    // so the compare action does — this is the moment the consultant asked.
+    void loadB2cTags(h);
     if (b2cLoaded || b2cBusy) return;
     setB2cBusy(true);
     try {
@@ -1065,6 +1109,48 @@ export default function ConsoleSearchPage() {
   // cheapest public sell) so each member row can show "All" (member==public,
   // no advantage) vs "Member" (member cheaper) — WITHOUT merging into the list
   // or flipping into paired compare view. Best-effort, silent.
+  /**
+   * Warm the rate cache for a hotel the consultant looks like they're about to
+   * open. The detail call is a live supplier round-trip (2-27s depending on the
+   * property) and the backend caches it for 10 minutes, so starting it on hover
+   * means the click often lands on an already-warm cache.
+   *
+   * Deliberately conservative: one in flight at a time, each hotel attempted
+   * once per dates, and never for a hotel already open. It must not turn a
+   * consultant scrolling a list into a burst of supplier calls.
+   */
+  const prefetched = useRef<Set<string>>(new Set());
+  const prefetchInFlight = useRef(false);
+  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function prefetchRates(h: HotelHit) {
+    if (!checkIn || !checkOut) return;
+    const key = `${h.id}|${checkIn}|${checkOut}|${citizenship}`;
+    if (prefetched.current.has(key)) return;
+    if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+    // Hover has to look deliberate — a cursor crossing the list is not intent.
+    prefetchTimer.current = setTimeout(async () => {
+      if (prefetchInFlight.current) return;
+      if (prefetched.current.has(key)) return;
+      prefetched.current.add(key);
+      prefetchInFlight.current = true;
+      try {
+        const qs = new URLSearchParams({ checkIn, checkOut, nationalityCode: citizenship, accountType: 'cug' });
+        qs.set('guests', JSON.stringify(rooms.map(r => ({ adults: r.adults, children: r.childrenAges || [] }))));
+        await fetch(`/api/admin/search/rates/${h.id}?${qs.toString()}`);
+      } catch {
+        // A failed prefetch is a non-event; the click will fetch for real.
+        prefetched.current.delete(key);
+      } finally {
+        prefetchInFlight.current = false;
+      }
+    }, 250);
+  }
+
+  function cancelPrefetch() {
+    if (prefetchTimer.current) { clearTimeout(prefetchTimer.current); prefetchTimer.current = null; }
+  }
+
   async function loadB2cTags(h: HotelHit) {
     try {
       const qs = new URLSearchParams({ checkIn, checkOut, nationalityCode: citizenship, accountType: 'b2c' });
@@ -1074,9 +1160,9 @@ export default function ConsoleSearchPage() {
       if (!json.success) return;
       const m = new Map<string, number>();
       for (const r of (json.data.rates || []) as AdminRate[]) {
-        const sig = planSigOf(r);
+        const key = channelCmpKey(r);
         const s = r.pricing?.sell?.totalAmount;
-        if (typeof s === 'number' && (!m.has(sig) || s < m.get(sig)!)) m.set(sig, s);
+        if (typeof s === 'number' && (!m.has(key) || s < m.get(key)!)) m.set(key, s);
       }
       setB2cSellBySig(m);
     } catch { /* best-effort — tag just falls back to "Member" */ }
@@ -1725,6 +1811,8 @@ export default function ConsoleSearchPage() {
                   h={h}
                   control={controlMap[h.id]}
                   onOpen={(supplier) => openHotel(h, supplier)}
+                  onPrefetch={() => prefetchRates(h)}
+                  onCancelPrefetch={cancelPrefetch}
                   showUnavailable={showUnavailable}
                 />
               ))}
@@ -2066,6 +2154,32 @@ function normName(s: string | null | undefined): string {
   return (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
+/**
+ * Room identity for comparing the SAME room across RateHawk's member and
+ * public channels. RateHawk names the same physical room differently per
+ * channel by appending transfer qualifiers — "Soneva Fushi with Pool Family
+ * Suite" on the member side comes back as "Soneva Fushi with Pool Family Suite
+ * (speedboat transfer included, domestic flight transfer included)" on the
+ * public side. Only transfer parentheticals are stripped; everything else
+ * ("(full double bed)", "(private pool)", "2 Bedrooms …") is a real difference
+ * and must keep the rooms apart.
+ */
+const TRANSFER_QUALIFIER = /\s*\(([^()]*transfers?[^()]*)\)/gi;
+function roomIdentity(r: { roomGroupName?: string | null; roomTypeName?: string | null }): string {
+  return normName((r.roomGroupName || r.roomTypeName || '').replace(TRANSFER_QUALIFIER, ''));
+}
+
+/**
+ * Key for "is the member price better than the public price for THIS rate?".
+ * Supplier + room + plan. Keying on plan alone (what this used to do) compared
+ * every member row against the cheapest public rate anywhere in the hotel — so
+ * a Villa at 44,874 was judged against a family suite at 11,362 and reported as
+ * a member rate dearer than the public one.
+ */
+function channelCmpKey(r: AdminRate): string {
+  return `${(r.supplier || '').toLowerCase()}|${roomIdentity(r)}|${planSigOf(r)}`;
+}
+
 // ─── small style helpers ────────────────────────────────────────
 const labelStyle: React.CSSProperties = {
   display: 'block', fontSize: 11, color: 'var(--c-fg-muted)', textTransform: 'uppercase',
@@ -2181,6 +2295,70 @@ function fmtCancelDate(iso?: string | null) {
   }).formatToParts(d);
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value || '';
   return `${get('day')} ${get('month')} ${get('hour')}:${get('minute')} ${get('timeZoneName')}`.trim();
+}
+
+type CancellableRate = {
+  refundable?: boolean | null;
+  /** OUR deadline. For Hummingbird this is the supplier date minus a safety
+   *  buffer, so it is EARLIER than anything HB contracts to. */
+  cancellationDeadlineUtc?: string | null;
+  /** What the supplier actually contracts to — the date the client's window
+   *  really ends, and the one that appears on a supplier confirmation. */
+  supplierCancellationDeadlineUtc?: string | null;
+  /** There WAS a free window and it has already passed. */
+  cancellationWindowClosed?: boolean | null;
+  /** Days we shaved off the supplier date to get our own cut-off. */
+  cancellationBufferDays?: number | null;
+};
+
+/**
+ * Single place that turns a rate's cancellation fields into consultant-facing
+ * copy. It exists to hold three rules that kept getting broken when each render
+ * site formatted its own string:
+ *   1. A date presented as the CLIENT's window must be the SUPPLIER's date.
+ *      Our buffered cut-off is ours — label it as ours, never pass it off as
+ *      the policy. (This is what made an HB rate free until 22 Aug read as
+ *      "Refundable until 17 Aug".)
+ *   2. Once the window has closed the rate is non-refundable, but it was not
+ *      always — say WHEN it closed rather than implying it never was.
+ *   3. refundable == null means the supplier told us nothing. Say that; do not
+ *      round an unknown down to "Non-refundable".
+ */
+function cancellationCopy(r: CancellableRate) {
+  const supplierIso = r.supplierCancellationDeadlineUtc || r.cancellationDeadlineUtc || null;
+  const ourIso = r.cancellationDeadlineUtc || null;
+  const buffered = !!(supplierIso && ourIso && supplierIso !== ourIso);
+  const bufferNote = buffered
+    ? `our cut-off ${fmtCancelDate(ourIso)}${r.cancellationBufferDays ? ` (${r.cancellationBufferDays}d safety margin)` : ''}`
+    : null;
+
+  if (r.refundable == null) {
+    return {
+      state: 'unknown' as const,
+      short: 'Terms on request',
+      headline: 'Supplier did not state terms',
+      supplierLabel: null, closedLabel: null, note: null,
+    };
+  }
+  if (r.refundable) {
+    return {
+      state: 'refundable' as const,
+      short: supplierIso ? `Free cancel to ${fmtCancelDate(supplierIso)}` : 'Refundable',
+      headline: supplierIso ? `Refundable until ${fmtCancelDate(supplierIso)}` : 'Refundable',
+      supplierLabel: supplierIso ? `until ${fmtCancelDate(supplierIso)}` : null,
+      closedLabel: null,
+      note: bufferNote,
+    };
+  }
+  const closedOn = r.cancellationWindowClosed && supplierIso ? fmtCancelDate(supplierIso) : null;
+  return {
+    state: 'nonrefundable' as const,
+    short: closedOn ? `Non-refundable · window closed ${closedOn}` : 'Non-refundable',
+    headline: closedOn ? `Non-refundable — free cancellation ended ${closedOn}` : 'Non-refundable',
+    supplierLabel: null,
+    closedLabel: closedOn ? `free cancellation ended ${closedOn}` : null,
+    note: null,
+  };
 }
 
 function Row({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
@@ -3416,7 +3594,7 @@ function ControlBadge({ control }: { control: HotelControl }) {
   );
 }
 
-function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHit; control?: HotelControl; onOpen: (supplier: string | null) => void; showUnavailable: boolean }) {
+function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, showUnavailable }: { h: HotelHit; control?: HotelControl; onOpen: (supplier: string | null) => void; onPrefetch?: () => void; onCancelPrefetch?: () => void; showUnavailable: boolean }) {
   // "Why this price?" inline breakdown — clicking it must NOT open the drawer
   // (the whole card is a button), so the trigger stops propagation and toggles
   // this local popover instead.
@@ -3433,7 +3611,11 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
         netNightly: h.priced.netNightly, markupPct: h.priced.markupPct,
         currency: h.priced.currency, ratePlan: h.priced.ratePlan,
         refundable: h.priced.refundable, breakfastIncluded: h.priced.breakfastIncluded,
-        cancellationDeadlineUtc: h.priced.cancellationDeadlineUtc, ratesCount: h.priced.ratesCount,
+        cancellationDeadlineUtc: h.priced.cancellationDeadlineUtc,
+        supplierCancellationDeadlineUtc: h.priced.supplierCancellationDeadlineUtc,
+        cancellationWindowClosed: h.priced.cancellationWindowClosed,
+        cancellationBufferDays: h.priced.cancellationBufferDays,
+        ratesCount: h.priced.ratesCount,
         transferLabel: h.priced.transferLabel ?? null,
       }] : []);
   // The result-card headline is a "From" price, so it must be the cheapest
@@ -3448,6 +3630,8 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
   return (
     <button
       onClick={() => onOpen(null)}
+      onMouseEnter={onPrefetch}
+      onMouseLeave={onCancelPrefetch}
       className="c-card"
       style={{
         display: 'grid', gridTemplateColumns: '150px 1fr auto', gap: 16, alignItems: 'stretch',
@@ -3498,9 +3682,12 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
               ★ {best.offers[0].name}{best.offers[0].code ? ` · ${best.offers[0].code}` : ''}
             </span>
           )}
-          {best && (best.refundable
-            ? <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>{best.cancellationDeadlineUtc ? `Free cancel to ${fmtCancelDate(best.cancellationDeadlineUtc)}` : 'Refundable'}</span>
-            : <span style={{ fontSize: 11.5, color: 'var(--c-danger)' }}>Non-refundable</span>)}
+          {best && (() => {
+            const c = cancellationCopy(best);
+            const tone = c.state === 'refundable' ? 'var(--c-success)'
+              : c.state === 'unknown' ? 'var(--c-fg-soft)' : 'var(--c-danger)';
+            return <span style={{ fontSize: 11.5, color: tone }} title={[c.headline, c.note].filter(Boolean).join(' · ')}>{c.short}</span>;
+          })()}
           {best?.breakfastIncluded && <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>· Breakfast</span>}
           {/* Transfer-bundled note — the card "from" price already includes this transfer. */}
           {best?.transferLabel && <span style={{ fontSize: 11.5, color: 'var(--c-success)' }}>· incl. {best.transferLabel}</span>}
@@ -3571,10 +3758,12 @@ function MultiSupplierCard({ h, control, onOpen, showUnavailable }: { h: HotelHi
                 }
                 if (best.roomTypeName) rows.push(['Room', best.roomTypeName]);
                 if (best.ratePlan) rows.push(['Plan', best.ratePlan === 'nomeal' ? 'Room only' : best.ratePlan]);
-                if (best.refundable != null) {
-                  rows.push(['Cancellation', best.refundable
-                    ? `Refundable${best.cancellationDeadlineUtc ? ` until ${fmtCancelDate(best.cancellationDeadlineUtc)}` : ''}`
-                    : 'Non-refundable']);
+                {
+                  // Supplier date is the client's window; our buffered cut-off
+                  // is shown as a separate line so it is never mistaken for it.
+                  const c = cancellationCopy(best);
+                  rows.push(['Cancellation', c.headline]);
+                  if (c.note) rows.push(['Our cut-off', c.note.replace(/^our cut-off /, '')]);
                 }
                 if (best.breakfastIncluded) rows.push(['Breakfast', 'Included']);
                 if (best.transferLabel) rows.push(['Transfer', `Included: ${best.transferLabel}`]);
@@ -4159,7 +4348,7 @@ function RoomGroupedRates({
       // BEFORE channel dominance drops the redundant row below.
       const sellBySig = new Map<string, { cug?: number; b2c?: number }>();
       for (const r of list) {
-        const sig = planSigOf(r);
+        const sig = channelCmpKey(r);
         const cur = sellBySig.get(sig) || {};
         const ch = r._channel === 'b2c' ? 'b2c' : 'cug';
         const s = r.pricing?.sell?.totalAmount;
@@ -4191,11 +4380,63 @@ function RoomGroupedRates({
         }
       }
 
-      const sellTotals = displayList
+      // Dearer-rate suppression (Tina). Two rates the consultant should never
+      // have to see, both scoped to THIS room group and THE SAME meal plan so a
+      // cheap entry-level rate can never suppress options on a better room:
+      //
+      //  1. A non-refundable rate priced at or above the cheapest refundable
+      //     one. Giving up free cancellation for no saving is never the right
+      //     recommendation, and it made the Ritz-Carlton Singapore card show a
+      //     non-refundable rate ~AUD 38 DEARER than the refundable one directly
+      //     above it.
+      //  2. A Member rate at or above the cheapest non-member rate. Channel
+      //     dominance above already does this, but keys on refundability too
+      //     (planSigOf), so a MEMBER non-refundable was never compared against a
+      //     cheaper public refundable rate and slipped through. Here we ignore
+      //     refundability and compare on meal plan alone.
+      //
+      // Display-only: the API still returns every rate, and a rate is only ever
+      // dropped when a strictly better same-room, same-board alternative is
+      // visible next to it.
+      const mealSigOf = (r: AdminRate) => r.ratePlan || 'nomeal';
+      const cheapestRefundable = new Map<string, number>();
+      const cheapestNonMember = new Map<string, number>();
+      for (const r of displayList) {
+        const sig = mealSigOf(r);
+        const sell = admSellTotal(r);
+        if (!(sell > 0)) continue;
+        if (r.refundable) {
+          const cur = cheapestRefundable.get(sig);
+          if (cur === undefined || sell < cur) cheapestRefundable.set(sig, sell);
+        }
+        if (r._channel === 'b2c') {
+          const cur = cheapestNonMember.get(sig);
+          if (cur === undefined || sell < cur) cheapestNonMember.set(sig, sell);
+        }
+      }
+      const kept = displayList.filter(r => {
+        const sig = mealSigOf(r);
+        const sell = admSellTotal(r);
+        if (!(sell > 0)) return true;
+        if (!r.refundable) {
+          const bestRef = cheapestRefundable.get(sig);
+          if (bestRef !== undefined && sell >= bestRef) return false;
+        }
+        if (r._channel !== 'b2c') {
+          const bestPublic = cheapestNonMember.get(sig);
+          if (bestPublic !== undefined && sell >= bestPublic) return false;
+        }
+        return true;
+      });
+      // Never empty a room card: if every rate for a board was suppressed, fall
+      // back to the full list rather than showing the consultant nothing.
+      const visibleList = kept.length ? kept : displayList;
+
+      const sellTotals = visibleList
         .map(r => r.pricing?.sell?.totalAmount)
         .filter((v): v is number => typeof v === 'number' && v > 0);
       const poolMin = sellTotals.length ? Math.min(...sellTotals) : 0;
-      const scored = displayList.map(r => ({
+      const scored = visibleList.map(r => ({
         r,
         score: scoreRate({
           pricing: {
@@ -4209,13 +4450,13 @@ function RoomGroupedRates({
       const byScore = [...scored].sort((a, b) => b.score - a.score);
       // Recommend the lead-in (cheapest SELL), not the highest composite score —
       // consultants expect the headline to be the cheapest bookable rate.
-      const recommendedKey = [...displayList]
+      const recommendedKey = [...visibleList]
         .sort((a, b) => admSellTotal(a) - admSellTotal(b))[0]?.rateKey || null;
 
       // One row per plan now, so order by cheapest sell when comparing, else by
       // composite score.
       const ordered: AdminRate[] = comparing
-        ? [...displayList].sort((a, b) => admSellTotal(a) - admSellTotal(b))
+        ? [...visibleList].sort((a, b) => admSellTotal(a) - admSellTotal(b))
         : byScore.map(s => s.r);
       // Distinct suppliers in this (possibly merged) group — drives the
       // subtle "N suppliers" hint on merged cards.
@@ -4527,9 +4768,12 @@ function RoomGroupedRates({
                             // The non-member price is auto-fetched on open
                             // (b2cSellBySig), so this shows WITHOUT clicking Compare.
                             // Paired compare-mode rows still use the merged data.
-                            const sig = planSigOf(r);
+                            const sig = channelCmpKey(r);
                             const memberSell = r.pricing?.sell?.totalAmount;
                             const pair = g.sellBySig.get(sig);
+                            // No public price for THIS room+plan means we cannot
+                            // say anything about member advantage — badge stays
+                            // "Member" rather than borrowing another room's price.
                             const b2cSell = pair?.b2c ?? b2cSellBySig?.get(sig);
                             const isAll = r._channel === 'cug' && typeof memberSell === 'number'
                               && typeof b2cSell === 'number' && Math.round(memberSell) === Math.round(b2cSell);
@@ -4611,10 +4855,15 @@ function RoomGroupedRates({
                           })()}
                           {/* Transfer inclusion tag — make Maldives apple-to-apple.
                               Transfer-bundled (Hummingbird) rates carry r.transfer
-                              and the PRICE already includes that transfer. Room-only
-                              (RateHawk) rates have no r.transfer; show the per-hotel
-                              transfer surcharge for this occupancy so the consultant
-                              compares like for like. */}
+                              and the PRICE already includes that transfer. Rates
+                              without one show the per-hotel transfer surcharge for
+                              this occupancy so the consultant compares like for like.
+                              When the hotel has NO transfer data at all we print
+                              nothing: this line sits directly under the meal plan, so
+                              the old bare "room only" fallback read as a meal and
+                              produced "breakfast / room only" on every city hotel —
+                              e.g. Ritz-Carlton Singapore, where breakfast IS included.
+                              "no transfer" also says what it actually means. */}
                           {r.transfer ? (
                             <div style={{
                               marginTop: 3,
@@ -4633,19 +4882,9 @@ function RoomGroupedRates({
                               color: '#9a6a00',
                               lineHeight: 1.3
                             }}>
-                              room only · +{transferCurrency} {fmtMoney(transferSurcharge)}
+                              no transfer · +{transferCurrency} {fmtMoney(transferSurcharge)}
                             </div>
-                          ) : (
-                            <div style={{
-                              marginTop: 3,
-                              fontSize: 11,
-                              fontWeight: 500,
-                              color: 'var(--c-fg-muted)',
-                              lineHeight: 1.3
-                            }}>
-                              room only
-                            </div>
-                          )}
+                          ) : null}
                         </td>
                         <td style={tdStyle}>
                           {/* On-request rates need supplier confirmation — flag it
@@ -4657,18 +4896,27 @@ function RoomGroupedRates({
                               style={{ display: 'inline-flex', alignItems: 'center', gap: 3, marginBottom: 4, padding: '1px 7px', borderRadius: 999, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#92600a', background: 'rgba(245,177,66,0.18)', border: '1px solid rgba(245,177,66,0.5)', cursor: 'help' }}
                             ><AlertTriangle size={10} /> On request</div>
                           )}
-                          {r.refundable
-                            ? (
+                          {(() => {
+                            const c = cancellationCopy(r);
+                            const tone = c.state === 'refundable' ? 'var(--c-success)'
+                              : c.state === 'unknown' ? 'var(--c-fg-soft)' : 'var(--c-danger)';
+                            return (
                               <div style={{ lineHeight: 1.3 }}>
-                                <div style={{ color: 'var(--c-success)', fontWeight: 600 }}>Refundable</div>
-                                {r.cancellationDeadlineUtc && (
-                                  <div style={{ fontSize: 11, color: 'var(--c-fg-soft)' }}>
-                                    until {fmtCancelDate(r.cancellationDeadlineUtc)}
-                                  </div>
+                                <div style={{ color: tone, fontWeight: 600 }}>
+                                  {c.state === 'refundable' ? 'Refundable' : c.state === 'unknown' ? 'Terms on request' : 'Non-refundable'}
+                                </div>
+                                {c.state === 'refundable' && c.supplierLabel && (
+                                  <div style={{ fontSize: 11, color: 'var(--c-fg-soft)' }}>{c.supplierLabel}</div>
+                                )}
+                                {c.state === 'nonrefundable' && c.closedLabel && (
+                                  <div style={{ fontSize: 11, color: 'var(--c-fg-soft)' }}>{c.closedLabel}</div>
+                                )}
+                                {c.note && (
+                                  <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)' }}>{c.note}</div>
                                 )}
                               </div>
-                            )
-                            : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>}
+                            );
+                          })()}
                         </td>
                         <td style={tdStyle}>
                           <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.3 }}>
@@ -5014,7 +5262,11 @@ function BookingSidebar(props: {
           <div className="c-card" style={{ padding: 12, marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{r.roomTypeName}</div>
             <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', marginBottom: 10 }}>
-              {r.ratePlan} · {r.refundable ? <span style={{ color: 'var(--c-success)' }}>Refundable</span> : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>} · {r.supplier}
+              {r.ratePlan} · {r.refundable == null
+                ? <span style={{ color: 'var(--c-fg-soft)' }}>Terms on request</span>
+                : r.refundable
+                  ? <span style={{ color: 'var(--c-success)' }}>Refundable</span>
+                  : <span style={{ color: 'var(--c-danger)' }}>Non-refundable</span>} · {r.supplier}
             </div>
             {/* ETG cert §6 — full tax transparency for B2B.
                 Sell total already contains supplier-included taxes
