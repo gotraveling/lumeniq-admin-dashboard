@@ -11,7 +11,7 @@
  * Hotels are pinned by the stable internal hotel_id (survives supplier re-sync),
  * with optional per-hotel editorial/offer overrides layered on top.
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { FolderOpen, Plus, Trash2, ArrowUp, ArrowDown, Search, Save, X } from 'lucide-react';
 
 const HOTEL_API = process.env.NEXT_PUBLIC_HOTEL_API_URL
@@ -46,6 +46,7 @@ export default function CollectionsPage() {
   const [editing, setEditing] = useState<CollectionFull | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [q, setQ] = useState('');
 
   const loadList = useCallback(async () => {
     setLoading(true); setError(null);
@@ -125,6 +126,14 @@ export default function CollectionsPage() {
     finally { setBusy(false); }
   }
 
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return list;
+    return list.filter(c =>
+      c.title.toLowerCase().includes(needle) || c.slug.toLowerCase().includes(needle)
+    );
+  }, [list, q]);
+
   return (
     <>
       <div className="c-page-head">
@@ -145,12 +154,33 @@ export default function CollectionsPage() {
 
       {!editing && (
         <>
+          {/* Name filter. The list is past 20 collections and growing, and the
+              titles are editorial ("Australia's non-stop Maldives hotel
+              ideas"), so scanning for one by eye is the slow part. */}
+          {!loading && list.length > 0 && (
+            <div className="c-filter-row" style={{ marginBottom: 12 }}>
+              <input
+                className="c-input"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Filter collections by name or slug…"
+                style={{ maxWidth: 340 }}
+              />
+              <span style={{ fontSize: 12, color: 'var(--c-fg-soft)' }}>
+                {q.trim() ? `${filtered.length} of ${list.length}` : `${list.length} collection${list.length === 1 ? '' : 's'}`}
+              </span>
+              {q.trim() && (
+                <button className="c-btn" onClick={() => setQ('')}><X size={13} /> Clear</button>
+              )}
+            </div>
+          )}
           {loading ? <div className="c-loading">Loading…</div> : (
-            list.length === 0 ? <div className="c-empty">No collections yet. Create one to get started.</div> : (
+            list.length === 0 ? <div className="c-empty">No collections yet. Create one to get started.</div> :
+            filtered.length === 0 ? <div className="c-empty">No collection matches “{q}”.</div> : (
               <table className="c-table">
                 <thead><tr><th>Title</th><th>Slug</th><th>Hotels</th><th>Status</th><th></th></tr></thead>
                 <tbody>
-                  {list.map((c) => (
+                  {filtered.map((c) => (
                     <tr key={c.id}>
                       <td>{c.title}</td>
                       <td className="c-mono">{c.slug}</td>
