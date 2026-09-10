@@ -267,6 +267,14 @@ const BLOCKABLE_SUPPLIERS: Array<{ key: string; label: string; color: string }> 
   { key: 'hummingbird', label: 'Hummingbird', color: '#1f6feb' },
 ];
 
+// Member (cug) vs Non-Member (b2c) is a RateHawk pool distinction. Hummingbird
+// quotes one price per rate, so the whole member/non-member idea — the badge on
+// a row AND the "Compare non-member price" control — is meaningless when no
+// RateHawk rate is on screen.
+function hasChannelSplit(supplier?: string | null): boolean {
+  return (supplier || '').toLowerCase() === 'ratehawk';
+}
+
 // RateHawk image URLs embed a literal `{size}` token (e.g.
 // https://cdn.worldota.net/t/{size}/ostrovok/...) that must be substituted with
 // a real ETG size before use, or the <img>/background URL is invalid and renders
@@ -2019,7 +2027,7 @@ export default function ConsoleSearchPage() {
                 everywhere. On demand we fetch the B2C channel for THIS hotel
                 and merge it in (tagged), so consultants see both side by side
                 without paying the 2x ETG cost (10/min cap) on every search. */}
-            {rates.length > 0 && (
+            {rates.some(r => hasChannelSplit(r.supplier)) && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
                 fontSize: 12.5, color: 'var(--c-fg-soft)'
@@ -2052,23 +2060,62 @@ export default function ConsoleSearchPage() {
                 defaultNights={Number(controlMap[detailHotel.id]?.package_nights) || 5}
               />
             )}
-            {rates.length > 0 && (() => {
-              const sups = Array.from(new Set(rates.map(r => (r.supplier || '').trim()).filter(Boolean)));
-              if (sups.length < 2) return null;
-              const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-              const supPill = (active: boolean) => ({
+            {/* Supplier row. Always rendered, even for a single supplier —
+                a consultant quoting a Maldives villa needs to see WHOSE rates
+                these are, and that the other supplier came back empty rather
+                than never being asked. Suppliers that carry the property
+                (hit.sources) but returned nothing for these dates show muted
+                alongside the ones that priced. */}
+            {rates.length > 0 && detailHotel && (() => {
+              const rated = Array.from(new Set(
+                rates.map(r => (r.supplier || '').trim().toLowerCase()).filter(Boolean)
+              ));
+              const silent = Array.from(new Set(
+                (detailHotel.sources || []).map(x => String(x).trim().toLowerCase()).filter(Boolean)
+              )).filter(k => !rated.includes(k));
+              if (!rated.length && !silent.length) return null;
+              const labelOf = (k: string) =>
+                BLOCKABLE_SUPPLIERS.find(b => b.key === k)?.label || (k.charAt(0).toUpperCase() + k.slice(1));
+              const supPill = (active: boolean, clickable: boolean) => ({
                 fontSize: 11.5, fontWeight: 600, padding: '3px 12px', borderRadius: 999,
-                cursor: 'pointer', whiteSpace: 'nowrap' as const,
+                cursor: clickable ? 'pointer' : 'default', whiteSpace: 'nowrap' as const,
                 border: active ? '1px solid var(--c-accent)' : '1px solid var(--c-line)',
                 background: active ? 'rgba(155,123,51,0.08)' : 'var(--c-bg)',
                 color: active ? 'var(--c-accent)' : 'var(--c-fg)',
               });
+              // "All" only means something when more than one supplier priced.
+              const filterable = rated.length > 1;
               return (
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
                   <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', minWidth: 52 }}>Supplier</span>
-                  <button onClick={() => { setSupplierFocus(null); syncUrl({ supplier: null }); }} style={supPill(!supplierFocus)}>All</button>
-                  {sups.map(s => (
-                    <button key={s} onClick={() => { setSupplierFocus(s); syncUrl({ supplier: s }); }} style={supPill(supplierFocus === s)}>{cap(s)}</button>
+                  {filterable && (
+                    <button onClick={() => { setSupplierFocus(null); syncUrl({ supplier: null }); }} style={supPill(!supplierFocus, true)}>All</button>
+                  )}
+                  {rated.map(k => {
+                    const n = rates.filter(r => (r.supplier || '').toLowerCase() === k).length;
+                    return filterable ? (
+                      <button
+                        key={k}
+                        onClick={() => { setSupplierFocus(k); syncUrl({ supplier: k }); }}
+                        style={supPill(supplierFocus === k, true)}
+                        title={`${n} rate${n === 1 ? '' : 's'} from ${labelOf(k)}`}
+                      >{labelOf(k)}</button>
+                    ) : (
+                      <span key={k} style={supPill(true, false)} title={`All ${n} rate${n === 1 ? '' : 's'} shown are from ${labelOf(k)}`}>
+                        {labelOf(k)} · all {n} rate{n === 1 ? '' : 's'}
+                      </span>
+                    );
+                  })}
+                  {silent.map(k => (
+                    <span
+                      key={k}
+                      style={{
+                        fontSize: 11.5, fontWeight: 600, padding: '3px 12px', borderRadius: 999,
+                        whiteSpace: 'nowrap', border: '1px dashed var(--c-line)',
+                        background: 'var(--c-bg)', color: 'var(--c-fg-soft)',
+                      }}
+                      title={`${labelOf(k)} carries this property but returned no rates for these dates`}
+                    >{labelOf(k)} · no rates</span>
                   ))}
                 </div>
               );
@@ -4757,11 +4804,10 @@ function RoomGroupedRates({
                               style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 999, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#b91c1c', background: 'rgba(185,28,28,0.1)', border: '1px solid rgba(185,28,28,0.3)' }}
                             >Blocked</span>
                           )}
-                          {/* Member/Non-Member is a RateHawk pool distinction
-                              (cug vs public b2c). Hummingbird has no such split,
-                              so the badge is noise there — show it only for
-                              suppliers where the channel is meaningful. */}
-                          {r._channel && (r.supplier || '').toLowerCase() !== 'hummingbird' && (() => {
+                          {/* Member/Non-Member is a RateHawk pool distinction —
+                              see hasChannelSplit. Noise on any supplier that
+                              quotes a single price. */}
+                          {r._channel && hasChannelSplit(r.supplier) && (() => {
                             // "All" when the member (cug) sell == the non-member
                             // (b2c) sell for this plan → no member advantage, so we
                             // only keep "Member" green when it's genuinely cheaper.
