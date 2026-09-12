@@ -78,6 +78,36 @@ export default function ConsoleRulesPage() {
     return b;
   }, [rules]);
 
+  /**
+   * Hotel rules, one row per HOTEL rather than one per rule.
+   *
+   * Saving a markup INSERTs a new row instead of updating the old one, so a
+   * hotel edited three times has three active rules at the same priority and
+   * the list showed all of them with nothing to say which one bites. There are
+   * currently ~30 active rules across 18 hotels, which is why a hotel is easy
+   * to lose in here.
+   *
+   * The engine resolves ties by priority DESC, updated_at DESC, id DESC
+   * (pricingService getActiveRules). The console has no updated_at, so highest
+   * id at equal priority is the proxy — and it agrees with the engine's final
+   * tiebreak, so the winner shown is the winner applied.
+   */
+  const hotelGroups = useMemo(() => {
+    const byHotel = new Map<string, ConsoleRule[]>();
+    for (const r of grouped.hotel) {
+      const c = r.conditions || {};
+      const key = String(c.hotel_id ?? c.hotel_code ?? c.hotel_name ?? `rule-${r.id}`);
+      if (!byHotel.has(key)) byHotel.set(key, []);
+      byHotel.get(key)!.push(r);
+    }
+    return [...byHotel.entries()]
+      .map(([key, rs]) => {
+        const ordered = rs.slice().sort((a, b) => b.priority - a.priority || b.id - a.id);
+        return { key, winner: ordered[0], superseded: ordered.slice(1) };
+      })
+      .sort((a, b) => (a.winner.conditions?.hotel_name || '').localeCompare(b.winner.conditions?.hotel_name || ''));
+  }, [grouped]);
+
   return (
     <>
       <div className="c-page-head">
@@ -116,7 +146,11 @@ export default function ConsoleRulesPage() {
                 <div style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>{t.blurb}</div>
                 <div style={{ fontSize: 11, marginTop: 4 }}>
                   <span className={`c-pill ${grouped[t.key].length ? 'c-pill-success' : 'c-pill-muted'}`}>
-                    {grouped[t.key].length} rule{grouped[t.key].length === 1 ? '' : 's'}
+                    {t.key === 'hotel'
+                      // Hotels, not rules — the rule count is inflated by the
+                      // duplicates and is not the number anyone is looking for.
+                      ? `${hotelGroups.length} hotel${hotelGroups.length === 1 ? '' : 's'}`
+                      : `${grouped[t.key].length} rule${grouped[t.key].length === 1 ? '' : 's'}`}
                   </span>
                 </div>
               </div>
@@ -163,12 +197,26 @@ export default function ConsoleRulesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {grouped[t.key].map((r) => (
+                  {(t.key === 'hotel'
+                    ? hotelGroups.map((g) => ({ ...g.winner, __superseded: g.superseded }))
+                    : grouped[t.key].map((r) => ({ ...r, __superseded: [] as ConsoleRule[] }))
+                  ).map((r) => (
                     <tr key={r.id}>
                       <td className="c-mono">{r.id}</td>
                       <td>
                         <div style={{ fontWeight: 500 }}>{r.name || '—'}</div>
                         <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>{conditionSummary(r.conditions)}</div>
+                        {r.__superseded.length > 0 && (
+                          <div
+                            title={`Saving a markup adds a rule rather than replacing it. Superseded: ${r.__superseded
+                              .map((s) => `#${s.id} ${markupLabel(s)}`).join(', ')}. The engine applies #${r.id} — delete the rest to tidy up.`}
+                            style={{ marginTop: 3, display: 'inline-block', fontSize: 10.5, fontWeight: 700, padding: '1px 6px',
+                                     borderRadius: 999, cursor: 'help', color: '#92600a',
+                                     background: 'rgba(245,177,66,0.18)', border: '1px solid rgba(245,177,66,0.45)' }}
+                          >
+                            +{r.__superseded.length} older rule{r.__superseded.length === 1 ? '' : 's'} ignored
+                          </div>
+                        )}
                       </td>
                       <td className="c-mono">{markupLabel(r)}</td>
                       <td className="c-mono">{r.priority}</td>
