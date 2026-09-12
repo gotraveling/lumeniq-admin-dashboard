@@ -2302,6 +2302,10 @@ function fmtMoney(n?: number) {
   if (n === undefined || n === null || isNaN(n)) return '—';
   return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
+function fmtMoneyWithCode(n?: number, currency = 'USD') {
+  const amount = fmtMoney(n);
+  return amount === '—' ? amount : `${amount} ${currency || 'USD'}`;
+}
 
 // Composite rate scorer — Valentin's recommendation (2026-05-28) is
 // "don't optimize only for lowest price; surface 3–5 rates with
@@ -3929,18 +3933,18 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
             ) : (
               <>
                 <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
-                  {fmtMoney(best.sellNightly)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> / nt</span>
+                  {fmtMoney(best.sellNightly)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> {best.currency || 'USD'} / nt</span>
                 </div>
                 {best.sellTotal != null && best.sellTotal !== best.sellNightly && (
                   <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
-                    {fmtMoney(best.sellTotal)} total{best.currency ? ` ${best.currency}` : ''}
+                    {fmtMoneyWithCode(best.sellTotal, best.currency || 'USD')} total
                   </div>
                 )}
               </>
             )}
             {best.netNightly != null && (
               <div style={{ fontSize: 11, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
-                NET {fmtMoney(best.netNightly)}{best.markupPct != null ? ` · +${best.markupPct}%` : ''}
+                NET {fmtMoneyWithCode(best.netNightly, best.currency || 'USD')}{best.markupPct != null ? ` · +${best.markupPct}%` : ''}
               </div>
             )}
             <div style={{ fontSize: 11, color: 'var(--c-accent)', fontWeight: 600, marginTop: 4 }}>Open →</div>
@@ -4916,7 +4920,7 @@ function RoomGroupedRates({
                             const netTot = r.pricing.net?.totalAmount ?? (gross > 0 ? gross - disc : undefined);
                             const savedLabel = disc > 0
                               ? (fx
-                                  ? `saved A$${fmtMoney(disc * fx)}`
+                                  ? `saved ${fmtMoneyWithCode(disc * fx, 'AUD')}`
                                   : `saved ${cur} ${fmtMoney(disc)}`)
                               : '';
                             const offer = r.offers?.[0];
@@ -5051,7 +5055,7 @@ function RoomGroupedRates({
                         </td>
                         <td style={tdStyle}>
                           <span style={{ fontFamily: 'var(--c-mono)', color: 'var(--c-fg-soft)' }}>
-                            {fmtMoney(r.pricing.markup?.amount)} ({r.pricing.markup?.value ?? 0}%)
+                            {fmtMoneyWithCode(r.pricing.markup?.amount, r.pricing.currency || 'USD')} ({r.pricing.markup?.value ?? 0}%)
                           </span>
                         </td>
                         <td style={tdStyle}>
@@ -5126,7 +5130,7 @@ function RoomGroupedRates({
                               const cheaper = diff > 0;
                               return (
                                 <div style={{ fontSize: 10.5, fontWeight: 600, marginTop: 2, color: cheaper ? 'var(--c-success)' : 'var(--c-danger)' }}>
-                                  {cheaper ? '−' : '+'}{fmtMoney(Math.abs(diff))} vs non-member
+                                  {cheaper ? '−' : '+'}{fmtMoneyWithCode(Math.abs(diff), r.pricing.currency || 'USD')} vs non-member
                                 </div>
                               );
                             })()}
@@ -5415,7 +5419,7 @@ function BookingSidebar(props: {
               );
             })()}
             <div style={{ marginTop: 6, fontSize: 11, color: 'var(--c-fg-muted)', display: 'flex', justifyContent: 'space-between' }}>
-              <span>Net {fmtMoney(r.pricing.net?.totalAmount)} · +Markup {fmtMoney(r.pricing.markup?.amount)} ({r.pricing.markup?.value ?? 0}%)</span>
+              <span>Net {fmtMoneyWithCode(r.pricing.net?.totalAmount, r.pricing.currency || 'USD')} · +Markup {fmtMoneyWithCode(r.pricing.markup?.amount, r.pricing.currency || 'USD')} ({r.pricing.markup?.value ?? 0}%)</span>
               <span>{totalAdults} adult{totalAdults !== 1 ? 's' : ''}{totalChildren ? ` · ${totalChildren} child${totalChildren !== 1 ? 'ren' : ''}` : ''}</span>
             </div>
           </div>
