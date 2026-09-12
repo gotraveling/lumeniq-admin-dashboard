@@ -98,6 +98,18 @@ type Quote = {
   netNightly?: number;
   markupPct?: number;
   markupAmount?: number;
+  // Which pricing rule the engine actually applied. Read this instead of
+  // inferring the source from hotel_control.markup_override_pct — that is a
+  // different table and the two can disagree, which is what made Patina look
+  // like "the markup didn't save".
+  markupRuleId?: number | null;
+  markupRuleName?: string | null;
+  // On a merged property the winning rule can be written against a DIFFERENT
+  // supplier hotel_id than the rate came from. Both are shown so that is
+  // legible rather than mysterious.
+  markupRuleHotelId?: number | null;
+  markupMatchedHotelId?: number | null;
+  markupViaCanonical?: boolean;
   currency?: string;
   ratePlan?: string;
   refundable?: boolean | null;
@@ -825,6 +837,11 @@ export default function ConsoleSearchPage() {
             netNightly:              net?.nightlyAmount,
             markupPct:               q.cheapestRate?.pricing?.markup?.value,
             markupAmount:            q.cheapestRate?.pricing?.markup?.amount,
+            markupRuleId:            q.cheapestRate?.pricing?.markup?.ruleId ?? null,
+            markupRuleName:          q.cheapestRate?.pricing?.markup?.ruleName ?? null,
+            markupRuleHotelId:       q.cheapestRate?.pricing?.markup?.ruleHotelId ?? null,
+            markupMatchedHotelId:    q.cheapestRate?.pricing?.markup?.matchedHotelId ?? null,
+            markupViaCanonical:      !!q.cheapestRate?.pricing?.markup?.viaCanonical,
             currency:                sell?.currency,
             ratePlan:                q.cheapestRate?.ratePlan,
             refundable:              q.cheapestRate?.refundable,
@@ -866,6 +883,11 @@ export default function ConsoleSearchPage() {
           netNightly:              net?.nightlyAmount,
           markupPct:               r.cheapestRate?.pricing?.markup?.value,
           markupAmount:            r.cheapestRate?.pricing?.markup?.amount,
+          markupRuleId:            r.cheapestRate?.pricing?.markup?.ruleId ?? null,
+          markupRuleName:          r.cheapestRate?.pricing?.markup?.ruleName ?? null,
+          markupRuleHotelId:       r.cheapestRate?.pricing?.markup?.ruleHotelId ?? null,
+          markupMatchedHotelId:    r.cheapestRate?.pricing?.markup?.matchedHotelId ?? null,
+          markupViaCanonical:      !!r.cheapestRate?.pricing?.markup?.viaCanonical,
           currency:                sell?.currency,
           ratePlan:                r.cheapestRate?.ratePlan,
           refundable:              r.cheapestRate?.refundable,
@@ -899,6 +921,11 @@ export default function ConsoleSearchPage() {
             netNightly:              net?.nightlyAmount,
             netTotal:                net?.totalAmount,
             markupPct:               r.cheapestRate?.pricing?.markup?.value,
+            markupRuleId:            r.cheapestRate?.pricing?.markup?.ruleId ?? null,
+            markupRuleName:          r.cheapestRate?.pricing?.markup?.ruleName ?? null,
+            markupRuleHotelId:       r.cheapestRate?.pricing?.markup?.ruleHotelId ?? null,
+            markupMatchedHotelId:    r.cheapestRate?.pricing?.markup?.matchedHotelId ?? null,
+            markupViaCanonical:      !!r.cheapestRate?.pricing?.markup?.viaCanonical,
             currency:                sell?.currency,
             roomTypeName:            r.cheapestRate?.roomTypeName,
             ratePlan:                r.cheapestRate?.ratePlan,
@@ -2943,33 +2970,42 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
     };
   }
 
-  // Persist a per-hotel pricing rule so the markup actually changes the sell
-  // price. Best-effort: if the proxy rejects, surface a note but still let
-  // the control save succeed.
+  // Persist the property's markup so it actually changes the sell price.
+  //
+  // This PUTs the per-property upsert rather than POSTing a new pricing rule.
+  // The old POST created a row per save and keyed it to the surface hotel_id,
+  // which produced two failures that cost real margin: a hotel carried by two
+  // suppliers kept a separate markup per supplier id (Patina sold at 10% under
+  // its Hummingbird id while three 35% rules sat on its RateHawk id), and
+  // repeat saves stacked 3-4 active rules where only the newest counted.
+  //
+  // The engine resolves the canonical sibling set behind this endpoint, so one
+  // save covers every supplier id of the property and retires the duplicates.
+  // Best-effort: if it rejects, surface a note but still let the control save.
   async function writePricingRule(pct: number): Promise<string | null> {
     try {
-      const res = await fetch('/api/pricing/rules', {
-        method: 'POST',
+      const res = await fetch(`/api/pricing/markup?hotelId=${hotelId}`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        // Console pricing-rule shape (pricingRulesMap.toBackend maps it to the
-        // booking-engine model). hotel_id condition → per-hotel rule; high
-        // priority so it wins the cascade over destination/global rules.
         body: JSON.stringify({
-          name: `Hotel ${hotelId} override`,
-          markup_type: 'percentage',
-          markup_value: pct,
-          priority: 100,
-          is_active: true,
-          conditions: { hotel_id: hotelId, hotel_name: hotelName || undefined },
+          markup_percentage: pct,
+          hotel_name: hotelName || undefined,
         }),
       });
+      const j = await res.json().catch(() => null);
       if (!res.ok) {
-        const j = await res.json().catch(() => null);
         return `rule write skipped — ${j?.message || j?.error || `HTTP ${res.status}`}`;
       }
-      return null;
+      // Tell the consultant when the save reached more than the id on screen,
+      // so a merged property doesn't look like it saved the wrong thing.
+      const ids: number[] = j?.data?.hotelIds || [];
+      const retired: number[] = j?.data?.retired || [];
+      const parts: string[] = [];
+      if (ids.length > 1) parts.push(`applied to all ${ids.length} supplier ids`);
+      if (retired.length) parts.push(`retired ${retired.length} duplicate rule${retired.length > 1 ? 's' : ''}`);
+      return parts.length ? `${pct}% saved — ${parts.join(', ')}.` : null;
     } catch (e: any) {
-      return `rule write skipped — ${e?.message || 'wire pricing POST'}`;
+      return `rule write skipped — ${e?.message || 'wire pricing PUT'}`;
     }
   }
 
@@ -3390,7 +3426,15 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
 
           {/* Footer: errors + save */}
           {saveErr && <div style={{ fontSize: 13, color: 'var(--c-danger)' }}>Error: {saveErr}</div>}
-          {ruleNote && <div style={{ fontSize: 12.5, color: 'var(--c-warning, #b45309)' }}><AlertTriangle size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />{ruleNote}</div>}
+          {/* ruleNote carries either a failure ("rule write skipped — …") or a
+              confirmation of what the save actually covered (a merged property
+              spans several supplier ids). Only the failure gets the warning
+              treatment. */}
+          {ruleNote && (
+            ruleNote.startsWith('rule write skipped')
+              ? <div style={{ fontSize: 12.5, color: 'var(--c-warning, #b45309)' }}><AlertTriangle size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />{ruleNote}</div>
+              : <div style={{ fontSize: 12.5, color: 'var(--c-fg-muted)' }}>{ruleNote}</div>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <button className="c-btn c-btn-primary" onClick={() => void save()} disabled={saving || !dirty}>
               {saving ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
@@ -3780,7 +3824,16 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
                 // (control.markup_override_pct set) takes priority over the
                 // global rule — surface it so the consultant knows where to
                 // change it, instead of a generic "hotel override or global" note.
-                const hasMarkupOverride = control?.markup_override_pct != null && String(control.markup_override_pct).trim() !== '';
+                // Name the rule the ENGINE applied. This used to be inferred
+                // from control.markup_override_pct — a different table — so the
+                // popover could say "hotel override" while the engine was
+                // actually applying the global rule, or a rule written against
+                // the property's OTHER supplier id. That inference is exactly
+                // why Patina's markup looked unsaveable.
+                const markupSource = best.markupRuleId != null
+                  ? `rule ${best.markupRuleId}${best.markupRuleName ? ` · ${best.markupRuleName}` : ''}`
+                  : (control?.markup_override_pct != null && String(control.markup_override_pct).trim() !== ''
+                      ? 'hotel override' : 'global rule');
                 // Selection context: what this "From" was chosen over. Computed from
                 // all quotes the card already holds — cheapest wins, runner-up is the
                 // next-cheapest across suppliers (neutral wording, not a contest).
@@ -3818,7 +3871,11 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
                 if (best.rateKey) rows.push(['Rate key', best.rateKey]);
                 if (best.netNightly != null) rows.push(['NET (supplier cost)', `${fmtMoney(best.netNightly)} USD`]);
                 if (best.markupPct != null && best.sellNightly != null)
-                  rows.push([`+ ${best.markupPct}% markup (${hasMarkupOverride ? 'hotel override' : 'global rule'}) → sell`, `${fmtMoney(best.sellNightly)} USD`]);
+                  rows.push([`+ ${best.markupPct}% markup (${markupSource}) → sell`, `${fmtMoney(best.sellNightly)} USD`]);
+                // A merged property has one hotel_id per supplier; say so when
+                // the winning rule lives on a different one than this rate.
+                if (best.markupViaCanonical && best.markupRuleHotelId != null)
+                  rows.push(['Markup set on', `hotel ${best.markupRuleHotelId} (same property, other supplier) — this rate is hotel ${best.markupMatchedHotelId}`]);
                 if (best.fxRate != null && best.sellNightlyAud != null)
                   rows.push([`× FX ${best.fxRate} (USD→AUD)`, `${fmtMoney(best.sellNightlyAud)} AUD / nt`]);
                 if (best.sellTotalAud != null)

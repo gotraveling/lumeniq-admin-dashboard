@@ -3,7 +3,10 @@
 //
 // The engine matches a hotel against rule.hotel_filter on these keys (ALL must
 // match), then applies the SINGLE highest-`priority` matching rule:
-//     country, city, star_rating (minimum), supplier, hotel_id, hotel_code
+//     country, city, star_rating (minimum), supplier, hotel_id, hotel_code, canonical_id
+// hotel_id matches against EVERY supplier hotel_id of the same canonical
+// property, not just the one the rule names — a hotel carried by two suppliers
+// has one id per supplier and the rule may have been written against either.
 // markup: rule_type ('percentage'|'fixed_amount') + markup_percentage|markup_fixed_amount.
 // (min_rate/max_rate/date_range columns exist but are NOT used by the matcher.)
 
@@ -11,6 +14,9 @@ export const TENANT = 'default';
 
 export type RuleConditions = {
   hotel_id?: number;
+  // The merged property this rule was written for. Stored alongside hotel_id
+  // so the rule's intent survives even if the surface id changes supplier.
+  canonical_id?: number;
   hotel_code?: string;
   hotel_name?: string; // display-only; matcher ignores it
   country?: string;
@@ -53,6 +59,7 @@ export function toConsole(be: any): ConsoleRule {
     is_active: be.is_active !== false,
     conditions: {
       hotel_id: hf.hotel_id != null ? Number(hf.hotel_id) : undefined,
+      canonical_id: hf.canonical_id != null ? Number(hf.canonical_id) : undefined,
       hotel_code: hf.hotel_code,
       hotel_name: hf.hotel_name,
       country: hf.country,
@@ -67,6 +74,7 @@ export function toBackend(input: Partial<ConsoleRule>) {
   const c = input.conditions || {};
   const hotel_filter: Record<string, any> = {};
   if (c.hotel_id != null && `${c.hotel_id}` !== '') hotel_filter.hotel_id = Number(c.hotel_id);
+  if (c.canonical_id != null && `${c.canonical_id}` !== '') hotel_filter.canonical_id = Number(c.canonical_id);
   if (c.hotel_code) hotel_filter.hotel_code = String(c.hotel_code).trim();
   if (c.hotel_name) hotel_filter.hotel_name = String(c.hotel_name).trim();
   if (c.country) hotel_filter.country = String(c.country).trim().toUpperCase();
@@ -97,8 +105,29 @@ function autoName(c: RuleConditions, tier: Tier): string {
 }
 
 // Same logic the engine uses — for the console's "which rule wins?" preview.
-export function matchesHotel(c: RuleConditions, h: { hotel_id?: number; country?: string; city?: string; star_rating?: number; supplier?: string }): boolean {
-  if (c.hotel_id != null && Number(h.hotel_id) !== Number(c.hotel_id)) return false;
+// Mirrors pricingService.hotelMatchesFilter; keep the two in step.
+export function matchesHotel(
+  c: RuleConditions,
+  h: {
+    hotel_id?: number;
+    canonical_id?: number;
+    // Every supplier hotel_id of this property. A rule naming any one of them
+    // governs all of them.
+    canonical_hotel_ids?: number[];
+    country?: string;
+    city?: string;
+    star_rating?: number;
+    supplier?: string;
+  }
+): boolean {
+  const propertyIds = new Set<number>(
+    [h.hotel_id, ...(h.canonical_hotel_ids || [])].map(Number).filter(n => Number.isFinite(n))
+  );
+  // canonical_id is enforced only when both sides carry one, so an unresolved
+  // hotel can't silently lose its markup and fall through to the global rule.
+  if (c.canonical_id != null && h.canonical_id != null
+      && Number(c.canonical_id) !== Number(h.canonical_id)) return false;
+  if (c.hotel_id != null && !propertyIds.has(Number(c.hotel_id))) return false;
   if (c.country && (h.country || '').toUpperCase() !== c.country.toUpperCase()) return false;
   if (c.city && (h.city || '').toLowerCase() !== c.city.toLowerCase()) return false;
   if (c.star_rating && Number(h.star_rating || 0) < Number(c.star_rating)) return false;
