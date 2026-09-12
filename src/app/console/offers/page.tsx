@@ -344,11 +344,6 @@ export default function OffersPage() {
         </p>
       </div>
 
-      <BestMonths dest={dest} setDest={setDest} hotels={hotels} searching={searching}
-        onFind={() => void searchHotels()} selectedIds={selectedIds} />
-
-      <OfferWatchlistPanel />
-
       {/* New report */}
       <div className="c-card" style={{ padding: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>New report</div>
@@ -461,6 +456,10 @@ export default function OffersPage() {
           </button>
         )}
       </div>
+
+      <BestMonths hotels={hotels} selectedIds={selectedIds} />
+
+      <OfferWatchlistPanel />
 
       {/* Saved reports */}
       <div className="c-card" style={{ padding: 16 }}>
@@ -877,15 +876,13 @@ const monthLabel = (ym: string) => {
  * "save $14,780 by travelling June" is defensible in a way that a supplier's
  * own rack-rate "discount" is not.
  */
-function BestMonths({ dest, setDest, hotels, searching, onFind, selectedIds }: {
-  dest: string; setDest: (v: string) => void; hotels: Hotel[]; searching: boolean;
-  onFind: () => void; selectedIds: Set<number>;
-}) {
+function BestMonths({ hotels, selectedIds }: { hotels: Hotel[]; selectedIds: Set<number> }) {
   const [los, setLos] = useState(7);
   const [data, setData] = useState<Record<string, MonthResult> | null>(null);
   const [missing, setMissing] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const selectedCount = hotels.filter((h) => selectedIds.has(h.id)).length;
 
   const nameOf = useMemo(() => {
     const m = new Map<number, string>();
@@ -895,7 +892,7 @@ function BestMonths({ dest, setDest, hotels, searching, onFind, selectedIds }: {
 
   const load = useCallback(async () => {
     const ids = hotels.filter((h) => selectedIds.has(h.id)).map((h) => h.id);
-    if (!ids.length) { setErr('Find hotels first, then load months.'); return; }
+    if (!ids.length) { setErr('Find and select hotels in New report first.'); return; }
     setBusy(true); setErr(null);
     try {
       const qs = new URLSearchParams({ hotelIds: ids.join(','), los: String(los), months: '14' });
@@ -907,6 +904,8 @@ function BestMonths({ dest, setDest, hotels, searching, onFind, selectedIds }: {
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
   }, [hotels, selectedIds, los]);
+
+  useEffect(() => { setData(null); setMissing([]); }, [hotels, selectedIds]);
 
   const rows = useMemo(() => {
     if (!data) return [];
@@ -935,20 +934,16 @@ function BestMonths({ dest, setDest, hotels, searching, onFind, selectedIds }: {
           <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginTop: 2 }}>
             {asAt
               ? `Prices as at ${asAt.toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} — refreshed overnight`
-              : 'Find hotels above, then load the months.'}
+              : selectedCount
+                ? `${selectedCount} selected hotel${selectedCount === 1 ? '' : 's'} — load cached months when ready.`
+                : 'Use the hotel picker above, then load cached months.'}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <input className="c-input" placeholder="Destination (e.g. Maldives)" value={dest}
-            onChange={(e) => setDest(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') onFind(); }} style={{ minWidth: 200 }} />
-          <button className="c-btn" onClick={onFind} disabled={searching}>
-            {searching ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
-          </button>
           <select className="c-select" value={los} onChange={(e) => { setLos(Number(e.target.value)); setData(null); }}>
             {[3, 4, 5, 7, 10].map((n) => <option key={n} value={n}>{n} nights</option>)}
           </select>
-          <button className="c-btn c-btn-primary" onClick={() => void load()} disabled={busy || !hotels.length}>
+          <button className="c-btn c-btn-primary" onClick={() => void load()} disabled={busy || !selectedCount}>
             {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Load months
           </button>
         </div>
