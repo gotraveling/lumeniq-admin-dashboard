@@ -346,7 +346,12 @@ export default function OffersPage() {
 
       {/* New report */}
       <div className="c-card" style={{ padding: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>New report</div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>New live report</div>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginTop: 2 }}>
+            Runs supplier queries now and saves a dated snapshot. Generate it again when you need fresh live data.
+          </div>
+        </div>
 
         {/* Destination → hotels */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
@@ -378,10 +383,23 @@ export default function OffersPage() {
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 200, overflowY: 'auto', padding: 2 }}>
               {hotels.map((h) => {
                 const on = selectedIds.has(h.id);
+                const meta = [h.city, h.country, `#${h.id}`].filter(Boolean).join(' · ');
                 return (
-                  <button key={h.id} onClick={() => toggleHotel(h.id)} title={[h.city, h.country].filter(Boolean).join(', ')}
-                    style={{ ...pill(on), maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>
-                    {on ? '✓ ' : ''}{h.name}
+                  <button key={h.id} onClick={() => toggleHotel(h.id)} title={meta}
+                    style={{
+                      ...pill(on),
+                      maxWidth: 340,
+                      display: 'grid',
+                      gap: 2,
+                      textAlign: 'left',
+                      lineHeight: 1.2,
+                    }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {on ? '✓ ' : ''}{h.name}
+                    </span>
+                    <span style={{ fontSize: 10.5, fontWeight: 500, color: 'var(--c-fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {meta}
+                    </span>
                   </button>
                 );
               })}
@@ -464,7 +482,12 @@ export default function OffersPage() {
       {/* Saved reports */}
       <div className="c-card" style={{ padding: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>Saved reports</div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>Saved reports</div>
+            <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginTop: 2 }}>
+              Snapshots from the time they were generated. Re-run a live report above to refresh prices/offers.
+            </div>
+          </div>
           <button className="c-btn" onClick={() => void loadList()} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12 }}>
             <RefreshCw size={12} /> Refresh
           </button>
