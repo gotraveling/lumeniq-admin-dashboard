@@ -58,7 +58,7 @@ interface OfferReportMeta {
   id: number; name: string; region: string | null; rowCount: number; offerCount: number; createdAt: string;
 }
 interface OfferReportRow {
-  hotelId: string; hotelName: string;
+  hotelId: string; hotelName: string; region?: string | null;
   checkIn: string; nights: number;
   promoName: string | null; discountPct: number | null;
   netTotal: number | null; sellTotal: number | null; currency: string | null;
@@ -67,6 +67,21 @@ interface OfferReportRow {
 }
 interface OfferReport extends OfferReportMeta {
   rows: OfferReportRow[];
+}
+interface AdminRate {
+  pricing?: {
+    net?: { aud?: { totalAmount?: number }; totalAmount?: number };
+    aud?: { totalAmount?: number };
+    sell?: { totalAmount?: number };
+    currency?: string;
+  };
+  grossTotal?: number;
+  discountAmount?: number;
+  offers?: { name?: string | null }[];
+  ratePlan?: string | null;
+  transfer?: string | null;
+  refundable?: boolean | null;
+  supplier?: string | null;
 }
 
 const BLANK: CollectionFull = {
@@ -121,6 +136,56 @@ function packageFromOfferRow(row: OfferReportRow): CollectionPackage {
     ourOffer: price,
     basis: [monthLabel(row.checkIn), row.supplier].filter(Boolean).join(' · '),
   };
+}
+
+function nextMonths(n = 6) {
+  const out: { key: string; checkIn: string }[] = [];
+  const now = new Date();
+  for (let i = 0; i < n; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 15);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    out.push({ key, checkIn: `${key}-15` });
+  }
+  return out;
+}
+
+function addNights(iso: string, nights: number) {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + nights);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function boardOf(ratePlan?: string | null) {
+  return String(ratePlan || '').split('·')[0].trim() || null;
+}
+
+function stayLengthsFor(collection: CollectionFull) {
+  const stays = [collection.campaignPackageNights, collection.campaignMinStay, 3, 4]
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return [...new Set(stays)].slice(0, 4);
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function fetchRatesRetry(hotelId: number, qs: string, maxTries = 4): Promise<{ rates: AdminRate[]; throttled: boolean }> {
+  let throttled = false;
+  for (let attempt = 0; attempt < maxTries; attempt++) {
+    try {
+      const res = await fetch(`/api/admin/search/rates/${hotelId}?${qs}`);
+      const json = await res.json().catch(() => ({}));
+      const limited = res.status === 429 || json?.error === 'rate_limit' || json?.error === 'endpoint_exceeded_limit';
+      if (limited) {
+        throttled = true;
+        await sleep(1500 * Math.pow(2, attempt) + Math.random() * 1000);
+        continue;
+      }
+      return { rates: json?.data?.rates || [], throttled };
+    } catch {
+      await sleep(1000 * (attempt + 1));
+    }
+  }
+  return { rates: [], throttled };
 }
 
 export default function CollectionsPage() {
@@ -305,6 +370,7 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
   const [reports, setReports] = useState<OfferReportMeta[]>([]);
   const [reportId, setReportId] = useState('');
   const [applyingReport, setApplyingReport] = useState(false);
+  const [runningOffers, setRunningOffers] = useState<{ done: number; total: number } | null>(null);
   const [reportNotice, setReportNotice] = useState<string | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
   const set = (patch: Partial<CollectionFull>) => onChange({ ...value, ...patch });
@@ -321,20 +387,14 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
   const removePkg = (hi: number, pi: number) =>
     setHotel(hi, { packages: (value.hotels[hi].packages || []).filter((_, j) => j !== pi) });
   const addHotel = (h: CollectionHotel) => set({ hotels: [...value.hotels, h] });
-  const applyReport = async () => {
-    if (!reportId) return;
-    setApplyingReport(true); setReportNotice(null); setReportError(null);
-    try {
-      const res = await fetch(`/api/admin/search/offer-reports/${reportId}`, { cache: 'no-store' });
-      const report = await res.json() as OfferReport;
-      if (!res.ok) throw new Error((report as { error?: string }).error || `HTTP ${res.status}`);
-      const byHotel = new Map<string, OfferReportRow>();
-      for (const row of report.rows || []) {
-        if (!row.hotelId || row.sellTotal == null) continue;
-        byHotel.set(String(row.hotelId), betterOfferRow(byHotel.get(String(row.hotelId)), row)!);
-      }
-      let matched = 0;
-      const nextHotels = value.hotels.map((hotel, originalIndex) => {
+  const applyRows = (rows: OfferReportRow[], sourceName: string) => {
+    const byHotel = new Map<string, OfferReportRow>();
+    for (const row of rows || []) {
+      if (!row.hotelId || row.sellTotal == null) continue;
+      byHotel.set(String(row.hotelId), betterOfferRow(byHotel.get(String(row.hotelId)), row)!);
+    }
+    let matched = 0;
+    const nextHotels = value.hotels.map((hotel, originalIndex) => {
         const row = hotel.hotelId == null ? undefined : byHotel.get(String(hotel.hotelId));
         if (!row) return { hotel, originalIndex, row };
         matched += 1;
@@ -347,22 +407,107 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
             packages: [packageFromOfferRow(row), ...(hotel.packages || []).slice(1)],
           },
         };
-      }).sort((a, b) => {
-        const promote = promoteRankOf(b.hotel) - promoteRankOf(a.hotel);
-        if (promote !== 0) return promote;
-        const matchedDiff = Number(Boolean(b.row)) - Number(Boolean(a.row));
-        if (matchedDiff !== 0) return matchedDiff;
-        const marginDiff = marginOf(b.row) - marginOf(a.row);
-        if (marginDiff !== 0) return marginDiff;
-        return a.originalIndex - b.originalIndex;
-      }).map((x) => x.hotel);
+    }).sort((a, b) => {
+      const promote = promoteRankOf(b.hotel) - promoteRankOf(a.hotel);
+      if (promote !== 0) return promote;
+      const matchedDiff = Number(Boolean(b.row)) - Number(Boolean(a.row));
+      if (matchedDiff !== 0) return matchedDiff;
+      const marginDiff = marginOf(b.row) - marginOf(a.row);
+      if (marginDiff !== 0) return marginDiff;
+      return a.originalIndex - b.originalIndex;
+    }).map((x) => x.hotel);
 
-      set({ hotels: nextHotels });
-      setReportNotice(`Applied ${matched} hotel${matched === 1 ? '' : 's'} from "${report.name}". Save the collection to publish this order.`);
+    set({ hotels: nextHotels });
+    setReportNotice(`Applied ${matched} hotel${matched === 1 ? '' : 's'} from "${sourceName}". Use ↑/↓ for manual tweaks, then Save.`);
+  };
+  const applyReport = async () => {
+    if (!reportId) return;
+    setApplyingReport(true); setReportNotice(null); setReportError(null);
+    try {
+      const res = await fetch(`/api/admin/search/offer-reports/${reportId}`, { cache: 'no-store' });
+      const report = await res.json() as OfferReport;
+      if (!res.ok) throw new Error((report as { error?: string }).error || `HTTP ${res.status}`);
+      applyRows(report.rows || [], report.name);
     } catch (e) {
       setReportError(e instanceof Error ? e.message : 'Could not apply offer report.');
     } finally {
       setApplyingReport(false);
+    }
+  };
+  const runCollectionOffers = async () => {
+    const linked = value.hotels.filter((h) => Number.isFinite(Number(h.hotelId)));
+    if (!linked.length) {
+      setReportError('Add at least one linked hotel before running collection offers.');
+      return;
+    }
+    const months = nextMonths(6);
+    const stays = stayLengthsFor(value);
+    const total = linked.length * months.length * stays.length;
+    const rows: OfferReportRow[] = [];
+    setRunningOffers({ done: 0, total }); setReportNotice(null); setReportError(null);
+    try {
+      const guests = JSON.stringify([{ adults: 2, children: [] }]);
+      const combos = linked.flatMap((hotel) => months.flatMap((month) =>
+        stays.map((nights) => ({ hotel, checkIn: month.checkIn, nights }))
+      ));
+      let idx = 0;
+      async function worker(): Promise<void> {
+        const combo = combos[idx++];
+        if (!combo) return;
+        const checkOut = addNights(combo.checkIn, combo.nights);
+        const qs = new URLSearchParams({ checkIn: combo.checkIn, checkOut, guests, accountType: 'cug' });
+        const { rates } = await fetchRatesRetry(Number(combo.hotel.hotelId), qs.toString());
+        if (rates.length) {
+          const best = rates.reduce((a, b) => {
+            const sa = a?.pricing?.sell?.totalAmount ?? Infinity;
+            const sb = b?.pricing?.sell?.totalAmount ?? Infinity;
+            return sb < sa ? b : a;
+          });
+          const gross = Number(best.grossTotal) || 0;
+          const disc = Number(best.discountAmount) || 0;
+          rows.push({
+            hotelId: String(combo.hotel.hotelId),
+            hotelName: combo.hotel.name || `Hotel #${combo.hotel.hotelId}`,
+            region: value.searchDestination || combo.hotel.atoll || null,
+            checkIn: combo.checkIn,
+            nights: combo.nights,
+            promoName: best.offers?.[0]?.name ?? null,
+            discountPct: gross > 0 && disc > 0 ? Math.round((disc / gross) * 100) : 0,
+            netTotal: best.pricing?.net?.aud?.totalAmount ?? best.pricing?.net?.totalAmount ?? null,
+            sellTotal: best.pricing?.aud?.totalAmount ?? best.pricing?.sell?.totalAmount ?? null,
+            currency: best.pricing?.aud?.totalAmount ? 'AUD' : (best.pricing?.currency ?? null),
+            board: boardOf(best.ratePlan),
+            transfer: best.transfer ?? null,
+            refundable: typeof best.refundable === 'boolean' ? best.refundable : null,
+            supplier: best.supplier ?? null,
+          });
+        }
+        setRunningOffers((p) => p ? { ...p, done: p.done + 1 } : p);
+        return worker();
+      }
+      await Promise.all(Array.from({ length: Math.min(3, combos.length) }, () => worker()));
+      const name = `${value.title || value.slug || 'Collection'} · collection offers · ${months.length}mo · ${stays.join('/')}n`;
+      const res = await fetch('/api/admin/search/offer-reports', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          region: value.searchDestination || value.title || null,
+          params: { months: months.map((m) => m.key), stayLengths: stays, hotelIds: linked.map((h) => Number(h.hotelId)), adults: 2 },
+          rows,
+        }),
+      });
+      const saved = await res.json();
+      if (!res.ok) throw new Error(saved.error || `HTTP ${res.status}`);
+      applyRows(rows, name);
+      setReportId(saved.id ? String(saved.id) : '');
+      fetch('/api/admin/search/offer-reports', { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((j) => setReports(j.reports || []))
+        .catch(() => {});
+    } catch (e) {
+      setReportError(e instanceof Error ? e.message : 'Could not run collection offers.');
+    } finally {
+      setRunningOffers(null);
     }
   };
 
@@ -440,12 +585,15 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
           <div>
             <div className="c-label">Hotels ({value.hotels.length})</div>
             <div style={{ color: 'var(--c-fg-muted)', fontSize: 12, marginTop: 2 }}>
-              Apply an Offers report to rank by manual promote rank, then report margin. Matching hotels get public sell-price package text.
+              Run live offers for this collection to suggest an order. Tina can override with ↑/↓ before saving.
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button className="c-btn c-btn-primary" onClick={runCollectionOffers} disabled={!!runningOffers || applyingReport || value.hotels.length === 0}>
+              <RefreshCw size={13} /> {runningOffers ? `${runningOffers.done}/${runningOffers.total}` : 'Run collection offers'}
+            </button>
             <select className="c-select" value={reportId} onChange={(e) => setReportId(e.target.value)} style={{ minWidth: 280 }}>
-              <option value="">Choose offer report…</option>
+              <option value="">Apply saved report…</option>
               {reports.map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.name} · {r.offerCount} offers · {new Date(r.createdAt).toLocaleDateString('en-AU')}
@@ -453,7 +601,7 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
               ))}
             </select>
             <button className="c-btn" onClick={applyReport} disabled={!reportId || applyingReport || value.hotels.length === 0}>
-              <RefreshCw size={13} /> {applyingReport ? 'Applying…' : 'Apply report'}
+              {applyingReport ? 'Applying…' : 'Apply saved'}
             </button>
           </div>
         </div>
