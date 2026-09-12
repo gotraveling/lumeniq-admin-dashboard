@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Tag, Loader2, Search, Trash2, ArrowLeft, RefreshCw, Link as LinkIcon } from 'lucide-react';
+import { Tag, Loader2, Search, Trash2, ArrowLeft, RefreshCw, Link as LinkIcon, FolderOpen } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Hotel = { id: number; name: string; city?: string; country?: string };
@@ -26,12 +26,68 @@ type Row = {
   promoName: string | null; discountPct: number | null;
   netTotal: number | null; sellTotal: number | null; currency: string | null;
   board: string | null; transfer: string | null; refundable: boolean | null; supplier: string | null;
+  // From a discovery run. minNightsIsFloor travels with the number: it says the
+  // shortest stay probed WAS the answer, so the real minimum may be lower.
+  // Without it an observation reads as a contractual term, which is the mistake
+  // this whole feature exists to stop.
+  minNightsObserved?: number | null; minNightsIsFloor?: boolean | null;
+  packageSummary?: string | null; packageInclusions?: string | null;
+};
+type ReportParams = {
+  months?: string[];
+  stayLengths?: number[];
+  hotelIds?: number[];
+  adults?: number;
 };
 type ReportMeta = {
-  id: number; name: string; region: string | null; params: any;
+  id: number; name: string; region: string | null; params: ReportParams | null;
   rowCount: number; offerCount: number; createdBy: string | null; createdAt: string;
 };
 type Report = ReportMeta & { rows: Row[] };
+type AdminRate = {
+  pricing?: {
+    net?: { aud?: { totalAmount?: number }; totalAmount?: number };
+    aud?: { totalAmount?: number };
+    sell?: { totalAmount?: number };
+    currency?: string;
+  };
+  grossTotal?: number;
+  discountAmount?: number;
+  offers?: { name?: string | null }[];
+  ratePlan?: string | null;
+  transfer?: string | null;
+  refundable?: boolean | null;
+  supplier?: string | null;
+};
+type HotelHit = { id: number; name: string; city?: string; country?: string };
+type MonthlyRate = {
+  month: string;
+  checkIn: string;
+  nights: number;
+  fromTotal: number;
+  fromNightly: number | null;
+  supplierWasTotal: number | null;
+  currency: string | null;
+  supplier: string | null;
+  board: string | null;
+  transfer: string | null;
+  freeCancellation: boolean | null;
+  offerName: string | null;
+};
+type MonthlyHotel = {
+  months: MonthlyRate[];
+  bestMonth: string | null;
+  bestTotal: number | null;
+  swingPct: number | null;
+  dearestMonth: string | null;
+};
+type MonthlyScout = {
+  los: number | null;
+  occupancy: string;
+  channel: string;
+  results: Record<string, MonthlyHotel>;
+  missing?: number[];
+};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 // Next 12 months as { key: 'YYYY-MM', label, checkIn: 'YYYY-MM-15' }. A mid-month
@@ -58,6 +114,9 @@ function fmtMoney(n?: number | null) {
 function boardOf(ratePlan?: string) {
   return String(ratePlan || '').split('·')[0].trim() || null;
 }
+function messageOf(e: unknown, fallback: string) {
+  return e instanceof Error ? e.message : fallback;
+}
 
 // Run tasks with bounded concurrency, calling onTick after each completes.
 async function runPool<T>(items: T[], limit: number, worker: (item: T, i: number) => Promise<void>, onTick: () => void) {
@@ -79,7 +138,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // back off (exponential + jitter) and retry rather than dropping the combo, so
 // a big matrix never fails a hotel just because we queried too fast. Returns
 // { rates, throttled } — throttled=true if we hit a limit at all (for the UI).
-async function fetchRatesRetry(hotelId: number, qs: string, maxTries = 5): Promise<{ rates: any[]; throttled: boolean }> {
+async function fetchRatesRetry(hotelId: number, qs: string, maxTries = 5): Promise<{ rates: AdminRate[]; throttled: boolean }> {
   let throttled = false;
   for (let attempt = 0; attempt < maxTries; attempt++) {
     try {
@@ -134,7 +193,6 @@ export default function OffersPage() {
   useEffect(() => {
     const id = Number(new URLSearchParams(window.location.search).get('report'));
     if (id) void openReport(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadList() {
@@ -163,7 +221,7 @@ export default function OffersPage() {
         });
         const json = await res.json();
         if (!json.success) throw new Error(json.error || 'search failed');
-        const hits: any[] = json.data.hits || [];
+        const hits: HotelHit[] = json.data.hits || [];
         for (const h of hits) if (!seen.has(h.id)) { seen.add(h.id); all.push({ id: h.id, name: h.name, city: h.city, country: h.country }); }
         // Stop when the page is short (real end — estimatedTotalHits overshoots).
         if (hits.length < PAGE) break;
@@ -172,11 +230,16 @@ export default function OffersPage() {
       // Select all by default — the goal is completeness. The query count on the
       // Generate button shows the cost, and you can Clear to trim.
       setSelectedIds(new Set(all.map((h) => h.id)));
-    } catch (e: any) { setErr(e?.message || 'Hotel search failed'); } finally { setSearching(false); }
+    } catch (e: unknown) { setErr(messageOf(e, 'Hotel search failed')); } finally { setSearching(false); }
   }
 
   const selectedHotels = useMemo(() => hotels.filter((h) => selectedIds.has(h.id)), [hotels, selectedIds]);
-  const toggleHotel = (id: number) => setSelectedIds((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleHotel = (id: number) => setSelectedIds((s) => {
+    const n = new Set(s);
+    if (n.has(id)) n.delete(id);
+    else n.add(id);
+    return n;
+  });
 
   async function generate() {
     const chosenMonths = months.filter((m) => selMonths.includes(m.key));
@@ -218,7 +281,7 @@ export default function OffersPage() {
         netTotal: best.pricing?.net?.aud?.totalAmount ?? best.pricing?.net?.totalAmount ?? null,
         sellTotal: best.pricing?.aud?.totalAmount ?? best.pricing?.sell?.totalAmount ?? null,
         currency: best.pricing?.aud?.totalAmount ? 'AUD' : (best.pricing?.currency ?? null),
-        board: boardOf(best.ratePlan), transfer: best.transfer ?? null,
+        board: boardOf(best.ratePlan ?? undefined), transfer: best.transfer ?? null,
         refundable: typeof best.refundable === 'boolean' ? best.refundable : null,
         supplier: best.supplier ?? null,
       });
@@ -239,8 +302,8 @@ export default function OffersPage() {
       setGen(null);
       await loadList();
       if (json.id) void openReport(json.id);
-    } catch (e: any) {
-      setErr(e?.message || 'Save failed');
+    } catch (e: unknown) {
+      setErr(messageOf(e, 'Save failed'));
       setGen(null);
     }
   }
@@ -283,6 +346,8 @@ export default function OffersPage() {
 
       <BestMonths dest={dest} setDest={setDest} hotels={hotels} searching={searching}
         onFind={() => void searchHotels()} selectedIds={selectedIds} />
+
+      <OfferWatchlistPanel />
 
       {/* New report */}
       <div className="c-card" style={{ padding: 16 }}>
@@ -449,8 +514,41 @@ function ReportDetail({ report, onBack }: { report: Report | null; onBack: () =>
   const [minPct, setMinPct] = useState(0);
   const [onlyOffers, setOnlyOffers] = useState(true);
   const [q, setQ] = useState('');
-  const [sortKey, setSortKey] = useState<'discountPct' | 'sellTotal' | 'hotelName' | 'checkIn'>('discountPct');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [sortKey, setSortKey] = useState<'discountPct' | 'sellTotal' | 'hotelName' | 'checkIn' | 'perNight'>('perNight');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const reportStays = useMemo(() => {
+    const fromParams = Array.isArray(report?.params?.stayLengths) ? report?.params?.stayLengths : [];
+    const fromRows = report?.rows?.map((r) => r.nights) || [];
+    return [...new Set([...fromParams, ...fromRows].map(Number).filter((n) => Number.isFinite(n) && n > 0))]
+      .sort((a, b) => a - b);
+  }, [report]);
+  const [scoutLos, setScoutLos] = useState<number>(7);
+  const [scout, setScout] = useState<MonthlyScout | null>(null);
+  const [scoutBusy, setScoutBusy] = useState(false);
+
+  useEffect(() => {
+    if (reportStays.length && !reportStays.includes(scoutLos)) setScoutLos(reportStays[0]);
+  }, [reportStays, scoutLos]);
+
+  useEffect(() => {
+    const hotelIds = [...new Set((report?.rows || []).map((r) => Number(r.hotelId)).filter(Number.isFinite))];
+    if (!hotelIds.length || !scoutLos) { setScout(null); return; }
+    let cancelled = false;
+    setScoutBusy(true);
+    const qs = new URLSearchParams({
+      hotelIds: hotelIds.join(','),
+      los: String(scoutLos),
+      occupancy: '2c',
+      channel: 'b2c',
+      months: '12',
+    });
+    fetch(`/api/admin/search/rates-by-month?${qs.toString()}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled) setScout(j.success ? j : null); })
+      .catch(() => { if (!cancelled) setScout(null); })
+      .finally(() => { if (!cancelled) setScoutBusy(false); });
+    return () => { cancelled = true; };
+  }, [report, scoutLos]);
 
   const rows = useMemo(() => {
     if (!report) return [];
@@ -463,8 +561,12 @@ function ReportDetail({ report, onBack }: { report: Report | null; onBack: () =>
     }
     r.sort((a, b) => {
       const dir = sortDir === 'asc' ? 1 : -1;
-      const av = a[sortKey] ?? (typeof a[sortKey] === 'string' ? '' : 0);
-      const bv = b[sortKey] ?? (typeof b[sortKey] === 'string' ? '' : 0);
+      // perNight is derived, not a stored column — compute it to sort on.
+      const val = (row: Row) => sortKey === 'perNight'
+        ? (perNight(row) ?? Number.MAX_SAFE_INTEGER)
+        : (row[sortKey as keyof Row] ?? (typeof row[sortKey as keyof Row] === 'string' ? '' : 0));
+      const av = val(a) as string | number;
+      const bv = val(b) as string | number;
       if (av < bv) return -1 * dir;
       if (av > bv) return 1 * dir;
       return 0;
@@ -507,6 +609,15 @@ function ReportDetail({ report, onBack }: { report: Report | null; onBack: () =>
             <p className="c-page-sub">{report.offerCount} offers across {report.rowCount} queries · {report.region || '—'} · saved {new Date(report.createdAt).toLocaleString('en-AU')}</p>
           </div>
 
+          <MonthlyScoutPanel
+            report={report}
+            scout={scout}
+            busy={scoutBusy}
+            los={scoutLos}
+            stayOptions={reportStays.length ? reportStays : [3, 4, 5, 7]}
+            onLos={setScoutLos}
+          />
+
           {/* Filters */}
           <div className="c-card" style={{ padding: 12, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
             <input className="c-input" placeholder="Filter hotel / promo…" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 200 }} />
@@ -532,8 +643,12 @@ function ReportDetail({ report, onBack }: { report: Report | null; onBack: () =>
                   {th('Discount', 'discountPct', 'right')}
                   <th style={{ padding: '6px 8px', textAlign: 'right' }}>Net</th>
                   {th('Sell', 'sellTotal', 'right')}
+                  {/* The scouting column. Cheapest total is meaningless across
+                      different stay lengths; per-night is what ranks hotels. */}
+                  <th style={{ padding: '6px 8px', textAlign: 'right' }}>Sell / night</th>
                   <th style={{ padding: '6px 8px' }}>Board</th>
                   <th style={{ padding: '6px 8px' }}>Transfer</th>
+                  <th style={{ padding: '6px 8px' }}>Package line</th>
                 </tr>
               </thead>
               <tbody>
@@ -548,8 +663,41 @@ function ReportDetail({ report, onBack }: { report: Report | null; onBack: () =>
                     </td>
                     <td style={{ padding: '7px 8px', textAlign: 'right', color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>{fmtMoney(r.netTotal)}</td>
                     <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: 600, fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>{fmtMoney(r.sellTotal)} {r.currency}</td>
+                    <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: 700, fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>
+                      {perNight(r) != null ? fmtMoney(perNight(r)) : '—'}
+                    </td>
                     <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>{r.board || '—'}</td>
                     <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>{r.transfer || '—'}</td>
+                    <td style={{ padding: '7px 8px', maxWidth: 380 }}>
+                      {r.packageSummary ? (
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                          <div style={{ lineHeight: 1.35 }}>
+                            <div style={{ fontWeight: 600 }}>
+                              {r.packageSummary}
+                              {r.minNightsObserved != null && (
+                                <span
+                                  title={r.minNightsIsFloor
+                                    ? `Seen at ${r.minNightsObserved} nights, the shortest stay probed — the real minimum may be lower. Not a contractual term.`
+                                    : `Not seen below ${r.minNightsObserved} nights across the stays probed. An observation, not a contractual term.`}
+                                  style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, padding: '1px 5px', borderRadius: 999, cursor: 'help',
+                                           color: r.minNightsIsFloor ? 'var(--c-fg-muted)' : '#92600a',
+                                           background: r.minNightsIsFloor ? 'var(--c-bg-soft)' : 'rgba(245,177,66,0.18)' }}
+                                >min {r.minNightsObserved}n{r.minNightsIsFloor ? '?' : ''}</span>
+                              )}
+                            </div>
+                            {r.packageInclusions && (
+                              <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)' }}>{r.packageInclusions}</div>
+                            )}
+                          </div>
+                          <button className="c-btn" title="Copy both lines for the collection editor"
+                            style={{ padding: '2px 6px', flexShrink: 0 }}
+                            onClick={() => navigator.clipboard?.writeText(
+                              [r.packageSummary, r.packageInclusions].filter(Boolean).join('\n'))}>
+                            <LinkIcon size={11} />
+                          </button>
+                        </div>
+                      ) : <span style={{ color: 'var(--c-fg-muted)' }}>—</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -559,6 +707,125 @@ function ReportDetail({ report, onBack }: { report: Report | null; onBack: () =>
       )}
     </div>
   );
+}
+
+function MonthlyScoutPanel({
+  report, scout, busy, los, stayOptions, onLos,
+}: {
+  report: Report;
+  scout: MonthlyScout | null;
+  busy: boolean;
+  los: number;
+  stayOptions: number[];
+  onLos: (n: number) => void;
+}) {
+  const names = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of report.rows || []) if (r.hotelId && r.hotelName) m.set(String(r.hotelId), r.hotelName);
+    return m;
+  }, [report.rows]);
+
+  const rows = useMemo(() => {
+    const raw = Object.entries(scout?.results || {}).map(([hotelId, v]) => {
+      const best = (v.months || []).find((m) => m.month === v.bestMonth) || null;
+      return { hotelId, hotelName: names.get(String(hotelId)) || `Hotel #${hotelId}`, ...v, best };
+    });
+    return raw
+      .filter((r) => r.best && r.best.fromTotal > 0)
+      .sort((a, b) => (a.best?.fromTotal || Infinity) - (b.best?.fromTotal || Infinity))
+      .slice(0, 12);
+  }, [scout, names]);
+
+  const adLine = (r: { hotelName: string; best: MonthlyRate | null; swingPct: number | null }) => {
+    if (!r.best) return '';
+    const month = new Date(`${r.best.month}-15T00:00:00`).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
+    const price = `${fmtMoney(r.best.fromTotal)} ${r.best.currency || ''}`.trim();
+    const parts = [
+      `${r.hotelName}: ${r.best.nights} nights from ${price}`,
+      month,
+      r.best.board,
+      r.best.transfer,
+      r.best.offerName,
+      r.swingPct != null && r.swingPct > 0 ? `${r.swingPct}% cheaper than the priciest warmed month` : null,
+    ].filter(Boolean);
+    return parts.join(' · ');
+  };
+
+  return (
+    <div className="c-card" style={{ padding: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>Cheapest future windows</div>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginTop: 2 }}>
+            Cached prewarm prices, ranked by best month for advertising.
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          {stayOptions.map((n) => (
+            <button key={n} onClick={() => onLos(n)} style={pill(los === n)}>{n} nights</button>
+          ))}
+        </div>
+      </div>
+
+      {busy ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: 'var(--c-fg-muted)', fontSize: 12, marginTop: 10 }}>
+          <Loader2 size={13} className="animate-spin" /> Checking cached months…
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="c-empty" style={{ padding: '10px 0 0', fontSize: 12 }}>
+          No cached monthly prices for this report yet. Warm the collection or wait for the nightly prewarm.
+        </div>
+      ) : (
+        <div style={{ marginTop: 10, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', textTransform: 'uppercase', fontSize: 10.5, letterSpacing: 0.04, color: 'var(--c-fg-muted)' }}>
+                <th style={{ padding: '6px 8px' }}>Hotel</th>
+                <th style={{ padding: '6px 8px' }}>Best month</th>
+                <th style={{ padding: '6px 8px', textAlign: 'right' }}>From</th>
+                <th style={{ padding: '6px 8px', textAlign: 'right' }}>Swing</th>
+                <th style={{ padding: '6px 8px' }}>Supplier / inclusions</th>
+                <th style={{ padding: '6px 8px' }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.hotelId} style={{ borderTop: '1px solid var(--c-line-soft)' }}>
+                  <td style={{ padding: '7px 8px', fontWeight: 600 }}>{r.hotelName}</td>
+                  <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>{r.best ? fmtMonth(r.best.month) : '—'}</td>
+                  <td style={{ padding: '7px 8px', textAlign: 'right', fontFamily: 'var(--c-mono)', fontWeight: 700 }}>
+                    {r.best ? `${fmtMoney(r.best.fromTotal)} ${r.best.currency || ''}` : '—'}
+                  </td>
+                  <td style={{ padding: '7px 8px', textAlign: 'right', color: (r.swingPct || 0) > 0 ? 'var(--c-accent)' : 'var(--c-fg-muted)', fontWeight: 700 }}>
+                    {r.swingPct != null && r.swingPct > 0 ? `${r.swingPct}%` : '—'}
+                  </td>
+                  <td style={{ padding: '7px 8px', color: 'var(--c-fg-soft)' }}>
+                    {[r.best?.supplier, r.best?.board, r.best?.transfer, r.best?.offerName].filter(Boolean).join(' · ') || '—'}
+                  </td>
+                  <td style={{ padding: '7px 8px', textAlign: 'right' }}>
+                    <button className="c-btn" title="Copy advertising line" onClick={() => navigator.clipboard?.writeText(adLine(r))}>
+                      <LinkIcon size={11} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function fmtMonth(month: string) {
+  return new Date(`${month}-15T00:00:00`).toLocaleDateString('en-AU', { month: 'short', year: 'numeric' });
+}
+
+/** Per-night is what makes hotels comparable; a total conflates price with length. */
+function perNight(r: Row): number | null {
+  const total = r.sellTotal;
+  if (!total || !r.nights) return null;
+  return Math.round(total / r.nights);
 }
 
 function pill(active: boolean): React.CSSProperties {
@@ -740,6 +1007,233 @@ function BestMonths({ dest, setDest, hotels, searching, onFind, selectedIds }: {
               which is not the same as having no availability.
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One watchlist row as the API returns it. */
+type WatchEntry = {
+  hotelId: number;
+  hotelName?: string | null;
+  region?: string | null;
+  los: number[];
+  probeMonthsAhead: number[];
+  isActive: boolean;
+  notes?: string | null;
+};
+type CollectionListRow = {
+  id: number;
+  slug: string;
+  title: string;
+  status: string;
+  hotelCount: number;
+};
+type CollectionHotel = { hotelId?: number | string | null; name?: string | null; country?: string | null };
+type CollectionDetail = { slug?: string; searchDestination?: string | null; hotels?: CollectionHotel[]; error?: string };
+
+const parseNums = (v: string) =>
+  [...new Set(v.split(',').map((n) => Number(n.trim())).filter((n) => Number.isFinite(n) && n > 0))]
+    .sort((a, b) => a - b);
+
+/**
+ * What gets checked for offers, and how.
+ *
+ * Discovery itself is deterministic — price some dates, read the supplier's
+ * named offers, aggregate — so the only human input is which hotels and when
+ * to look. This is that input, and a nightly job runs the rest.
+ *
+ * Two settings are load-bearing:
+ *   Stay lengths  must start low enough for a minimum to be a real
+ *                 observation. Probe only 4 and 7 and a 5-night rule is
+ *                 indistinguishable from a 7-night one.
+ *   Months ahead  offers are seasonal. A single window 45 days out found
+ *                 Soneva Fushi's 7-night Gather Together offer and missed its
+ *                 May–Sep summer promotion completely.
+ */
+function OfferWatchlistPanel() {
+  const [entries, setEntries] = useState<WatchEntry[]>([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ hotelId: '', hotelName: '', region: '', los: '3,4,5,7', months: '2,5' });
+  const [collections, setCollections] = useState<CollectionListRow[]>([]);
+  const [collectionSlug, setCollectionSlug] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch('/api/admin/search/offer-watchlist', { cache: 'no-store' });
+      const j = await r.json();
+      setEntries(j.entries || []);
+    } catch { /* panel is additive — a failure must not take the page down */ }
+  }, []);
+  useEffect(() => { if (open) void load(); }, [open, load]);
+  useEffect(() => {
+    if (!open) return;
+    fetch('/api/admin/collections?status=all', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => setCollections(j.collections || []))
+      .catch(() => setCollections([]));
+  }, [open]);
+
+  async function save(entry: Partial<WatchEntry> & { hotelId: number }) {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch('/api/admin/search/offer-watchlist', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(entry),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await load();
+    } catch (e) { setMsg((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function remove(hotelId: number) {
+    setBusy(true);
+    try {
+      await fetch(`/api/admin/search/offer-watchlist/${hotelId}`, { method: 'DELETE' });
+      await load();
+    } finally { setBusy(false); }
+  }
+
+  async function runNow() {
+    setBusy(true);
+    setMsg('Running — each hotel is several live supplier calls, paced to stay inside the rate limit. This takes minutes.');
+    try {
+      const r = await fetch('/api/admin/search/offer-reports/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setMsg(`Saved report #${j.id} — ${j.offerCount} of ${j.rowCount} rows carry an offer, across ${j.hotels} hotels.`
+        + (j.failures?.length ? ` ${j.failures.length} probe(s) failed.` : ''));
+    } catch (e) { setMsg((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function importCollection() {
+    if (!collectionSlug) return;
+    const meta = collections.find((c) => c.slug === collectionSlug);
+    setBusy(true); setMsg(null);
+    try {
+      const detailRes = await fetch(`/api/admin/collections/${encodeURIComponent(collectionSlug)}`, { cache: 'no-store' });
+      const detail = await detailRes.json() as CollectionDetail;
+      if (!detailRes.ok) throw new Error(detail.error || `HTTP ${detailRes.status}`);
+      const hotels = (detail.hotels || []).filter((h) => Number.isFinite(Number(h.hotelId)));
+      if (!hotels.length) throw new Error('That collection has no saved hotel IDs to monitor.');
+      let count = 0;
+      for (const h of hotels) {
+        const r = await fetch('/api/admin/search/offer-watchlist', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            hotelId: Number(h.hotelId),
+            hotelName: h.name || undefined,
+            region: detail.searchDestination || h.country || meta?.title || undefined,
+            los: parseNums(draft.los),
+            probeMonthsAhead: parseNums(draft.months),
+            isActive: true,
+            notes: `Imported from collection ${detail.slug || collectionSlug}`,
+          }),
+        });
+        if (r.ok) count++;
+      }
+      await load();
+      setMsg(`Imported ${count} hotel${count === 1 ? '' : 's'} from ${meta?.title || collectionSlug}.`);
+    } catch (e) { setMsg((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="c-card" style={{ padding: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>Monitored hotels ({entries.length})</div>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginTop: 2 }}>
+            Checked nightly for named supplier offers. Hummingbird only — RateHawk&apos;s feed carries no promotions.
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button className="c-btn" onClick={() => setOpen((v) => !v)}>{open ? 'Hide' : 'Configure'}</button>
+          <button className="c-btn c-btn-primary" onClick={runNow} disabled={busy}>Run now</button>
+        </div>
+      </div>
+
+      {msg && <div style={{ marginTop: 10, fontSize: 12, color: 'var(--c-fg-soft)' }}>{msg}</div>}
+
+      {open && (
+        <div style={{ marginTop: 14, display: 'grid', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 130px 130px 140px 70px', gap: 8, alignItems: 'end' }}>
+            <label style={{ display: 'grid', gap: 4 }}><span className="c-label">Hotel ID</span>
+              <input className="c-input" value={draft.hotelId} onChange={(e) => setDraft({ ...draft, hotelId: e.target.value })} placeholder="999269880" /></label>
+            <label style={{ display: 'grid', gap: 4 }}><span className="c-label">Name</span>
+              <input className="c-input" value={draft.hotelName} onChange={(e) => setDraft({ ...draft, hotelName: e.target.value })} placeholder="Soneva Fushi" /></label>
+            <label style={{ display: 'grid', gap: 4 }}><span className="c-label">Region</span>
+              <input className="c-input" value={draft.region} onChange={(e) => setDraft({ ...draft, region: e.target.value })} placeholder="Maldives" /></label>
+            <label style={{ display: 'grid', gap: 4 }}><span className="c-label">Stay lengths</span>
+              <input className="c-input" value={draft.los} onChange={(e) => setDraft({ ...draft, los: e.target.value })} /></label>
+            <label style={{ display: 'grid', gap: 4 }}><span className="c-label">Months ahead</span>
+              <input className="c-input" value={draft.months} onChange={(e) => setDraft({ ...draft, months: e.target.value })} /></label>
+            <button className="c-btn" disabled={busy || !Number(draft.hotelId)} onClick={() => {
+              void save({
+                hotelId: Number(draft.hotelId), hotelName: draft.hotelName || undefined,
+                region: draft.region || undefined, los: parseNums(draft.los),
+                probeMonthsAhead: parseNums(draft.months), isActive: true,
+              });
+              setDraft({ hotelId: '', hotelName: '', region: '', los: '3,4,5,7', months: '2,5' });
+            }}>Add</button>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'end', flexWrap: 'wrap', paddingTop: 2 }}>
+            <label style={{ display: 'grid', gap: 4, minWidth: 260 }}><span className="c-label">Import collection hotels</span>
+              <select className="c-input" value={collectionSlug} onChange={(e) => setCollectionSlug(e.target.value)}>
+                <option value="">Choose a collection…</option>
+                {collections.map((c) => (
+                  <option key={c.id} value={c.slug}>{c.title} ({c.hotelCount})</option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="c-btn"
+              disabled={busy || !collectionSlug}
+              onClick={() => void importCollection()}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <FolderOpen size={13} /> Add collection to monitor
+            </button>
+            <span style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>
+              Uses the stay lengths and months above for every hotel.
+            </span>
+          </div>
+
+          {entries.length === 0
+            ? <div className="c-empty" style={{ padding: '10px 12px', fontSize: 12 }}>Nothing monitored yet — add a hotel above.</div>
+            : (
+              <table className="c-table">
+                <thead><tr>
+                  <th>Hotel</th><th style={{ width: 110 }}>Region</th>
+                  <th style={{ width: 120 }}>Stay lengths</th><th style={{ width: 120 }}>Months ahead</th>
+                  <th style={{ width: 80 }}>Active</th><th style={{ width: 60 }} />
+                </tr></thead>
+                <tbody>
+                  {entries.map((e) => (
+                    <tr key={e.hotelId}>
+                      <td>{e.hotelName || '—'} <span className="c-mono" style={{ color: 'var(--c-fg-muted)' }}>#{e.hotelId}</span></td>
+                      <td>{e.region || '—'}</td>
+                      <td className="c-mono">{e.los.join(', ')}</td>
+                      <td className="c-mono">{e.probeMonthsAhead.join(', ')}</td>
+                      <td>
+                        <input type="checkbox" checked={e.isActive} disabled={busy}
+                          onChange={(ev) => void save({ hotelId: e.hotelId, isActive: ev.target.checked })} />
+                      </td>
+                      <td><button className="c-btn c-btn-danger" disabled={busy} onClick={() => void remove(e.hotelId)}>
+                        <Trash2 size={12} /></button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
         </div>
       )}
     </div>

@@ -15,13 +15,14 @@ const HEADERS = { 'X-Admin-Key': API_KEY, 'X-API-Key': API_KEY, 'Content-Type': 
  * "created" date — a snapshot goes stale and looks exactly like a fresh one.
  */
 export async function GET(request: NextRequest) {
-  const qs = request.nextUrl.searchParams.toString();
   try {
-    const res = await fetch(`${BOOKING_API_URL}/api/admin/search/rates-by-month?${qs}`, {
-      headers: HEADERS, cache: 'no-store',
+    const qs = request.nextUrl.searchParams.toString();
+    const res = await fetch(`${BOOKING_API_URL}/api/admin/search/rates-by-month${qs ? `?${qs}` : ''}`, {
+      headers: HEADERS,
+      cache: 'no-store',
     });
-    return NextResponse.json(await res.json(), { status: res.status });
-  } catch {
-    return NextResponse.json({ error: 'proxy_failed' }, { status: 500 });
+    return NextResponse.json(await res.json().catch(() => ({})), { status: res.status });
+  } catch (err) {
+    return NextResponse.json({ error: 'proxy_failed', detail: String(err) }, { status: 500 });
   }
 }
