@@ -21,9 +21,27 @@ interface CollectionListRow {
   id: number; slug: string; title: string; subtitle?: string;
   status: 'draft' | 'published'; hotelCount: number; updatedAt?: string;
 }
+/** One priced package on a hotel card. Every field is rendered by
+ *  CollectionView's PackageBlock — nothing stored that the page ignores. */
+interface CollectionPackage {
+  summary?: string;        // "Stay 7 nights, pay for 5"
+  inclusions?: string;
+  ourOffer?: string;       // the headline price, e.g. "US$8,210"
+  audApprox?: string;      // "approx AU$11,980"
+  hotelRate?: string;      // struck through above ours
+  competitorsNote?: string;
+  saving?: string;         // rendered as "Save …"
+  basis?: string;          // "based on Sep 2026 stay"
+}
 interface CollectionHotel {
   hotelId?: number; name: string; atoll?: string; image?: string; images?: string[];
   offer?: string; bookBy?: string; editorial?: string; customisable?: boolean;
+  /** Already round-tripped through this editor untyped — the load assigns the
+   *  API's hotels wholesale and the save sends them back whole, and hotel-api
+   *  persists it to collection_hotels.package. There was simply no UI, which is
+   *  why Soneva Fushi still reads "[Price — TBC]" on the live collection. */
+  packages?: CollectionPackage[];
+  marketing?: unknown;
 }
 interface CollectionFull {
   id: number; slug: string; title: string; subtitle?: string; heroImage?: string;
@@ -226,6 +244,11 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
     const next = [...value.hotels]; [next[i], next[j]] = [next[j], next[i]]; set({ hotels: next });
   };
   const removeHotel = (i: number) => set({ hotels: value.hotels.filter((_, j) => j !== i) });
+  const setPkg = (hi: number, pi: number, patch: Partial<CollectionPackage>) =>
+    setHotel(hi, { packages: (value.hotels[hi].packages || []).map((p, j) => (j === pi ? { ...p, ...patch } : p)) });
+  const addPkg = (hi: number) => setHotel(hi, { packages: [...(value.hotels[hi].packages || []), {}] });
+  const removePkg = (hi: number, pi: number) =>
+    setHotel(hi, { packages: (value.hotels[hi].packages || []).filter((_, j) => j !== pi) });
   const addHotel = (h: CollectionHotel) => set({ hotels: [...value.hotels, h] });
 
   return (
@@ -318,6 +341,64 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
                   <textarea className="c-input" rows={2} value={(h.images || []).join('\n')}
                     onChange={(e) => setHotel(i, { images: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} />
                 </Field>
+              </div>
+
+              {/* Packages — the priced offers the card renders. Free text on
+                  purpose: these are marketing lines ("Stay 7 nights, pay for 5",
+                  "from US$7,390"), not amounts the engine computes, and the page
+                  prints them verbatim. A blank field is simply omitted. */}
+              <div style={{ borderTop: '1px solid var(--c-line)', paddingTop: 10, display: 'grid', gap: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="c-label">Packages &amp; pricing ({(h.packages || []).length})</span>
+                  <button className="c-btn" onClick={() => addPkg(i)}>+ Add package</button>
+                </div>
+                {(h.packages || []).map((p, pi) => (
+                  <div key={pi} className="c-card" style={{ padding: 10, display: 'grid', gap: 8, background: 'var(--c-bg-soft)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span className="c-label">Package {pi + 1}</span>
+                      <button className="c-btn c-btn-danger" onClick={() => removePkg(i, pi)}><Trash2 size={12} /></button>
+                    </div>
+                    <Field label="Summary — the headline line">
+                      <input className="c-input" value={p.summary || ''} placeholder="Stay 7 nights, pay for 5"
+                        onChange={(e) => setPkg(i, pi, { summary: e.target.value })} />
+                    </Field>
+                    <Field label="Inclusions">
+                      <textarea className="c-input" rows={2} value={p.inclusions || ''}
+                        onChange={(e) => setPkg(i, pi, { inclusions: e.target.value })} />
+                    </Field>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                      <Field label="Our offer — the headline price">
+                        <input className="c-input" value={p.ourOffer || ''} placeholder="US$8,210"
+                          onChange={(e) => setPkg(i, pi, { ourOffer: e.target.value })} />
+                      </Field>
+                      <Field label="Approx local currency">
+                        <input className="c-input" value={p.audApprox || ''} placeholder="approx AU$11,980"
+                          onChange={(e) => setPkg(i, pi, { audApprox: e.target.value })} />
+                      </Field>
+                      <Field label="Hotel / competitor rate — struck through">
+                        <input className="c-input" value={p.hotelRate || ''} placeholder="AU$9,832"
+                          onChange={(e) => setPkg(i, pi, { hotelRate: e.target.value })} />
+                      </Field>
+                      <Field label="Where that rate is from">
+                        <input className="c-input" value={p.competitorsNote || ''} placeholder="Luxury Escapes & Expedia both higher"
+                          onChange={(e) => setPkg(i, pi, { competitorsNote: e.target.value })} />
+                      </Field>
+                      <Field label="Saving — shown as “Save …”">
+                        <input className="c-input" value={p.saving || ''} placeholder="$1,500"
+                          onChange={(e) => setPkg(i, pi, { saving: e.target.value })} />
+                      </Field>
+                      <Field label="Basis — small print">
+                        <input className="c-input" value={p.basis || ''} placeholder="based on Sep 2026 stay"
+                          onChange={(e) => setPkg(i, pi, { basis: e.target.value })} />
+                      </Field>
+                    </div>
+                  </div>
+                ))}
+                {(h.packages || []).length === 0 && (
+                  <div className="c-empty" style={{ padding: '10px 12px', fontSize: 12 }}>
+                    No packages — this card shows no price.
+                  </div>
+                )}
               </div>
             </div>
           ))}

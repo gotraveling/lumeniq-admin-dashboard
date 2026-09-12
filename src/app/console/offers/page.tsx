@@ -15,7 +15,7 @@
  * fabricated.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Tag, Loader2, Search, Trash2, ArrowLeft, RefreshCw, Link as LinkIcon } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -275,8 +275,14 @@ export default function OffersPage() {
         <h1 className="c-page-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Tag size={20} /> Offers
         </h1>
-        <p className="c-page-sub">Run a matrix of live queries (hotels × months × stay-lengths), find the deals, and save the report.</p>
+        <p className="c-page-sub">
+          Cheapest month per hotel, from rates warmed overnight — no supplier calls, no waiting.
+          Use the matrix below only when you need a stay length or month the nightly grid does not cover.
+        </p>
       </div>
+
+      <BestMonths dest={dest} setDest={setDest} hotels={hotels} searching={searching}
+        onFind={() => void searchHotels()} selectedIds={selectedIds} />
 
       {/* New report */}
       <div className="c-card" style={{ padding: 16 }}>
@@ -567,3 +573,175 @@ const linkBtn: React.CSSProperties = {
   background: 'none', border: 'none', cursor: 'pointer', padding: 0,
   fontSize: 11.5, fontWeight: 600, color: 'var(--c-accent)',
 };
+
+
+// ── Best month per hotel ─────────────────────────────────────────────────────
+
+type MonthRow = {
+  month: string; checkIn: string; nights: number;
+  fromTotal: number; fromNightly: number | null;
+  supplierWasTotal: number | null;
+  currency: string | null; supplier: string | null;
+  board: string | null; transfer: string | null;
+  freeCancellation: boolean | null; offerName: string | null;
+  fetchedAt: string | null;
+};
+type MonthResult = {
+  months: MonthRow[]; bestMonth: string | null; bestTotal: number | null;
+  swingPct: number | null; dearestMonth: string | null;
+};
+
+const monthLabel = (ym: string) => {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-AU', { month: 'short', year: 'numeric' });
+};
+
+/**
+ * Which month to advertise, per hotel.
+ *
+ * Reads cached rates the prewarm job warms overnight, so it is instant and
+ * costs no supplier calls. The matrix below this panel still exists for the
+ * cases the nightly grid does not cover, but it should not be the default:
+ * it fires live queries and freezes the result, and a frozen price looks
+ * exactly like a current one a month later.
+ *
+ * The number to sell on is the SWING — cheapest month against dearest, for the
+ * same hotel and the same stay. That is our price against our price, so
+ * "save $14,780 by travelling June" is defensible in a way that a supplier's
+ * own rack-rate "discount" is not.
+ */
+function BestMonths({ dest, setDest, hotels, searching, onFind, selectedIds }: {
+  dest: string; setDest: (v: string) => void; hotels: Hotel[]; searching: boolean;
+  onFind: () => void; selectedIds: Set<number>;
+}) {
+  const [los, setLos] = useState(7);
+  const [data, setData] = useState<Record<string, MonthResult> | null>(null);
+  const [missing, setMissing] = useState<number[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const nameOf = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const h of hotels) m.set(h.id, h.name);
+    return m;
+  }, [hotels]);
+
+  const load = useCallback(async () => {
+    const ids = hotels.filter((h) => selectedIds.has(h.id)).map((h) => h.id);
+    if (!ids.length) { setErr('Find hotels first, then load months.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      const qs = new URLSearchParams({ hotelIds: ids.join(','), los: String(los), months: '14' });
+      const res = await fetch(`/api/admin/search/rates-by-month?${qs}`, { cache: 'no-store' });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || `HTTP ${res.status}`);
+      setData(json.results || {});
+      setMissing(json.missing || []);
+    } catch (e) { setErr((e as Error).message); }
+    finally { setBusy(false); }
+  }, [hotels, selectedIds, los]);
+
+  const rows = useMemo(() => {
+    if (!data) return [];
+    return Object.entries(data)
+      .map(([hid, v]) => {
+        const best = v.months.find((m) => m.month === v.bestMonth) || null;
+        const dear = v.months.find((m) => m.month === v.dearestMonth) || null;
+        return { hid: Number(hid), name: nameOf.get(Number(hid)) || `#${hid}`, v, best, dear };
+      })
+      .filter((r) => r.best)
+      .sort((a, b) => (a.best!.fromNightly ?? a.best!.fromTotal) - (b.best!.fromNightly ?? b.best!.fromTotal));
+  }, [data, nameOf]);
+
+  // One "as at" for the whole table, not a date per row: this is a live read of
+  // one cache, so its age is a property of the data, not of each row.
+  const asAt = useMemo(() => {
+    const ts = rows.map((r) => r.best?.fetchedAt).filter(Boolean).map((t) => new Date(t as string).getTime());
+    return ts.length ? new Date(Math.max(...ts)) : null;
+  }, [rows]);
+
+  return (
+    <div className="c-card" style={{ padding: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>Best month to advertise</div>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginTop: 2 }}>
+            {asAt
+              ? `Prices as at ${asAt.toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} — refreshed overnight`
+              : 'Find hotels above, then load the months.'}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <input className="c-input" placeholder="Destination (e.g. Maldives)" value={dest}
+            onChange={(e) => setDest(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') onFind(); }} style={{ minWidth: 200 }} />
+          <button className="c-btn" onClick={onFind} disabled={searching}>
+            {searching ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
+          </button>
+          <select className="c-select" value={los} onChange={(e) => { setLos(Number(e.target.value)); setData(null); }}>
+            {[3, 4, 5, 7, 10].map((n) => <option key={n} value={n}>{n} nights</option>)}
+          </select>
+          <button className="c-btn c-btn-primary" onClick={() => void load()} disabled={busy || !hotels.length}>
+            {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Load months
+          </button>
+        </div>
+      </div>
+
+      {err && <div style={{ marginTop: 10, fontSize: 12, color: 'var(--c-danger)' }}>{err}</div>}
+
+      {rows.length > 0 && (
+        <div style={{ marginTop: 14, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', textTransform: 'uppercase', fontSize: 10.5, letterSpacing: 0.04, borderBottom: '1px solid var(--c-line)' }}>
+                <th style={{ padding: '6px 8px' }}>Hotel</th>
+                <th style={{ padding: '6px 8px' }}>Advertise</th>
+                <th style={{ padding: '6px 8px', textAlign: 'right' }}>Per night</th>
+                <th style={{ padding: '6px 8px', textAlign: 'right' }}>{los} nights</th>
+                <th style={{ padding: '6px 8px' }}>Included</th>
+                <th style={{ padding: '6px 8px' }}>Offer</th>
+                <th style={{ padding: '6px 8px', textAlign: 'right' }}>Client saves</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ hid, name, v, best, dear }) => {
+                const cur = best!.currency || '';
+                const saves = dear && best ? Math.round(dear.fromTotal - best.fromTotal) : null;
+                return (
+                  <tr key={hid} style={{ borderTop: '1px solid var(--c-line-soft)' }}>
+                    <td style={{ padding: '7px 8px', fontWeight: 600 }}>{name}</td>
+                    <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>{monthLabel(best!.month)}</td>
+                    <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: 700, fontFamily: 'var(--c-mono)' }}>
+                      {best!.fromNightly != null ? fmtMoney(best!.fromNightly) : fmtMoney(best!.fromTotal / (best!.nights || los))}
+                    </td>
+                    <td style={{ padding: '7px 8px', textAlign: 'right', fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>
+                      {fmtMoney(best!.fromTotal)} {cur}
+                    </td>
+                    <td style={{ padding: '7px 8px' }}>
+                      {[best!.board, best!.transfer].filter(Boolean).join(' + ') || <span style={{ color: 'var(--c-fg-muted)' }}>—</span>}
+                    </td>
+                    <td style={{ padding: '7px 8px', color: 'var(--c-fg-soft)' }}>{best!.offerName || '—'}</td>
+                    <td style={{ padding: '7px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {saves && saves > 0 && v.swingPct ? (
+                        <span title={`vs ${monthLabel(v.dearestMonth!)}, the dearest month priced`}>
+                          <strong style={{ color: 'var(--c-success)' }}>{fmtMoney(saves)}</strong>
+                          <span style={{ color: 'var(--c-fg-muted)' }}> ({v.swingPct}%)</span>
+                        </span>
+                      ) : <span style={{ color: 'var(--c-fg-muted)' }}>—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {missing.length > 0 && (
+            <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--c-fg-muted)' }}>
+              {missing.length} hotel(s) have no warmed rates for a {los}-night stay — they are not in the nightly grid,
+              which is not the same as having no availability.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
