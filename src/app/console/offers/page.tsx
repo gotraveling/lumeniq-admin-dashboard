@@ -88,6 +88,8 @@ type MonthlyScout = {
   results: Record<string, MonthlyHotel>;
   missing?: number[];
 };
+type OfferCombo = { hotel: Hotel; checkIn: string; nights: number };
+type RunProgress = { running: boolean; done: number; total: number; throttled: number };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 // Next 12 months as { key: 'YYYY-MM', label, checkIn: 'YYYY-MM-15' }. A mid-month
@@ -160,6 +162,56 @@ async function fetchRatesRetry(hotelId: number, qs: string, maxTries = 5): Promi
 }
 
 const STAY_OPTIONS = [1, 2, 3, 4, 5, 7, 10];
+
+async function collectOfferRows(
+  combos: OfferCombo[],
+  adults: number,
+  onTick: () => void,
+  onThrottle: () => void
+): Promise<Row[]> {
+  const rows: Row[] = [];
+  const guests = JSON.stringify([{ adults, children: [] }]);
+
+  await runPool(combos, 3, async ({ hotel, checkIn, nights }) => {
+    const checkOut = addNights(checkIn, nights);
+    const qs = new URLSearchParams({ checkIn, checkOut, guests, accountType: 'cug' });
+    const { rates, throttled } = await fetchRatesRetry(hotel.id, qs.toString());
+    if (throttled) onThrottle();
+    if (!rates.length) return;
+    const best = rates.reduce((a, b) => {
+      const sa = a?.pricing?.sell?.totalAmount ?? Infinity;
+      const sb = b?.pricing?.sell?.totalAmount ?? Infinity;
+      return sb < sa ? b : a;
+    });
+    const gross = Number(best.grossTotal) || 0;
+    const disc = Number(best.discountAmount) || 0;
+    const discountPct = gross > 0 && disc > 0 ? Math.round((disc / gross) * 100) : 0;
+    rows.push({
+      hotelId: String(hotel.id), hotelName: hotel.name,
+      region: hotel.country || null, checkIn, nights,
+      promoName: best.offers?.[0]?.name ?? null,
+      discountPct,
+      netTotal: best.pricing?.net?.aud?.totalAmount ?? best.pricing?.net?.totalAmount ?? null,
+      sellTotal: best.pricing?.aud?.totalAmount ?? best.pricing?.sell?.totalAmount ?? null,
+      currency: best.pricing?.aud?.totalAmount ? 'AUD' : (best.pricing?.currency ?? null),
+      board: boardOf(best.ratePlan ?? undefined), transfer: best.transfer ?? null,
+      refundable: typeof best.refundable === 'boolean' ? best.refundable : null,
+      supplier: best.supplier ?? null,
+    });
+  }, onTick);
+
+  return rows;
+}
+
+function hotelsFromReport(report: Report): Hotel[] {
+  const byId = new Map<number, Hotel>();
+  for (const r of report.rows || []) {
+    const id = Number(r.hotelId);
+    if (!Number.isFinite(id) || byId.has(id)) continue;
+    byId.set(id, { id, name: r.hotelName || `Hotel #${id}`, country: r.region || undefined });
+  }
+  return [...byId.values()];
+}
 
 export default function OffersPage() {
   const [view, setView] = useState<'list' | 'detail'>('list');
@@ -249,43 +301,16 @@ export default function OffersPage() {
     }
     setErr(null);
     // Build the matrix of combos over the SELECTED hotels only.
-    const combos: { hotel: Hotel; checkIn: string; nights: number }[] = [];
+    const combos: OfferCombo[] = [];
     for (const h of selectedHotels) for (const m of chosenMonths) for (const n of selStays) combos.push({ hotel: h, checkIn: m.checkIn, nights: n });
 
     setGen({ running: true, done: 0, total: combos.length, throttled: 0 });
-    const rows: Row[] = [];
-    const guests = JSON.stringify([{ adults, children: [] }]);
-
-    // Concurrency 3 + per-combo 429 backoff keeps us comfortably under
-    // Hummingbird's limits even for a few hundred queries.
-    await runPool(combos, 3, async ({ hotel, checkIn, nights }) => {
-      const checkOut = addNights(checkIn, nights);
-      const qs = new URLSearchParams({ checkIn, checkOut, guests, accountType: 'cug' });
-      const { rates, throttled } = await fetchRatesRetry(hotel.id, qs.toString());
-      if (throttled) setGen((g) => g ? { ...g, throttled: g.throttled + 1 } : g);
-      if (!rates.length) return;
-      // Cheapest bookable rate (the "from" price) — matches the rest of the system.
-      const best = rates.reduce((a, b) => {
-        const sa = a?.pricing?.sell?.totalAmount ?? Infinity;
-        const sb = b?.pricing?.sell?.totalAmount ?? Infinity;
-        return sb < sa ? b : a;
-      });
-      const gross = Number(best.grossTotal) || 0;
-      const disc = Number(best.discountAmount) || 0;
-      const discountPct = gross > 0 && disc > 0 ? Math.round((disc / gross) * 100) : 0;
-      rows.push({
-        hotelId: String(hotel.id), hotelName: hotel.name,
-        region: hotel.country || null, checkIn, nights,
-        promoName: best.offers?.[0]?.name ?? null,
-        discountPct,
-        netTotal: best.pricing?.net?.aud?.totalAmount ?? best.pricing?.net?.totalAmount ?? null,
-        sellTotal: best.pricing?.aud?.totalAmount ?? best.pricing?.sell?.totalAmount ?? null,
-        currency: best.pricing?.aud?.totalAmount ? 'AUD' : (best.pricing?.currency ?? null),
-        board: boardOf(best.ratePlan ?? undefined), transfer: best.transfer ?? null,
-        refundable: typeof best.refundable === 'boolean' ? best.refundable : null,
-        supplier: best.supplier ?? null,
-      });
-    }, () => setGen((g) => g ? { ...g, done: g.done + 1 } : g));
+    const rows = await collectOfferRows(
+      combos,
+      adults,
+      () => setGen((g) => g ? { ...g, done: g.done + 1 } : g),
+      () => setGen((g) => g ? { ...g, throttled: g.throttled + 1 } : g)
+    );
 
     // Save the assembled report.
     try {
@@ -328,7 +353,7 @@ export default function OffersPage() {
 
   // ── Detail view ──
   if (view === 'detail') {
-    return <ReportDetail report={current} onBack={backToList} />;
+    return <ReportDetail report={current} onBack={backToList} onSaved={(id) => { void loadList(); void openReport(id); }} />;
   }
 
   // ── List + New report ──
@@ -532,12 +557,14 @@ export default function OffersPage() {
 }
 
 // ── Report detail: filterable/sortable grid ──────────────────────────────────
-function ReportDetail({ report, onBack }: { report: Report | null; onBack: () => void }) {
+function ReportDetail({ report, onBack, onSaved }: { report: Report | null; onBack: () => void; onSaved: (id: number) => void }) {
   const [minPct, setMinPct] = useState(0);
   const [onlyOffers, setOnlyOffers] = useState(true);
   const [q, setQ] = useState('');
   const [sortKey, setSortKey] = useState<'discountPct' | 'sellTotal' | 'hotelName' | 'checkIn' | 'perNight'>('perNight');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [rerun, setRerun] = useState<RunProgress | null>(null);
+  const [rerunErr, setRerunErr] = useState<string | null>(null);
   const reportStays = useMemo(() => {
     const fromParams = Array.isArray(report?.params?.stayLengths) ? report?.params?.stayLengths : [];
     const fromRows = report?.rows?.map((r) => r.nights) || [];
@@ -606,6 +633,54 @@ function ReportDetail({ report, onBack }: { report: Report | null; onBack: () =>
     );
   }
 
+  async function runFreshCopy() {
+    if (!report) return;
+    const templateHotels = hotelsFromReport(report);
+    const adults = Number(report.params?.adults) || 2;
+    const months = Array.isArray(report.params?.months) && report.params.months.length
+      ? report.params.months
+      : [...new Set((report.rows || []).map((r) => String(r.checkIn || '').slice(0, 7)).filter(Boolean))];
+    const stays = Array.isArray(report.params?.stayLengths) && report.params.stayLengths.length
+      ? report.params.stayLengths.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+      : [...new Set((report.rows || []).map((r) => Number(r.nights)).filter((n) => Number.isFinite(n) && n > 0))];
+    if (!templateHotels.length || !months.length || !stays.length) {
+      setRerunErr('This report does not have enough saved hotel/month/stay information to run again.');
+      return;
+    }
+
+    const combos: OfferCombo[] = [];
+    for (const h of templateHotels) for (const month of months) for (const n of stays) combos.push({ hotel: h, checkIn: `${month}-15`, nights: n });
+    setRerun({ running: true, done: 0, total: combos.length, throttled: 0 });
+    setRerunErr(null);
+
+    try {
+      const freshRows = await collectOfferRows(
+        combos,
+        adults,
+        () => setRerun((g) => g ? { ...g, done: g.done + 1 } : g),
+        () => setRerun((g) => g ? { ...g, throttled: g.throttled + 1 } : g)
+      );
+      const stamp = new Date().toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+      const res = await fetch('/api/admin/search/offer-reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: `${report.name} · fresh ${stamp}`,
+          region: report.region,
+          params: { months, stayLengths: stays, hotelIds: templateHotels.map((h) => h.id), adults, rerunOf: report.id },
+          rows: freshRows,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setRerun(null);
+      if (json.id) onSaved(json.id);
+    } catch (e: unknown) {
+      setRerunErr(messageOf(e, 'Fresh report failed'));
+      setRerun(null);
+    }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -620,7 +695,19 @@ function ReportDetail({ report, onBack }: { report: Report | null; onBack: () =>
             <LinkIcon size={13} /> Copy link
           </button>
         )}
+        {report && (
+          <button
+            onClick={() => void runFreshCopy()}
+            className="c-btn c-btn-primary"
+            disabled={!!rerun?.running}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}
+            title="Run the same hotel/month/stay setup again using current live rates">
+            {rerun?.running ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+            {rerun?.running ? `Running ${rerun.done}/${rerun.total}` : 'Run fresh copy'}
+          </button>
+        )}
       </div>
+      {rerunErr && <div style={{ color: 'var(--c-danger)', fontSize: 12.5 }}>{rerunErr}</div>}
 
       {!report ? (
         <div style={{ color: 'var(--c-fg-muted)', fontSize: 13, padding: 12 }}>Loading report…</div>
