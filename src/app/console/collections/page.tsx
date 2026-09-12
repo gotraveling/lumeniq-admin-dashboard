@@ -39,6 +39,7 @@ interface CollectionMarketing {
 interface CollectionHotel {
   hotelId?: number; name: string; atoll?: string; image?: string; images?: string[];
   offer?: string; bookBy?: string; editorial?: string; customisable?: boolean;
+  hidden?: boolean;
   /** Already round-tripped through this editor untyped — the load assigns the
    *  API's hotels wholesale and the save sends them back whole, and hotel-api
    *  persists it to collection_hotels.package. There was simply no UI, which is
@@ -213,7 +214,7 @@ export default function CollectionsPage() {
   async function openEditor(slug: string) {
     setBusy(true); setError(null);
     try {
-      const r = await fetch(`${HOTEL_API}/api/collections/${encodeURIComponent(slug)}`, { cache: 'no-store' });
+      const r = await fetch(`${HOTEL_API}/api/collections/${encodeURIComponent(slug)}?includeHidden=true`, { cache: 'no-store' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setEditing({ ...BLANK, ...d, intro: d.intro || [], hotels: d.hotels || [] });
@@ -387,6 +388,8 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
   const removePkg = (hi: number, pi: number) =>
     setHotel(hi, { packages: (value.hotels[hi].packages || []).filter((_, j) => j !== pi) });
   const addHotel = (h: CollectionHotel) => set({ hotels: [...value.hotels, h] });
+  const visibleCount = value.hotels.filter((h) => !h.hidden).length;
+  const hiddenCount = value.hotels.length - visibleCount;
   const applyRows = (rows: OfferReportRow[], sourceName: string) => {
     const byHotel = new Map<string, OfferReportRow>();
     for (const row of rows || []) {
@@ -408,6 +411,8 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
           },
         };
     }).sort((a, b) => {
+      const hidden = Number(Boolean(a.hotel.hidden)) - Number(Boolean(b.hotel.hidden));
+      if (hidden !== 0) return hidden;
       const promote = promoteRankOf(b.hotel) - promoteRankOf(a.hotel);
       if (promote !== 0) return promote;
       const matchedDiff = Number(Boolean(b.row)) - Number(Boolean(a.row));
@@ -585,7 +590,7 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
           <div>
             <div className="c-label">Hotels ({value.hotels.length})</div>
             <div style={{ color: 'var(--c-fg-muted)', fontSize: 12, marginTop: 2 }}>
-              Run live offers for this collection to suggest an order. Tina can override with ↑/↓ before saving.
+              {visibleCount} visible · {hiddenCount} hidden/check later. Run live offers to suggest an order, then override with ↑/↓ before saving.
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -610,9 +615,13 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
         <HotelSearch onAdd={addHotel} />
         <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
           {value.hotels.map((h, i) => (
-            <div key={i} className="c-card" style={{ padding: 12, display: 'grid', gap: 8 }}>
+            <div key={i} style={{ display: 'grid', gap: 8 }}>
+            {h.hidden && (i === 0 || !value.hotels[i - 1]?.hidden) && (
+              <div className="c-label" style={{ marginTop: 6 }}>Hidden / check rates later</div>
+            )}
+            <div className="c-card" style={{ padding: 12, display: 'grid', gap: 8, opacity: h.hidden ? 0.78 : 1 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <strong>{h.name || '(unnamed)'} {h.hotelId ? <span className="c-mono" style={{ color: 'var(--c-fg-muted)' }}>#{h.hotelId}</span> : <span className="c-pill c-pill-warn">enquiry-only</span>}</strong>
+                <strong>{h.name || '(unnamed)'} {h.hotelId ? <span className="c-mono" style={{ color: 'var(--c-fg-muted)' }}>#{h.hotelId}</span> : <span className="c-pill c-pill-warn">enquiry-only</span>} {h.hidden ? <span className="c-pill c-pill-warn">hidden</span> : null}</strong>
                 <div style={{ whiteSpace: 'nowrap' }}>
                   <button className="c-btn" onClick={() => move(i, -1)} disabled={i === 0}><ArrowUp size={13} /></button>{' '}
                   <button className="c-btn" onClick={() => move(i, 1)} disabled={i === value.hotels.length - 1}><ArrowDown size={13} /></button>{' '}
@@ -628,6 +637,11 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
                 <Field label="Customisable">
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <input type="checkbox" checked={!!h.customisable} onChange={(e) => setHotel(i, { customisable: e.target.checked })} /> packages can be tailored
+                  </label>
+                </Field>
+                <Field label="Collection visibility">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <input type="checkbox" checked={!!h.hidden} onChange={(e) => setHotel(i, { hidden: e.target.checked })} /> hidden / check rates later
                   </label>
                 </Field>
                 <Field label="Editorial blurb"><textarea className="c-input" rows={2} value={h.editorial || ''} onChange={(e) => setHotel(i, { editorial: e.target.value })} /></Field>
@@ -694,6 +708,7 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
                   </div>
                 )}
               </div>
+            </div>
             </div>
           ))}
           {value.hotels.length === 0 && <div className="c-empty">No hotels yet — search above to add.</div>}

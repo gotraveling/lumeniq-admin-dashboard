@@ -16,7 +16,7 @@ const ADMIN_KEY = process.env.COLLECTIONS_ADMIN_KEY || '';
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
-    const res = await fetch(`${HOTEL_API_URL}/api/collections/${encodeURIComponent(id)}`, {
+    const res = await fetch(`${HOTEL_API_URL}/api/collections/${encodeURIComponent(id)}?includeHidden=true`, {
       cache: 'no-store',
     });
     return NextResponse.json(await res.json().catch(() => ({})), { status: res.status });
