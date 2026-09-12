@@ -12,7 +12,7 @@
  * with optional per-hotel editorial/offer overrides layered on top.
  */
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { FolderOpen, Plus, Trash2, ArrowUp, ArrowDown, Search, Save, X } from 'lucide-react';
+import { FolderOpen, Plus, Trash2, ArrowUp, ArrowDown, Search, Save, X, RefreshCw } from 'lucide-react';
 
 const HOTEL_API = process.env.NEXT_PUBLIC_HOTEL_API_URL
   || 'https://hotel-api-91901273027.australia-southeast1.run.app';
@@ -33,6 +33,9 @@ interface CollectionPackage {
   saving?: string;         // rendered as "Save …"
   basis?: string;          // "based on Sep 2026 stay"
 }
+interface CollectionMarketing {
+  recommend_rank?: number | null;
+}
 interface CollectionHotel {
   hotelId?: number; name: string; atoll?: string; image?: string; images?: string[];
   offer?: string; bookBy?: string; editorial?: string; customisable?: boolean;
@@ -41,7 +44,7 @@ interface CollectionHotel {
    *  persists it to collection_hotels.package. There was simply no UI, which is
    *  why Soneva Fushi still reads "[Price — TBC]" on the live collection. */
   packages?: CollectionPackage[];
-  marketing?: unknown;
+  marketing?: CollectionMarketing | null;
 }
 interface CollectionFull {
   id: number; slug: string; title: string; subtitle?: string; heroImage?: string;
@@ -51,11 +54,74 @@ interface CollectionFull {
   travelGuideLabel?: string; travelGuideUrl?: string;
   status: 'draft' | 'published'; hotels: CollectionHotel[];
 }
+interface OfferReportMeta {
+  id: number; name: string; region: string | null; rowCount: number; offerCount: number; createdAt: string;
+}
+interface OfferReportRow {
+  hotelId: string; hotelName: string;
+  checkIn: string; nights: number;
+  promoName: string | null; discountPct: number | null;
+  netTotal: number | null; sellTotal: number | null; currency: string | null;
+  board: string | null; transfer: string | null; refundable: boolean | null; supplier: string | null;
+  packageSummary?: string | null; packageInclusions?: string | null;
+}
+interface OfferReport extends OfferReportMeta {
+  rows: OfferReportRow[];
+}
 
 const BLANK: CollectionFull = {
   id: 0, slug: '', title: '', subtitle: '', heroImage: '',
   intro: [], memberBenefit: '', quoteRef: '', status: 'draft', hotels: [],
 };
+
+function money(n?: number | null) {
+  if (n == null || !Number.isFinite(Number(n))) return '';
+  return Number(n).toLocaleString('en-AU', { maximumFractionDigits: 0 });
+}
+
+function monthLabel(iso?: string | null) {
+  if (!iso) return '';
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 7);
+  return d.toLocaleDateString('en-AU', { month: 'short', year: 'numeric' });
+}
+
+function marginOf(row?: OfferReportRow) {
+  if (!row || row.netTotal == null || row.sellTotal == null) return Number.NEGATIVE_INFINITY;
+  return Number(row.sellTotal) - Number(row.netTotal);
+}
+
+function promoteRankOf(hotel: CollectionHotel) {
+  return Number(hotel.marketing?.recommend_rank || 0);
+}
+
+function betterOfferRow(a?: OfferReportRow, b?: OfferReportRow) {
+  if (!a) return b;
+  if (!b) return a;
+  const marginDiff = marginOf(b) - marginOf(a);
+  if (marginDiff !== 0) return marginDiff > 0 ? b : a;
+  const discountDiff = Number(b.discountPct || 0) - Number(a.discountPct || 0);
+  if (discountDiff !== 0) return discountDiff > 0 ? b : a;
+  const aSell = Number(a.sellTotal ?? Infinity);
+  const bSell = Number(b.sellTotal ?? Infinity);
+  return bSell < aSell ? b : a;
+}
+
+function packageFromOfferRow(row: OfferReportRow): CollectionPackage {
+  const bits = [
+    row.promoName || null,
+    row.board || null,
+    row.transfer || null,
+    row.refundable == null ? null : row.refundable ? 'Refundable' : 'Non-refundable',
+  ].filter(Boolean);
+  const price = row.sellTotal == null ? '' : `${money(row.sellTotal)} ${row.currency || 'AUD'}`.trim();
+  return {
+    summary: row.packageSummary || `${row.nights} nights · ${monthLabel(row.checkIn)}`,
+    inclusions: row.packageInclusions || bits.join(' · '),
+    ourOffer: price,
+    basis: [monthLabel(row.checkIn), row.supplier].filter(Boolean).join(' · '),
+  };
+}
 
 export default function CollectionsPage() {
   const [list, setList] = useState<CollectionListRow[]>([]);
@@ -236,6 +302,11 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
   onCancel: () => void;
   busy: boolean;
 }) {
+  const [reports, setReports] = useState<OfferReportMeta[]>([]);
+  const [reportId, setReportId] = useState('');
+  const [applyingReport, setApplyingReport] = useState(false);
+  const [reportNotice, setReportNotice] = useState<string | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
   const set = (patch: Partial<CollectionFull>) => onChange({ ...value, ...patch });
   const setHotel = (i: number, patch: Partial<CollectionHotel>) =>
     set({ hotels: value.hotels.map((h, j) => (j === i ? { ...h, ...patch } : h)) });
@@ -250,6 +321,59 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
   const removePkg = (hi: number, pi: number) =>
     setHotel(hi, { packages: (value.hotels[hi].packages || []).filter((_, j) => j !== pi) });
   const addHotel = (h: CollectionHotel) => set({ hotels: [...value.hotels, h] });
+  const applyReport = async () => {
+    if (!reportId) return;
+    setApplyingReport(true); setReportNotice(null); setReportError(null);
+    try {
+      const res = await fetch(`/api/admin/search/offer-reports/${reportId}`, { cache: 'no-store' });
+      const report = await res.json() as OfferReport;
+      if (!res.ok) throw new Error((report as { error?: string }).error || `HTTP ${res.status}`);
+      const byHotel = new Map<string, OfferReportRow>();
+      for (const row of report.rows || []) {
+        if (!row.hotelId || row.sellTotal == null) continue;
+        byHotel.set(String(row.hotelId), betterOfferRow(byHotel.get(String(row.hotelId)), row)!);
+      }
+      let matched = 0;
+      const nextHotels = value.hotels.map((hotel, originalIndex) => {
+        const row = hotel.hotelId == null ? undefined : byHotel.get(String(hotel.hotelId));
+        if (!row) return { hotel, originalIndex, row };
+        matched += 1;
+        return {
+          originalIndex,
+          row,
+          hotel: {
+            ...hotel,
+            offer: row.promoName || hotel.offer,
+            packages: [packageFromOfferRow(row), ...(hotel.packages || []).slice(1)],
+          },
+        };
+      }).sort((a, b) => {
+        const promote = promoteRankOf(b.hotel) - promoteRankOf(a.hotel);
+        if (promote !== 0) return promote;
+        const matchedDiff = Number(Boolean(b.row)) - Number(Boolean(a.row));
+        if (matchedDiff !== 0) return matchedDiff;
+        const marginDiff = marginOf(b.row) - marginOf(a.row);
+        if (marginDiff !== 0) return marginDiff;
+        return a.originalIndex - b.originalIndex;
+      }).map((x) => x.hotel);
+
+      set({ hotels: nextHotels });
+      setReportNotice(`Applied ${matched} hotel${matched === 1 ? '' : 's'} from "${report.name}". Save the collection to publish this order.`);
+    } catch (e) {
+      setReportError(e instanceof Error ? e.message : 'Could not apply offer report.');
+    } finally {
+      setApplyingReport(false);
+    }
+  };
+
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/admin/search/offer-reports', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (alive) setReports(j.reports || []); })
+      .catch(() => { if (alive) setReports([]); });
+    return () => { alive = false; };
+  }, []);
 
   return (
     <div className="c-card" style={{ padding: 18, display: 'grid', gap: 18 }}>
@@ -312,7 +436,29 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
       </div>
 
       <div>
-        <div className="c-label" style={{ marginBottom: 8 }}>Hotels ({value.hotels.length})</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <div>
+            <div className="c-label">Hotels ({value.hotels.length})</div>
+            <div style={{ color: 'var(--c-fg-muted)', fontSize: 12, marginTop: 2 }}>
+              Apply an Offers report to rank by manual promote rank, then report margin. Matching hotels get public sell-price package text.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <select className="c-select" value={reportId} onChange={(e) => setReportId(e.target.value)} style={{ minWidth: 280 }}>
+              <option value="">Choose offer report…</option>
+              {reports.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name} · {r.offerCount} offers · {new Date(r.createdAt).toLocaleDateString('en-AU')}
+                </option>
+              ))}
+            </select>
+            <button className="c-btn" onClick={applyReport} disabled={!reportId || applyingReport || value.hotels.length === 0}>
+              <RefreshCw size={13} /> {applyingReport ? 'Applying…' : 'Apply report'}
+            </button>
+          </div>
+        </div>
+        {reportNotice && <div style={{ color: 'var(--c-success)', fontSize: 12, marginBottom: 8 }}>{reportNotice}</div>}
+        {reportError && <div style={{ color: 'var(--c-danger)', fontSize: 12, marginBottom: 8 }}>Report error: {reportError}</div>}
         <HotelSearch onAdd={addHotel} />
         <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
           {value.hotels.map((h, i) => (
