@@ -744,6 +744,7 @@ function ReportDetail({ report, onBack, onSaved }: { report: Report | null; onBa
                   {th('Hotel', 'hotelName')}
                   {th('Check-in', 'checkIn')}
                   <th style={{ padding: '6px 8px' }}>Nights</th>
+                  <th style={{ padding: '6px 8px' }}>Supplier</th>
                   <th style={{ padding: '6px 8px' }}>Promotion</th>
                   {th('Discount', 'discountPct', 'right')}
                   <th style={{ padding: '6px 8px', textAlign: 'right' }}>Net</th>
@@ -762,6 +763,7 @@ function ReportDetail({ report, onBack, onSaved }: { report: Report | null; onBa
                     <td style={{ padding: '7px 8px', fontWeight: 600 }}>{r.hotelName}</td>
                     <td style={{ padding: '7px 8px', fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>{new Date(r.checkIn).toLocaleDateString('en-AU', { month: 'short', year: 'numeric' })}</td>
                     <td style={{ padding: '7px 8px', textAlign: 'center' }}>{r.nights}</td>
+                    <td style={{ padding: '7px 8px', whiteSpace: 'nowrap', textTransform: 'capitalize' }}>{r.supplier || '—'}</td>
                     <td style={{ padding: '7px 8px', color: 'var(--c-fg-soft)' }}>{r.promoName || '—'}</td>
                     <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: (r.discountPct ?? 0) > 0 ? 700 : 400, color: (r.discountPct ?? 0) > 0 ? 'var(--c-accent)' : 'var(--c-fg-muted)' }}>
                       {(r.discountPct ?? 0) > 0 ? `${r.discountPct}%` : '—'}
