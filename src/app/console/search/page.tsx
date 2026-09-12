@@ -702,7 +702,7 @@ export default function ConsoleSearchPage() {
   const [pickedHotel, setPickedHotel] = useState<{ id: number; name: string; city?: string; country?: string; image?: string | null } | null>(null);
   function pickHotel(h: { id?: number; hotel_id?: number; name?: string; city?: string; country?: string; main_image?: string | null; image?: string | null }) {
     const id = h.id ?? h.hotel_id;
-    const name = h.name || '';
+    const name = (h.name || '').trim();
     setQ(name);
     // The autocomplete API returns the image as `image` (admin-search path) OR
     // `main_image` (Meili fallback path) — take whichever is present so the card
@@ -1609,7 +1609,7 @@ export default function ConsoleSearchPage() {
                   e.preventDefault();
                   // A live hotel pick (box still holds its name) → price it by
                   // id; anything else → normal name search.
-                  if (pickedHotel && pickedHotel.name === q.trim()) searchPickedHotel(pickedHotel);
+                  if (pickedHotel && pickedHotel.name.trim() === q.trim()) searchPickedHotel(pickedHotel);
                   else runSearch();
                 }}
                 style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 1.35fr) minmax(180px, 1.1fr) minmax(215px, 1.7fr) minmax(110px, 0.7fr) auto', gap: 10, alignItems: 'end' }}
