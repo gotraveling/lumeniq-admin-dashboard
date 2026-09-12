@@ -179,6 +179,9 @@ type AdminRate = {
     // Derived AUD display layer for the sell price (additive — USD sell above
     // is the booking basis and is unchanged). Render-only, never recomputed.
     aud?: AudBlock | null;
+    // 'supplier' = the AUD is the supplier's own billing amount, untouched;
+    // 'converted' = we multiplied by the configured fx rate.
+    audSource?: 'supplier' | 'converted' | null;
     markup?: { type: string; value: number; amount: number; ruleName?: string };
   };
   // Promotional OFFER metadata (Hummingbird deal.offers[]). Structured as
@@ -4595,6 +4598,19 @@ function RoomGroupedRates({
     () => rates.find(r => r.pricing?.aud?.fxRate != null)?.pricing?.aud?.fxRate ?? null,
     [rates]
   );
+  // Only name a conversion rate when we actually converted.
+  //
+  // RateHawk contracts our account in AUD and hands us the amount it will
+  // bill, which we pass through untouched; the fxRate on those rates is just
+  // AUD÷USD computed back from the two figures, and it differs per rate (one
+  // NH Maldives search: 53 distinct ratios across 60 rates). Printing one of
+  // them as "@ <rate>" read as though we had applied it to the whole list.
+  // Hummingbird quotes USD only, so there the configured rate genuinely is
+  // applied and worth showing.
+  const audConverted = useMemo(() => {
+    const withAud = rates.filter(r => r.pricing?.aud?.fxRate != null);
+    return withAud.length > 0 && withAud.every(r => r.pricing?.audSource === 'converted');
+  }, [rates]);
 
   return (
     <div style={{ marginTop, display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -4604,7 +4620,7 @@ function RoomGroupedRates({
         </span>
         {fxRate != null && (
           <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
-            Sell + Net shown in AUD @ {fxRate}
+            {audConverted ? `Sell + Net shown in AUD @ ${fxRate}` : 'Sell + Net shown in AUD'}
           </span>
         )}
       </div>
