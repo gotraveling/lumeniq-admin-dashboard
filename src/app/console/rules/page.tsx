@@ -92,6 +92,47 @@ export default function ConsoleRulesPage() {
    * id at equal priority is the proxy — and it agrees with the engine's final
    * tiebreak, so the winner shown is the winner applied.
    */
+  /**
+   * A real price beside each hotel rule.
+   *
+   * A markup percentage on its own does not answer the question anyone
+   * actually has — "did that do what I meant?". This shows the cheapest
+   * 7-night stay we currently hold for the hotel, WITH the markup already
+   * applied, so the number here is the number a client would be quoted.
+   *
+   * Read from cached rates (rates-by-month), so it is one request for every
+   * hotel on the page and costs no supplier calls. Hotels the nightly prewarm
+   * does not cover simply show nothing — absent is not the same as free.
+   */
+  const [samples, setSamples] = useState<Record<number, { perNight: number; total: number; currency: string; month: string }>>({});
+
+  useEffect(() => {
+    const ids = [...new Set(rules.map((r) => r.conditions?.hotel_id).filter((n): n is number => typeof n === 'number'))];
+    if (!ids.length) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const qs = new URLSearchParams({ hotelIds: ids.join(','), los: '7', months: '14' });
+        const res = await fetch(`/api/admin/search/rates-by-month?${qs}`, { cache: 'no-store' });
+        const json = await res.json();
+        if (cancelled || !json.success) return;
+        const out: Record<number, { perNight: number; total: number; currency: string; month: string }> = {};
+        for (const [hid, v] of Object.entries<any>(json.results || {})) {
+          const best = (v.months || []).find((m: any) => m.month === v.bestMonth);
+          if (!best?.fromTotal) continue;
+          out[Number(hid)] = {
+            perNight: Math.round(best.fromNightly ?? best.fromTotal / (best.nights || 7)),
+            total: Math.round(best.fromTotal),
+            currency: best.currency || '',
+            month: best.month,
+          };
+        }
+        setSamples(out);
+      } catch { /* a sample price is a convenience — never break the rules list */ }
+    })();
+    return () => { cancelled = true; };
+  }, [rules]);
+
   const hotelGroups = useMemo(() => {
     const byHotel = new Map<string, ConsoleRule[]>();
     for (const r of grouped.hotel) {
@@ -206,6 +247,20 @@ export default function ConsoleRulesPage() {
                       <td>
                         <div style={{ fontWeight: 500 }}>{r.name || '—'}</div>
                         <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>{conditionSummary(r.conditions)}</div>
+                        {(() => {
+                          const hid = r.conditions?.hotel_id;
+                          const sp = typeof hid === 'number' ? samples[hid] : undefined;
+                          if (!sp) return null;
+                          const [y, m] = sp.month.split('-').map(Number);
+                          const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-AU', { month: 'short', year: 'numeric' });
+                          return (
+                            <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', marginTop: 2 }}
+                                 title={`Cheapest 7-night stay we currently hold, with this markup applied — what a client would be quoted. From rates warmed overnight, 2 adults.`}>
+                              Sells from <strong>{sp.currency} {sp.perNight.toLocaleString()}</strong>/night
+                              <span style={{ color: 'var(--c-fg-muted)' }}> · {sp.currency} {sp.total.toLocaleString()} for 7 nights, {label}</span>
+                            </div>
+                          );
+                        })()}
                         {r.__superseded.length > 0 && (
                           <div
                             title={`Saving a markup adds a rule rather than replacing it. Superseded: ${r.__superseded
