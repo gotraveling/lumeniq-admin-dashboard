@@ -805,6 +805,7 @@ function ReportDetail({ report, onBack, onSaved }: { report: Report | null; onBa
                   <th style={{ padding: '6px 8px', textAlign: 'right' }}>Sell / night</th>
                   <th style={{ padding: '6px 8px' }}>Board</th>
                   <th style={{ padding: '6px 8px' }}>Transfer</th>
+                  <th style={{ padding: '6px 8px' }}>Conditions</th>
                   <th style={{ padding: '6px 8px' }}>Package line</th>
                 </tr>
               </thead>
@@ -826,6 +827,9 @@ function ReportDetail({ report, onBack, onSaved }: { report: Report | null; onBa
                     </td>
                     <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>{r.board || '—'}</td>
                     <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>{r.transfer || '—'}</td>
+                    <td style={{ padding: '7px 8px', whiteSpace: 'nowrap', color: r.refundable ? 'var(--c-success)' : 'var(--c-fg-muted)' }}>
+                      {r.refundable == null ? '—' : r.refundable ? 'Refundable' : 'Non-refundable'}
+                    </td>
                     <td style={{ padding: '7px 8px', maxWidth: 380 }}>
                       {r.packageSummary ? (
                         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
