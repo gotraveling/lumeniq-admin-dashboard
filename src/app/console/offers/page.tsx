@@ -90,6 +90,9 @@ type MonthlyScout = {
 };
 type OfferCombo = { hotel: Hotel; checkIn: string; nights: number };
 type RunProgress = { running: boolean; done: number; total: number; throttled: number };
+type CollectionListRow = { id: number; slug: string; title: string; status: string; hotelCount: number };
+type CollectionHotel = { hotelId?: number | string | null; name?: string | null; country?: string | null; atoll?: string | null };
+type CollectionDetail = { slug?: string; title?: string; searchDestination?: string | null; hotels?: CollectionHotel[]; error?: string };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 // Next 12 months as { key: 'YYYY-MM', label, checkIn: 'YYYY-MM-15' }. A mid-month
@@ -225,6 +228,9 @@ export default function OffersPage() {
   const [hotels, setHotels] = useState<Hotel[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [searching, setSearching] = useState(false);
+  const [collections, setCollections] = useState<CollectionListRow[]>([]);
+  const [collectionSlug, setCollectionSlug] = useState('');
+  const [loadingCollection, setLoadingCollection] = useState(false);
   const [selMonths, setSelMonths] = useState<string[]>(months.slice(0, 6).map((m) => m.key));
   const [selStays, setSelStays] = useState<number[]>([5, 7]);
   const [customStay, setCustomStay] = useState('');
@@ -256,6 +262,39 @@ export default function OffersPage() {
     } catch { /* keep prior */ } finally { setLoadingList(false); }
   }
   useEffect(() => { void loadList(); }, []);
+  useEffect(() => {
+    fetch('/api/admin/collections?status=all', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => setCollections(j.collections || []))
+      .catch(() => setCollections([]));
+  }, []);
+
+  async function loadCollection(slug: string) {
+    setCollectionSlug(slug);
+    if (!slug) return;
+    setLoadingCollection(true); setErr(null);
+    try {
+      const res = await fetch(`/api/admin/collections/${encodeURIComponent(slug)}`, { cache: 'no-store' });
+      const detail = await res.json() as CollectionDetail;
+      if (!res.ok) throw new Error(detail.error || `HTTP ${res.status}`);
+      const list = (detail.hotels || [])
+        .filter((h) => Number.isFinite(Number(h.hotelId)))
+        .map((h) => ({
+          id: Number(h.hotelId),
+          name: h.name || `Hotel #${h.hotelId}`,
+          city: h.atoll || undefined,
+          country: h.country || detail.searchDestination || undefined,
+        }));
+      if (!list.length) throw new Error('That collection has no saved hotel IDs.');
+      setDest(detail.searchDestination || detail.title || slug);
+      setHotels(list);
+      setSelectedIds(new Set(list.map((h) => h.id)));
+    } catch (e: unknown) {
+      setErr(messageOf(e, 'Collection load failed'));
+    } finally {
+      setLoadingCollection(false);
+    }
+  }
 
   async function searchHotels() {
     if (!dest.trim()) return;
@@ -380,6 +419,18 @@ export default function OffersPage() {
 
         {/* Destination → hotels */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+          <select
+            className="c-input"
+            value={collectionSlug}
+            onChange={(e) => void loadCollection(e.target.value)}
+            disabled={loadingCollection}
+            style={{ minWidth: 260 }}>
+            <option value="">{loadingCollection ? 'Loading collection…' : 'Choose collection…'}</option>
+            {collections.filter((c) => c.hotelCount > 0).map((c) => (
+              <option key={c.id} value={c.slug}>{c.title} ({c.hotelCount})</option>
+            ))}
+          </select>
+          <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>or</span>
           <input
             className="c-input" placeholder="Destination or region (e.g. Maldives)"
             value={dest} onChange={(e) => setDest(e.target.value)}
