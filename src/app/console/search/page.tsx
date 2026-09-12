@@ -2912,7 +2912,7 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
       blocked_suppliers: blocked,
       use_ratehawk: !blocked.includes('ratehawk'),
       markup_override_pct: num(f.markup_override_pct),
-      recommend_rank: intNum(f.recommend_rank),
+      recommend_rank: intNum(f.recommend_rank) ?? 0,
       transfer_type: txt(f.transfer_type),
       transfer_included_override: f.transfer_included_override === '' ? null : f.transfer_included_override === 'yes',
       transfer_cost_adult: num(f.transfer_cost_adult),
@@ -3385,12 +3385,6 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                 )}
               </ManageGroup>
 
-              {/* ── Notes ── */}
-              <ManageGroup title="Notes">
-                <Field label="Internal notes">
-                  <textarea className="c-input" rows={3} value={form.internal_notes} onChange={(e) => set('internal_notes', e.target.value)} style={{ resize: 'vertical' }} />
-                </Field>
-              </ManageGroup>
             </>
           )}
 
