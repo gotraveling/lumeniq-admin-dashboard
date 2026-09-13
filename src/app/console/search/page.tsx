@@ -2470,6 +2470,23 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
 // dirty flag, and saves via PUT /api/admin/control. On markup save it ALSO
 // writes a per-hotel booking-engine pricing rule (the thing that actually
 // changes the sell price) and echoes the % into control.markup_override_pct.
+//
+// One row of the markup audit trail (pricing_rule_history). 'retired' rows are
+// duplicate rules the upsert deactivated, not value changes.
+type MarkupHistoryRow = {
+  id: number;
+  ruleId: number | null;
+  action: 'created' | 'set' | 'retired' | 'reactivated' | 'deleted';
+  oldPercentage: number | null;
+  newPercentage: number | null;
+  changedBy: string | null;
+  source: string | null;
+  changedAt: string;
+};
+
+function fmtPct(v: number | null | undefined) {
+  return v == null ? '—' : `${Number(v)}%`;
+}
 // Numeric fields from postgres arrive as strings — we keep them as strings
 // in form state and coerce on save.
 
@@ -2722,6 +2739,23 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
   const [savedAt, setSavedAt] = useState<number | null>(null);
   // Note when the pricing-rule write is skipped/failed (markup still saved).
   const [ruleNote, setRuleNote] = useState<string | null>(null);
+  // Markup audit trail for this property. pricing_rules keeps only the current
+  // value, so this is the only place a past markup is recoverable.
+  const [markupHistory, setMarkupHistory] = useState<MarkupHistoryRow[]>([]);
+
+  const loadMarkupHistory = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/pricing/markup?hotelId=${hotelId}`, { cache: 'no-store' });
+      if (!r.ok) return;
+      const j = await r.json().catch(() => null);
+      setMarkupHistory(j?.data?.history || []);
+    } catch { /* history is informational — never block the drawer */ }
+  }, [hotelId]);
+
+  useEffect(() => {
+    if (!open) return;
+    loadMarkupHistory();
+  }, [open, loadMarkupHistory]);
 
   // ── Editorial group state (separate endpoint from the control PUT) ──
   const [edForm, setEdForm] = useState<EditorialForm>(emptyEditorialForm());
@@ -2993,7 +3027,12 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
     try {
       const res = await fetch(`/api/pricing/markup?hotelId=${hotelId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // Recorded against the markup history row, so "who changed this?"
+          // is answerable later.
+          ...(userEmail ? { 'X-Consultant-Email': userEmail } : {}),
+        },
         body: JSON.stringify({
           markup_percentage: pct,
           hotel_name: hotelName || undefined,
@@ -3029,6 +3068,7 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
       const pricingChanged = typeof pct === 'number' && form.markup_override_pct !== baseline.markup_override_pct;
       if (pricingChanged) {
         note = await writePricingRule(pct);
+        loadMarkupHistory();
       }
       // 2) Control row (always).
       const res = await fetch(`/api/admin/control?hotelId=${hotelId}`, {
@@ -3210,6 +3250,21 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                 <Field label="Markup override %">
                   <input className="c-input" type="number" step="0.1" style={{ maxWidth: 200 }}
                     value={form.markup_override_pct} onChange={(e) => set('markup_override_pct', e.target.value)} placeholder="e.g. 12.5" />
+                  {markupHistory.length > 0 && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: 'var(--c-fg-muted)', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      {markupHistory.slice(0, 5).map((h) => (
+                        <div key={h.id}>
+                          {h.action === 'retired'
+                            ? `retired ${fmtPct(h.oldPercentage)} duplicate`
+                            : h.oldPercentage != null
+                              ? `${fmtPct(h.oldPercentage)} → ${fmtPct(h.newPercentage)}`
+                              : `set ${fmtPct(h.newPercentage)}`}
+                          {' · '}{new Date(h.changedAt).toLocaleString()}
+                          {h.changedBy ? ` · ${h.changedBy}` : ''}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </Field>
                 <p style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', margin: '6px 0 0' }}>
                   Saving also writes a per-hotel pricing rule (priority 100) so this markup applies to live rates.

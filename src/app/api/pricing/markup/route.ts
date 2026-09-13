@@ -47,9 +47,17 @@ export async function PUT(request: NextRequest) {
   if (!hotelId) return NextResponse.json({ error: 'hotelId required' }, { status: 400 });
   try {
     const body = await request.json();
+    // Forward who is making the change so the engine can write it into the
+    // markup audit trail. Without it every history row reads "unknown", which
+    // is most of the value gone.
+    const changedBy = request.headers.get('x-consultant-email') || '';
     const r = await fetch(upstream(hotelId), {
       method: 'PUT',
-      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
+      headers: {
+        'X-API-Key': API_KEY,
+        'Content-Type': 'application/json',
+        ...(changedBy ? { 'X-Consultant-Email': changedBy } : {}),
+      },
       body: JSON.stringify(body),
     });
     return NextResponse.json(await r.json().catch(() => ({ error: `HTTP ${r.status}` })), { status: r.status });
