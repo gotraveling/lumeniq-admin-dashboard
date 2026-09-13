@@ -1267,6 +1267,11 @@ export default function ConsoleSearchPage() {
             // fan-out) — not the hotel's default supplier.
             supplier: chosenRate.supplier,
             rateKey: chosenRate.rateKey,
+            // The board, so a markup narrowed to particular meal plans
+            // resolves to the same rule at prebook that search used. Without
+            // it the engine falls back to the hotel-wide markup and the held
+            // price can differ from the quote.
+            ratePlan: chosenRate.ratePlan || undefined,
             searchParams: {
               checkIn, checkOut,
               adults: totalAdults,
@@ -1390,6 +1395,10 @@ export default function ConsoleSearchPage() {
         // booking form. Falls back to the search-time rateKey for
         // suppliers where prebook was skipped (Hummingbird).
         rateKey: prebook?.prebookHash || chosenRate.rateKey,
+        // Board — see the prebook call. The booking audit records which markup
+        // rule was charged; without this it would record the hotel-wide rule
+        // even when a meal-plan-scoped one set the price.
+        ratePlan: chosenRate.ratePlan || undefined,
         partnerOrderIdOverride: prebook?.partnerOrderId,
         guestInfo:   { firstName: custFirst.trim(), lastName: custLast.trim(), email: custEmail.trim(), phone: custPhone.trim() || undefined },
         contactInfo: { firstName: custFirst.trim(), lastName: custLast.trim(), email: custEmail.trim(), phone: custPhone.trim() || undefined },
@@ -2484,6 +2493,23 @@ type MarkupHistoryRow = {
   changedAt: string;
 };
 
+// A markup narrowed to particular meal plans. Wins over the hotel-wide figure
+// for the boards it names; everything else keeps the hotel-wide markup.
+type ScopedMarkup = {
+  id: number;
+  markup_percentage: number;
+  rate_plans: string[];
+  rule_name?: string;
+};
+
+const MEAL_PLAN_CHOICES: Array<{ value: string; label: string }> = [
+  { value: 'nomeal', label: 'Room only' },
+  { value: 'breakfast', label: 'Breakfast' },
+  { value: 'halfboard', label: 'Half board' },
+  { value: 'fullboard', label: 'Full board' },
+  { value: 'allinclusive', label: 'All inclusive' },
+];
+
 function fmtPct(v: number | null | undefined) {
   return v == null ? '—' : `${Number(v)}%`;
 }
@@ -2742,6 +2768,12 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
   // Markup audit trail for this property. pricing_rules keeps only the current
   // value, so this is the only place a past markup is recoverable.
   const [markupHistory, setMarkupHistory] = useState<MarkupHistoryRow[]>([]);
+  // Meal-plan-scoped markups on this property, plus the editor for adding one.
+  const [scopedMarkups, setScopedMarkups] = useState<ScopedMarkup[]>([]);
+  const [scopedPct, setScopedPct] = useState('');
+  const [scopedPlans, setScopedPlans] = useState<string[]>([]);
+  const [scopedSaving, setScopedSaving] = useState(false);
+  const [scopedErr, setScopedErr] = useState<string | null>(null);
 
   const loadMarkupHistory = useCallback(async () => {
     try {
@@ -2749,6 +2781,7 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
       if (!r.ok) return;
       const j = await r.json().catch(() => null);
       setMarkupHistory(j?.data?.history || []);
+      setScopedMarkups(j?.data?.scoped || []);
     } catch { /* history is informational — never block the drawer */ }
   }, [hotelId]);
 
@@ -2756,6 +2789,39 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
     if (!open) return;
     loadMarkupHistory();
   }, [open, loadMarkupHistory]);
+
+  // Save a markup for specific meal plans only. Goes to the same upsert as the
+  // hotel-wide markup, which keeps the two scopes separate — setting one never
+  // retires the other.
+  async function saveScopedMarkup() {
+    const pct = Number(scopedPct);
+    if (!Number.isFinite(pct) || !scopedPlans.length) return;
+    setScopedSaving(true);
+    setScopedErr(null);
+    try {
+      const r = await fetch(`/api/pricing/markup?hotelId=${hotelId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(userEmail ? { 'X-Consultant-Email': userEmail } : {}),
+        },
+        body: JSON.stringify({
+          markup_percentage: pct,
+          hotel_name: hotelName || undefined,
+          rate_plans: scopedPlans,
+        }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(j?.message || j?.error || `HTTP ${r.status}`);
+      setScopedPct('');
+      setScopedPlans([]);
+      loadMarkupHistory();
+    } catch (e: unknown) {
+      setScopedErr(e instanceof Error ? e.message : 'Could not save');
+    } finally {
+      setScopedSaving(false);
+    }
+  }
 
   // ── Editorial group state (separate endpoint from the control PUT) ──
   const [edForm, setEdForm] = useState<EditorialForm>(emptyEditorialForm());
@@ -3250,6 +3316,47 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
                 <Field label="Markup override %">
                   <input className="c-input" type="number" step="0.1" style={{ maxWidth: 200 }}
                     value={form.markup_override_pct} onChange={(e) => set('markup_override_pct', e.target.value)} placeholder="e.g. 12.5" />
+                  {/* Meal-plan-scoped markups. A rate's board decides which
+                      markup it gets, so a hotel whose room-only rate supports
+                      40% no longer has to price half board at the same number. */}
+                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--c-line)' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--c-fg-muted)', marginBottom: 4 }}>
+                      By meal plan
+                    </div>
+                    {scopedMarkups.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 6, fontSize: 12 }}>
+                        {scopedMarkups.map((sm) => (
+                          <div key={sm.id}>
+                            <strong>{fmtPct(sm.markup_percentage)}</strong>{' — '}
+                            {sm.rate_plans.map((pl) => MEAL_PLAN_CHOICES.find((c) => c.value === pl)?.label || pl).join(', ')}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input className="c-input" type="number" step="0.1" style={{ maxWidth: 96 }}
+                        value={scopedPct} onChange={(e) => setScopedPct(e.target.value)} placeholder="%" />
+                      {MEAL_PLAN_CHOICES.map((c) => {
+                        const on = scopedPlans.includes(c.value);
+                        return (
+                          <button key={c.value} type="button" className="c-btn"
+                            style={{ fontSize: 11, padding: '3px 8px', background: on ? 'var(--c-accent)' : undefined, color: on ? '#fff' : undefined }}
+                            onClick={() => setScopedPlans((prev) => on ? prev.filter((x) => x !== c.value) : [...prev, c.value])}>
+                            {c.label}
+                          </button>
+                        );
+                      })}
+                      <button type="button" className="c-btn c-btn-primary" style={{ fontSize: 11, padding: '3px 10px' }}
+                        disabled={scopedSaving || !scopedPlans.length || !scopedPct}
+                        onClick={saveScopedMarkup}>
+                        {scopedSaving ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: 11, color: 'var(--c-fg-muted)' }}>
+                      Boards you don&apos;t name here keep the markup above.
+                    </div>
+                    {scopedErr && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--c-warning, #b45309)' }}>{scopedErr}</div>}
+                  </div>
                   {markupHistory.length > 0 && (
                     <div style={{ marginTop: 6, fontSize: 11, color: 'var(--c-fg-muted)', display: 'flex', flexDirection: 'column', gap: 2 }}>
                       {markupHistory.slice(0, 5).map((h) => (
