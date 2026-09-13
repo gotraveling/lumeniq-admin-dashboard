@@ -38,7 +38,7 @@ interface CollectionMarketing {
 }
 interface CollectionHotel {
   hotelId?: number; name: string; atoll?: string; image?: string; images?: string[];
-  offer?: string; bookBy?: string; editorial?: string; customisable?: boolean;
+  offer?: string; bookBy?: string; editorial?: string; whyThisHotel?: string; customisable?: boolean;
   hidden?: boolean;
   /** Already round-tripped through this editor untyped — the load assigns the
    *  API's hotels wholesale and the save sends them back whole, and hotel-api
@@ -645,6 +645,7 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
                   </label>
                 </Field>
                 <Field label="Editorial blurb"><textarea className="c-input" rows={2} value={h.editorial || ''} onChange={(e) => setHotel(i, { editorial: e.target.value })} /></Field>
+                <Field label="Why this hotel (optional — shown on the card only when filled)"><textarea className="c-input" rows={3} value={h.whyThisHotel || ''} onChange={(e) => setHotel(i, { whyThisHotel: e.target.value })} /></Field>
                 <Field label="Extra photos — one URL per line (2+ → card shows a carousel; first is the primary)">
                   <textarea className="c-input" rows={2} value={(h.images || []).join('\n')}
                     onChange={(e) => setHotel(i, { images: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} />
@@ -723,13 +724,32 @@ function HotelSearch({ onAdd }: { onAdd: (h: CollectionHotel) => void }) {
   const [results, setResults] = useState<Array<{ hotel_id: number; name: string; city?: string; country?: string }>>([]);
   const [searching, setSearching] = useState(false);
 
+  // Search via /api/search/multi (Meilisearch, canonical-collapsed) — the same
+  // path the B2B search page uses.
+  //
+  // This used to call hotel-api /api/hotels/search, which matches the WHOLE
+  // query as one contiguous substring of the hotel name. So "four seasons
+  // cairo" returned nothing — the real name is "Four Seasons Hotel Cairo at
+  // Nile Plaza" and those words are never adjacent in that order. Brand + city
+  // is how everyone searches, so it failed on the most natural input, silently
+  // and with no error. Worse, "four seasons nile" matched ONLY "Chez Haytham At
+  // Four Seasons Nile Plaza Residential Suite" — a residential listing — so you
+  // could add the wrong property without noticing.
+  //
+  // Meili runs matchingStrategy:'all' (every typed word must match) and the
+  // engine collapses canonical siblings, so a hotel carried by two suppliers
+  // appears once rather than twice.
   async function run() {
     if (q.trim().length < 2) return;
     setSearching(true);
     try {
-      const r = await fetch(`${HOTEL_API}/api/hotels/search?query=${encodeURIComponent(q)}&limit=10`);
+      const r = await fetch('/api/search/multi', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: q.trim(), limit: 10 }),
+      });
       const d = await r.json();
-      const rows = (d.hotels || d.results || d || []) as Array<Record<string, unknown>>;
+      const rows = (d.hotels || []) as Array<Record<string, unknown>>;
       setResults(rows.map((h) => ({
         hotel_id: Number(h.hotel_id ?? h.id),
         name: String(h.name ?? h.hotel_name ?? ''),
