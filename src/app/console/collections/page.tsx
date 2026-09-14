@@ -35,6 +35,23 @@ interface CollectionPackage {
 }
 interface CollectionMarketing {
   recommend_rank?: number | null;
+  /** Advertised example stay length for this hotel; overrides the collection's
+   *  campaign length. Read here so the month grid prices the length the card
+   *  actually shows. */
+  package_nights?: number | null;
+}
+/** Which offer this card advertises. A decision, not a snapshot: no price, no
+ *  promo wording and no "was" figure is ever stored — those are resolved live
+ *  at render, so a choice survives while the numbers stay current. Keyed on the
+ *  travel window and rate shape, because a rate often carries no offer at all
+ *  and an offer name is a label the supplier can retitle. */
+interface OfferSelection {
+  mode: 'auto' | 'manual';
+  month?: string;        // 'YYYY-MM'
+  nights?: number;
+  board?: string;
+  transfer?: string;
+  offerName?: string;    // display only, never matched on
 }
 interface CollectionHotel {
   hotelId?: number; name: string; atoll?: string; image?: string; images?: string[];
@@ -46,6 +63,7 @@ interface CollectionHotel {
    *  why Soneva Fushi still reads "[Price — TBC]" on the live collection. */
   packages?: CollectionPackage[];
   marketing?: CollectionMarketing | null;
+  offerSelection?: OfferSelection | null;
 }
 interface CollectionFull {
   id: number; slug: string; title: string; subtitle?: string; heroImage?: string;
@@ -646,6 +664,20 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
                 </Field>
                 <Field label="Editorial blurb"><textarea className="c-input" rows={2} value={h.editorial || ''} onChange={(e) => setHotel(i, { editorial: e.target.value })} /></Field>
                 <Field label="Why this hotel (optional — shown on the card only when filled)"><textarea className="c-input" rows={3} value={h.whyThisHotel || ''} onChange={(e) => setHotel(i, { whyThisHotel: e.target.value })} /></Field>
+                {h.hotelId && (
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <PhotoPicker hotelId={h.hotelId} image={h.image} images={h.images}
+                      onChange={(patch) => setHotel(i, patch)} />
+                  </div>
+                )}
+                {h.hotelId && (
+                  <OfferSelector
+                    hotelId={h.hotelId}
+                    packageNights={h.marketing?.package_nights ?? value.campaignPackageNights ?? null}
+                    selection={h.offerSelection}
+                    onChange={(sel) => setHotel(i, { offerSelection: sel })}
+                  />
+                )}
                 <Field label="Extra photos — one URL per line (2+ → card shows a carousel; first is the primary)">
                   <textarea className="c-input" rows={2} value={(h.images || []).join('\n')}
                     onChange={(e) => setHotel(i, { images: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} />
@@ -719,6 +751,147 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
   );
 }
 
+/** One month's cheapest warmed rate for a hotel, from
+ *  /api/admin/search/rates-by-month. Candidates only — never written anywhere. */
+interface MonthRate {
+  month: string;            // 'YYYY-MM'
+  checkIn?: string;
+  nights?: number;
+  fromTotal?: number;
+  fromNightly?: number;
+  supplierWasTotal?: number | null;
+  currency?: string;
+  board?: string | null;
+  transfer?: string | null;
+  offerName?: string | null;
+  freeCancellation?: boolean;
+}
+
+/**
+ * Which offer a card advertises.
+ *
+ * Stores a DECISION, never a price. "February 2027, 4 nights, full board" is
+ * resolved against the live rates when the page renders, so the choice
+ * persists while the numbers stay current — the old Apply-report button copied
+ * the promo wording and price of the moment into the collection, and a card
+ * could still read "Up to 20% off" long after that offer ended.
+ *
+ * Keyed on the travel window and rate shape rather than the offer, because a
+ * rate often has no offer at all (Soneva Secret's September row and Soneva
+ * Jani's October row both come back with no offer name) and an offer's name is
+ * a label the supplier can retitle.
+ *
+ * Candidates come from the warmed rate cache, so opening this costs nothing and
+ * hits no supplier. Running a fresh scan widens the net; it still only proposes.
+ */
+function OfferSelector({ hotelId, packageNights, selection, onChange }: {
+  hotelId: number;
+  packageNights?: number | null;
+  selection?: OfferSelection | null;
+  onChange: (sel: OfferSelection) => void;
+}) {
+  const [rows, setRows] = useState<MonthRate[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const mode = selection?.mode === 'manual' ? 'manual' : 'auto';
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const qs = new URLSearchParams({ hotelIds: String(hotelId), months: '12' });
+      if (packageNights) qs.set('los', String(packageNights));
+      const r = await fetch(`/api/admin/rates-by-month?${qs.toString()}`, { cache: 'no-store' });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setRows(j?.results?.[String(hotelId)]?.months || []);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'could not load rates');
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [hotelId, packageNights]);
+
+  // The picked window, if it is still in the warmed set. When it is not, the
+  // selection has lapsed — the offer ended or the window aged out — and the
+  // card falls back to auto until someone chooses again.
+  const picked = selection?.mode === 'manual' && rows
+    ? rows.find((r) => r.month === selection.month)
+    : undefined;
+  const lapsed = selection?.mode === 'manual' && rows !== null && !picked;
+
+  return (
+    <div style={{ gridColumn: '1 / -1', borderTop: '1px solid var(--c-line)', paddingTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span className="c-label">Offer shown on the card</span>
+        <button type="button" className="c-btn"
+          style={{ fontSize: 11, padding: '3px 8px', background: mode === 'auto' ? 'var(--c-accent)' : undefined, color: mode === 'auto' ? '#fff' : undefined }}
+          onClick={() => onChange({ mode: 'auto' })}>
+          Auto — best current offer
+        </button>
+        <button type="button" className="c-btn" style={{ fontSize: 11, padding: '3px 8px' }}
+          onClick={() => { if (!rows) load(); }} disabled={loading}>
+          {loading ? 'loading…' : rows ? 'Reload months' : 'Pick a month…'}
+        </button>
+        {mode === 'manual' && selection?.month && (
+          <span style={{ fontSize: 11, color: lapsed ? 'var(--c-warning, #b45309)' : 'var(--c-fg-muted)' }}>
+            {lapsed
+              ? `pinned ${selection.month} is no longer available — showing Auto until you repick`
+              : `pinned ${selection.month}${selection.nights ? ` · ${selection.nights}n` : ''}${selection.board ? ` · ${selection.board}` : ''}`}
+          </span>
+        )}
+      </div>
+
+      {err && <div style={{ fontSize: 11, color: 'var(--c-warning, #b45309)', marginTop: 4 }}>{err}</div>}
+
+      {rows && rows.length === 0 && !loading && (
+        <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginTop: 4 }}>
+          No warmed rates for this hotel{packageNights ? ` at ${packageNights} nights` : ''} — run the collection prewarm first.
+        </div>
+      )}
+
+      {rows && rows.length > 0 && (
+        <div style={{ marginTop: 6, display: 'grid', gap: 2 }}>
+          {rows.map((r) => {
+            const on = mode === 'manual' && selection?.month === r.month;
+            const cur = r.currency || 'USD';
+            const was = r.supplierWasTotal && r.fromTotal && r.supplierWasTotal > r.fromTotal
+              ? ` (was ${cur} ${Math.round(r.supplierWasTotal).toLocaleString()})` : '';
+            return (
+              <button key={r.month} type="button" className="c-btn"
+                style={{
+                  justifyContent: 'space-between', textAlign: 'left', fontSize: 11.5,
+                  background: on ? 'var(--c-accent)' : undefined, color: on ? '#fff' : undefined,
+                }}
+                onClick={() => onChange({
+                  mode: 'manual',
+                  month: r.month,
+                  nights: r.nights ?? packageNights ?? undefined,
+                  board: r.board ?? undefined,
+                  transfer: r.transfer ?? undefined,
+                  // Display only — the name on the page is always read live.
+                  offerName: r.offerName ?? undefined,
+                })}>
+                <span>
+                  {r.month}{r.nights ? ` · ${r.nights}n` : ''}{r.board ? ` · ${r.board}` : ''}
+                  {r.offerName ? ` · ${r.offerName}` : ' · no offer'}
+                </span>
+                <span className="c-mono">
+                  {r.fromTotal != null ? `${cur} ${Math.round(r.fromTotal).toLocaleString()}` : '—'}{was}
+                </span>
+              </button>
+            );
+          })}
+          <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', marginTop: 2 }}>
+            Cheapest warmed check-in per month. Only the choice is saved — the price and offer name on the page are read live.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HotelSearch({ onAdd }: { onAdd: (h: CollectionHotel) => void }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState<Array<{ hotel_id: number; name: string; city?: string; country?: string }>>([]);
@@ -774,6 +947,70 @@ function HotelSearch({ onAdd }: { onAdd: (h: CollectionHotel) => void }) {
               onClick={() => { onAdd({ hotelId: h.hotel_id, name: h.name, atoll: h.city, customisable: false }); setResults([]); setQ(''); }}>
               <span>{h.name}</span>
               <span className="c-mono" style={{ color: 'var(--c-fg-muted)' }}>#{h.hotel_id} · {h.city || ''} {h.country || ''}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Card photos the public page shows when none are set (page.tsx CARD_PHOTOS). */
+const CARD_PHOTOS = 8;
+
+/**
+ * Pick a hotel's card thumbnail from its own gallery instead of pasting URLs.
+ * Clicking a photo makes it the thumbnail and the first slide of the carousel;
+ * the rest of the carousel is kept (or seeded from the gallery if unset).
+ */
+function PhotoPicker({ hotelId, image, images, onChange }: {
+  hotelId: number; image?: string; images?: string[];
+  onChange: (patch: Partial<CollectionHotel>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [gallery, setGallery] = useState<string[] | null>(null);
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    setOpen((o) => !o);
+    if (gallery) return;
+    try {
+      const res = await fetch(`${HOTEL_API}/api/hotels/${hotelId}`);
+      const hotel = await res.json();
+      const urls = (Array.isArray(hotel.images) ? hotel.images : [])
+        .map((img: unknown) => typeof img === 'string' ? img
+          : (img as { url?: string; image_url?: string } | null)?.url || (img as { image_url?: string } | null)?.image_url || '')
+        .filter(Boolean);
+      setGallery(urls);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load photos');
+    }
+  };
+
+  const current = image || images?.[0] || gallery?.[0];
+  const pick = (url: string) => {
+    const base = images && images.length ? images : (gallery || []).slice(0, CARD_PHOTOS);
+    onChange({ image: url, images: [url, ...base.filter((u) => u !== url)] });
+  };
+
+  return (
+    <div style={{ display: 'grid', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span className="c-label">Thumbnail</span>
+        {current && <img src={current} alt="" style={{ width: 64, height: 44, objectFit: 'cover', borderRadius: 4 }} />}
+        <button className="c-btn" onClick={load}>{open ? 'Close' : 'Choose from hotel photos'}</button>
+        {(image || (images && images.length > 0)) && (
+          <button className="c-btn" onClick={() => onChange({ image: undefined, images: undefined })}>Reset to default</button>
+        )}
+      </div>
+      {open && error && <div style={{ color: 'var(--c-danger)', fontSize: 12 }}>{error}</div>}
+      {open && gallery && gallery.length === 0 && <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>No photos for this hotel.</div>}
+      {open && gallery && gallery.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 6 }}>
+          {gallery.map((url) => (
+            <button key={url} type="button" onClick={() => pick(url)} title="Use as thumbnail"
+              style={{ padding: 0, border: url === current ? '3px solid var(--c-accent, #7a6a45)' : '1px solid var(--c-line)', borderRadius: 4, cursor: 'pointer', background: 'none' }}>
+              <img src={url} alt="" loading="lazy" style={{ width: '100%', height: 76, objectFit: 'cover', display: 'block', borderRadius: 3 }} />
             </button>
           ))}
         </div>
