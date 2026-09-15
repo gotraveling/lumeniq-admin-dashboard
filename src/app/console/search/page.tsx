@@ -12,6 +12,7 @@ import remarkGfm from 'remark-gfm';
 import DateRangePicker from '@/components/console/DateRangePicker';
 import GuestSelector, { type RoomGuests } from '@/components/console/GuestSelector';
 import { useConsoleRole } from '@/lib/useConsoleRole';
+import { viaResizer } from '@/lib/imageUrl';
 
 type HotelHit = {
   id: number;
@@ -3814,7 +3815,7 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
       }}
     >
       {/* Image */}
-      <div style={{ width: 150, height: 104, borderRadius: 8, overflow: 'hidden', background: 'var(--c-bg-soft)', backgroundImage: resolveImg(h.image, '240x240') ? `url(${resolveImg(h.image, '240x240')})` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+      <div style={{ width: 150, height: 104, borderRadius: 8, overflow: 'hidden', background: 'var(--c-bg-soft)', backgroundImage: resolveImg(h.image, '240x240') ? `url(${viaResizer(resolveImg(h.image, '240x240'), 400)})` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
 
       {/* Hotel info */}
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -4785,7 +4786,7 @@ function RoomGroupedRates({
                       <div style={{
                         width: 64, height: 44, flexShrink: 0, borderRadius: 6, overflow: 'hidden',
                         backgroundColor: 'var(--c-bg-soft)',
-                        backgroundImage: `url(${cover})`,
+                        backgroundImage: `url(${viaResizer(cover, 400) || cover})`,
                         backgroundSize: 'cover',
                         backgroundPosition: 'center'
                       }} />
@@ -5366,8 +5367,7 @@ function RoomGroupedRates({
             </div>
             <div style={{ overflowY: 'auto', padding: 16, display: 'grid', gridTemplateColumns: photoModal.images.length > 1 ? 'repeat(auto-fill, minmax(240px, 1fr))' : '1fr', gap: 10 }}>
               {photoModal.images.map((src, i) => (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img key={i} src={src} alt={`${photoModal.name} ${i + 1}`} style={{ width: '100%', borderRadius: 8, objectFit: 'cover', background: 'var(--c-bg-soft)' }} />
+                <GalleryImage key={src} src={src} alt={`${photoModal.name} ${i + 1}`} />
               ))}
             </div>
           </div>
@@ -5376,6 +5376,45 @@ function RoomGroupedRates({
     </div>
   );
 }
+/**
+ * One tile in the room-photos lightbox.
+ *
+ * Reserves its box up front (4:3) and NEVER disappears. The old plain <img>
+ * had no height of its own, so a photo that failed to load collapsed to nothing
+ * — which is why a room labelled "4 photos" could render three, with no hint
+ * that one was missing. Loads through our resizer (26KB instead of ~200KB at
+ * this size), falls back to the supplier original if the resizer can't serve
+ * it, and only then shows a visible "photo unavailable" box. The count on the
+ * button and the number of tiles on screen now always agree.
+ */
+function GalleryImage({ src, alt }: { src: string; alt: string }) {
+  const resized = viaResizer(src, 800);
+  const [stage, setStage] = useState<'resized' | 'original' | 'failed'>(
+    resized && resized !== src ? 'resized' : 'original'
+  );
+  const box: React.CSSProperties = {
+    width: '100%', aspectRatio: '4 / 3', borderRadius: 8,
+    background: 'var(--c-bg-soft)', border: '1px solid var(--c-line-soft)',
+  };
+  if (stage === 'failed') {
+    return (
+      <div style={{ ...box, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, color: 'var(--c-fg-muted)', fontSize: 11 }}>
+        <ImageIcon size={14} /> photo unavailable
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={stage === 'resized' ? resized : src}
+      alt={alt}
+      loading="lazy"
+      onError={() => setStage(stage === 'resized' ? 'original' : 'failed')}
+      style={{ ...box, objectFit: 'cover', display: 'block' }}
+    />
+  );
+}
+
 const thStyle: React.CSSProperties = { fontWeight: 700, fontSize: 11, letterSpacing: 0.05, textTransform: 'uppercase', padding: '6px 8px', color: 'var(--c-fg-muted)' };
 const tdStyle: React.CSSProperties = { padding: '8px 8px', verticalAlign: 'middle', color: 'var(--c-fg)' };
 // Plan column: rate-plan strings like "Half Board Dine Around · Transfer YT"
