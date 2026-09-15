@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
-import { Search, Star, MapPin, Loader2, ArrowLeft, Filter, Pencil, CheckCircle2, AlertTriangle, X, Plus, Maximize2, Minimize2, Image as ImageIcon, StickyNote, Ban } from 'lucide-react';
+import { Search, Star, MapPin, Loader2, ArrowLeft, Filter, Pencil, CheckCircle2, AlertTriangle, X, Plus, Maximize2, Minimize2, Image as ImageIcon, StickyNote, Ban,
+  Bath, ShowerHead, Lock, Snowflake, Tv, Wind, Refrigerator, Wine, Shirt, Phone, Coffee, Sparkles, Ruler } from 'lucide-react';
 import DestinationAutocomplete, { type DestinationAutocompleteHandle } from '@/components/console/DestinationAutocomplete';
 import CountryPicker from '@/components/console/CountryPicker';
 import ReactMarkdown from 'react-markdown';
@@ -142,6 +143,9 @@ type AdminRate = {
   roomImage?: string | null;
   /** Every photo held for the matched room. roomImage is the first of these. */
   roomImages?: string[] | null;
+  /** Facilities of the matched room, as supplier slugs ('private-bathroom',
+   *  'air-conditioning', 'tv', …). Empty when the rate matched no static room. */
+  roomAmenities?: string[] | null;
   /** The property's OWN rate name, when the supplier exposes it — RateHawk's
    *  room_name_info.original_rate_name, which is permissioned and currently
    *  null for us. roomTypeName stays the primary name; this is extra detail
@@ -4736,6 +4740,12 @@ function RoomGroupedRates({
             .filter((v): v is string => !!v)
         ));
         const cover = groupImages[0] || null;
+        // Facilities for this room. Union across the group's rates: they are
+        // the same room, so any rate that matched static content speaks for
+        // all of them — a rate that failed to match shouldn't blank the row.
+        const groupAmenities = Array.from(new Set(
+          g.rates.flatMap(r => r.roomAmenities || [])
+        ));
         // Valentin (2026-05-28): show 3–5 rate options per room with
         // different conditions, not just the cheapest. We surface the
         // top 3 by composite score and collapse the rest behind a
@@ -4805,6 +4815,7 @@ function RoomGroupedRates({
                           </span>
                         )}
                       </div>
+                      <RoomAmenities codes={groupAmenities} />
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -5376,6 +5387,98 @@ function RoomGroupedRates({
     </div>
   );
 }
+/**
+ * Room facilities, as the supplier slugs them.
+ *
+ * RateHawk ships a per-room `amenities` list ('private-bathroom', 'safe',
+ * 'air-conditioning', 'tv', 'hairdryer', 'fridge', …) on the same room record
+ * we already read for photos — their own page renders it as the chip row under
+ * the room name, and we were dropping it. 22 distinct values observed at Amane
+ * Resort Seikai across 146 of 147 rooms.
+ *
+ * Ordered most-asked first, because the row is capped: a consultant on the
+ * phone wants bathroom, aircon, bath, fridge — not 'mirror'. An unlisted slug
+ * still renders, de-slugged, with no icon, so a new supplier value shows up as
+ * readable text rather than disappearing.
+ */
+const AMENITY_META: Record<string, { label: string; Icon?: React.ComponentType<{ size?: number }> }> = {
+  'private-bathroom':  { label: 'Private bathroom', Icon: ShowerHead },
+  'shared-bathroom':   { label: 'Shared bathroom',  Icon: ShowerHead },
+  'bath':              { label: 'Bath',             Icon: Bath },
+  'shower':            { label: 'Shower',           Icon: ShowerHead },
+  'air-conditioning':  { label: 'Air conditioning', Icon: Snowflake },
+  'heating':           { label: 'Heating',          Icon: Wind },
+  'balcony':           { label: 'Balcony' },
+  'with-view':         { label: 'View' },
+  'kitchen':           { label: 'Kitchen' },
+  'fridge':            { label: 'Fridge',           Icon: Refrigerator },
+  'mini-bar':          { label: 'Minibar',          Icon: Wine },
+  'tea':               { label: 'Tea / coffee',     Icon: Coffee },
+  'safe':              { label: 'Safe',             Icon: Lock },
+  'tv':                { label: 'TV',               Icon: Tv },
+  'telephone':         { label: 'Telephone',        Icon: Phone },
+  'hairdryer':         { label: 'Hairdryer',        Icon: Wind },
+  'bathrobe':          { label: 'Bathrobe',         Icon: Shirt },
+  'slippers':          { label: 'Slippers' },
+  'toiletries':        { label: 'Toiletries',       Icon: Sparkles },
+  'towels':            { label: 'Towels' },
+  'wardrobe':          { label: 'Wardrobe' },
+  'mirror':            { label: 'Mirror' },
+};
+/** Display order — the chip row is capped, so put the useful ones first. */
+const AMENITY_ORDER = [
+  'private-bathroom', 'shared-bathroom', 'bath', 'shower', 'air-conditioning',
+  'heating', 'balcony', 'with-view', 'kitchen', 'fridge', 'mini-bar', 'tea',
+  'safe', 'tv', 'telephone', 'hairdryer', 'bathrobe', 'slippers', 'toiletries',
+  'towels', 'wardrobe', 'mirror',
+];
+function deslug(s: string): string {
+  const t = s.replace(/[-_]+/g, ' ').trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/**
+ * The chip row under a room name — the facilities of THIS room, matching what
+ * the supplier's own page shows. Capped at 8 with a "+N" tail so a room with 14
+ * facilities doesn't push the rate table off the screen; hovering the tail
+ * lists the rest.
+ */
+function RoomAmenities({ codes }: { codes: string[] }) {
+  if (!codes.length) return null;
+  const ranked = [...codes].sort((a, b) => {
+    const ia = AMENITY_ORDER.indexOf(a); const ib = AMENITY_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+  const CAP = 8;
+  const shown = ranked.slice(0, CAP);
+  const rest = ranked.slice(CAP);
+  const chip: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    fontSize: 10.5, fontWeight: 500, color: 'var(--c-fg-soft)',
+    background: 'var(--c-bg-soft)', border: '1px solid var(--c-line-soft)',
+    borderRadius: 5, padding: '2px 6px', whiteSpace: 'nowrap',
+  };
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
+      {shown.map((code) => {
+        const meta = AMENITY_META[code];
+        const Icon = meta?.Icon;
+        return (
+          <span key={code} style={chip}>
+            {Icon ? <Icon size={11} /> : null}{meta?.label || deslug(code)}
+          </span>
+        );
+      })}
+      {rest.length > 0 && (
+        <span
+          style={{ ...chip, color: 'var(--c-fg-muted)', cursor: 'default' }}
+          title={rest.map((c) => AMENITY_META[c]?.label || deslug(c)).join(' · ')}
+        >+{rest.length} more</span>
+      )}
+    </div>
+  );
+}
+
 /**
  * One tile in the room-photos lightbox.
  *
