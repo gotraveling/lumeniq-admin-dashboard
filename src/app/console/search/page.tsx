@@ -141,6 +141,11 @@ type AdminRate = {
   roomImage?: string | null;
   /** Every photo held for the matched room. roomImage is the first of these. */
   roomImages?: string[] | null;
+  /** The property's OWN rate name, when the supplier exposes it — RateHawk's
+   *  room_name_info.original_rate_name, which is permissioned and currently
+   *  null for us. roomTypeName stays the primary name; this is extra detail
+   *  so a consultant can match what they see on the supplier's own portal. */
+  originalRateName?: string | null;
   // Tier of rg_ext / name match that resolved roomImage + roomGroupName.
   // 'strict' = ETG §2.4 (all 12 rg_ext fields). Degraded tiers
   // (class_bedding / class) cover sandbox rg_ext drift on luxury cert
@@ -4687,12 +4692,33 @@ function RoomGroupedRates({
     return withAud.length > 0 && withAud.every(r => r.pricing?.audSource === 'converted');
   }, [rates]);
 
+  // How many nights these totals cover. Everything money-shaped on this panel
+  // is a TOTAL, but "total" alone is ambiguous — on a one-night stay it is
+  // indistinguishable from a per-night rate, and a consultant reading "568 AUD
+  // total" has no way to tell whether that is the night or the stay. Derived
+  // from the rates rather than passed in, so it cannot disagree with them.
+  const stayNights = useMemo(() => {
+    for (const r of rates) {
+      const t = r.pricing?.net?.totalAmount;
+      const n = r.pricing?.net?.nightlyAmount;
+      if (t != null && n != null && n > 0) return Math.max(1, Math.round(t / n));
+    }
+    return null;
+  }, [rates]);
+  const nightsLabel = stayNights ? `${stayNights} night${stayNights === 1 ? '' : 's'}` : null;
+
   return (
     <div style={{ marginTop, display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg)' }}>
           Available rooms ({groups.length})
         </span>
+        {nightsLabel && (
+          <span
+            title="Every price on this panel is the total for the whole stay, not a nightly rate"
+            style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-soft)' }}
+          >totals for {nightsLabel}</span>
+        )}
         {fxRate != null && (
           <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
             {audConverted ? `Sell + Net shown in AUD @ ${fxRate}` : 'Sell + Net shown in AUD'}
@@ -4885,7 +4911,7 @@ function RoomGroupedRates({
                   return (
                     <div style={{ marginBottom: 12, overflowX: 'auto' }}>
                       <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', marginBottom: 6 }}>
-                        Sell / net total (AUD) — meal plan × transfer
+                        Sell / net for {nightsLabel || 'the stay'} (AUD) — meal plan × transfer
                       </div>
                       <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 320, border: '1px solid var(--c-line)' }}>
                         <thead>
@@ -4939,6 +4965,15 @@ function RoomGroupedRates({
                     {visibleRates.map((r, i) => {
                       const isRecommended = r.rateKey === g.recommendedKey;
                       const rowBlocked = blockedSet.has((r.supplier || '').toLowerCase());
+                      // On a one-night stay the total and the per-night figure
+                      // are the same number, so printing both read as two
+                      // prices: "568 AUD total / 405 USD / 568 AUD/nt · 405
+                      // USD/nt". Drop the per-night line when it adds nothing.
+                      const perNightSameAsTotal =
+                        r.pricing.net?.totalAmount != null
+                        && r.pricing.net?.nightlyAmount != null
+                        && Math.round(r.pricing.net.totalAmount) === Math.round(r.pricing.net.nightlyAmount);
+                      const showPerNight = !isMaldives && !perNightSameAsTotal;
                       const rowBorder = isRecommended
                         ? '1.5px solid var(--c-accent)'
                         : '1px solid var(--c-line-soft)';
@@ -4995,6 +5030,16 @@ function RoomGroupedRates({
                         </td>
                         <td style={planTdStyle}>
                           {r.ratePlan || 'nomeal'}
+                          {/* The property's own rate name, when the supplier
+                              sends it. Null today — RateHawk gates it behind
+                              room_name_info — so this simply doesn't render
+                              until they enable it. */}
+                          {r.originalRateName && (
+                            <div
+                              title="The property's own name for this rate, as shown on the supplier's portal"
+                              style={{ marginTop: 2, fontSize: 11, color: 'var(--c-fg-soft)', lineHeight: 1.3 }}
+                            >{r.originalRateName}</div>
+                          )}
                           {showRgDebug && r.matchTier && r.matchTier !== 'strict' && (
                             <span style={{
                               marginLeft: 6,
@@ -5131,7 +5176,7 @@ function RoomGroupedRates({
                                 <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
                                   {fmtMoney(r.pricing.net?.totalAmount)} {r.pricing.currency}
                                 </div>
-                                {!isMaldives && (
+                                {showPerNight && (
                                   <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
                                     {fmtMoney(r.pricing.net.aud.nightlyAmount ?? undefined)} AUD/nt · {fmtMoney(r.pricing.net?.nightlyAmount)} {r.pricing.currency}/nt
                                   </div>
@@ -5142,7 +5187,7 @@ function RoomGroupedRates({
                                 <div style={{ fontWeight: 600 }}>
                                   {fmtMoney(r.pricing.net?.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>{r.pricing.currency} total</span>
                                 </div>
-                                {!isMaldives && (
+                                {showPerNight && (
                                   <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
                                     {fmtMoney(r.pricing.net?.nightlyAmount)} {r.pricing.currency}/nt
                                   </div>
@@ -5204,7 +5249,7 @@ function RoomGroupedRates({
                                 <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
                                   {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency}
                                 </div>
-                                {!isMaldives && (
+                                {showPerNight && (
                                   <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
                                     {fmtMoney(r.pricing.aud.nightlyAmount ?? undefined)} AUD/nt · {fmtMoney(r.pricing.sell?.nightlyAmount)} {r.pricing.currency}/nt
                                   </div>
@@ -5215,7 +5260,7 @@ function RoomGroupedRates({
                                 <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
                                   {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>total</span>
                                 </div>
-                                {!isMaldives && (
+                                {showPerNight && (
                                   <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
                                     {fmtMoney(r.pricing.sell?.nightlyAmount)} {r.pricing.currency}/nt
                                   </div>
