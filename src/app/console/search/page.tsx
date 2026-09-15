@@ -5235,9 +5235,41 @@ function RoomGroupedRates({
                                 >{pct}%</div>
                               );
                             })()}
-                            <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
-                              {fmtMoneyWithCode(r.pricing.markup?.amount, r.pricing.currency || 'USD')}
-                            </div>
+                            {(() => {
+                              // The margin in AUD, because that is what the
+                              // consultant is paid in and what they compare
+                              // between rooms. Taken as AUD sell minus AUD net
+                              // rather than the native amount times the rate:
+                              // it is then arithmetically the two columns
+                              // either side of it, so the row always adds up on
+                              // screen. Native amount stays underneath so
+                              // nothing is lost.
+                              const audSell = r.pricing.aud?.totalAmount;
+                              const audNet = r.pricing.net?.aud?.totalAmount;
+                              const nativeAmt = r.pricing.markup?.amount;
+                              const audAmt = (typeof audSell === 'number' && typeof audNet === 'number')
+                                ? audSell - audNet
+                                : (typeof nativeAmt === 'number' && r.pricing.aud?.fxRate
+                                    ? nativeAmt * r.pricing.aud.fxRate
+                                    : null);
+                              if (audAmt == null) {
+                                return (
+                                  <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
+                                    {fmtMoneyWithCode(nativeAmt, r.pricing.currency || 'USD')}
+                                  </div>
+                                );
+                              }
+                              return (
+                                <>
+                                  <div style={{ fontWeight: 600, fontSize: 12.5 }}>
+                                    {fmtMoney(audAmt)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>AUD</span>
+                                  </div>
+                                  <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
+                                    {fmtMoney(nativeAmt)} {r.pricing.currency}
+                                  </div>
+                                </>
+                              );
+                            })()}
                           </div>
                         </td>
                         <td style={sellTdStyle}>
@@ -5546,9 +5578,9 @@ const moneyTdStyle: React.CSSProperties = {
   ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap', minWidth: 132,
   fontVariantNumeric: 'tabular-nums',
 };
-const markupThStyle: React.CSSProperties = { ...thStyle, textAlign: 'right', whiteSpace: 'nowrap', minWidth: 92 };
+const markupThStyle: React.CSSProperties = { ...thStyle, textAlign: 'right', whiteSpace: 'nowrap', minWidth: 112 };
 const markupTdStyle: React.CSSProperties = {
-  ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap', minWidth: 92,
+  ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap', minWidth: 112,
   fontVariantNumeric: 'tabular-nums',
 };
 
