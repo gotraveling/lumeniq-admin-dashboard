@@ -202,3 +202,11 @@
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(100%); }
 }
+
+/* Rate table: highlight the row under the cursor. Seven columns is a long
+   read and the price sits at the far right — without this, the eye loses the
+   line between "Superior room, half board" and the number it should quote.
+   Set on the row, under the translucent money-column tints so they composite
+   on top rather than flickering off. Rows that carry a semantic inline tint
+   (Recommended, Blocked) keep it — inline wins, which is the right outcome. */
+.console-shell .c-rate-row:hover { background: rgba(0,0,0,0.045); }

@@ -4955,9 +4955,9 @@ function RoomGroupedRates({
                       <th style={{ ...thStyle, minWidth: 118 }}>Supplier</th>
                       <th style={planThStyle}>Plan</th>
                       <th style={{ ...thStyle, minWidth: 150 }}>Cancellation</th>
-                      <th style={moneyThStyle}>Net cost</th>
-                      <th style={markupThStyle}>Markup</th>
-                      <th style={moneyThStyle}>Sell price</th>
+                      <th style={netThStyle}>Net cost</th>
+                      <th style={markupBandThStyle}>Markup</th>
+                      <th style={sellThStyle}>Sell price</th>
                       <th style={thStyle}></th>
                     </tr>
                   </thead>
@@ -4981,7 +4981,7 @@ function RoomGroupedRates({
                         ? 'rgba(185,28,28,0.05)'
                         : isRecommended ? 'rgba(155,123,51,0.04)' : undefined;
                       return (
-                      <tr key={i} style={{ borderTop: rowBorder, background: rowBg, opacity: rowBlocked ? 0.55 : 1 }}>
+                      <tr key={i} className="c-rate-row" style={{ borderTop: rowBorder, background: rowBg, opacity: rowBlocked ? 0.55 : 1 }}>
                         <td style={supplierTdStyle}>
                           {r.supplier && (
                             <span style={{ ...badgeStyle(r.supplier), textDecoration: rowBlocked ? 'line-through' : undefined }}>{r.supplier}</span>
@@ -5162,7 +5162,7 @@ function RoomGroupedRates({
                             );
                           })()}
                         </td>
-                        <td style={moneyTdStyle}>
+                        <td style={netTdStyle}>
                           <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.35 }}>
                             {/* NET — total-first, decluttered. Primary = AUD total
                                 (bold). Secondary = USD total (small/muted). One
@@ -5196,18 +5196,30 @@ function RoomGroupedRates({
                             )}
                           </div>
                         </td>
-                        <td style={markupTdStyle}>
+                        <td style={markupBandTdStyle}>
                           {/* Percentage first: it is the number a consultant
                               recognises and compares between rooms. The amount
                               is the consequence, so it sits underneath. */}
                           <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.35 }}>
-                            <div style={{ fontWeight: 600 }}>{r.pricing.markup?.value ?? 0}%</div>
+                            {(() => {
+                              // 0% or negative is never a pricing decision — it
+                              // means no rule matched this rate, or a rule is
+                              // mis-scoped. Red so it can't be scrolled past.
+                              const pct = r.pricing.markup?.value ?? 0;
+                              const broken = !(pct > 0);
+                              return (
+                                <div
+                                  style={{ fontWeight: broken ? 700 : 600, color: broken ? 'var(--c-danger)' : undefined }}
+                                  title={broken ? 'No markup applied to this rate — selling at net. Check the pricing rule scope for this hotel.' : undefined}
+                                >{pct}%</div>
+                              );
+                            })()}
                             <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
                               {fmtMoneyWithCode(r.pricing.markup?.amount, r.pricing.currency || 'USD')}
                             </div>
                           </div>
                         </td>
-                        <td style={moneyTdStyle}>
+                        <td style={sellTdStyle}>
                           <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.35 }}>
                             {/* Struck "was" SELL — when a promo applied, apply the
                                 same markup ratio to the rack (gross) rate so the
@@ -5388,6 +5400,42 @@ const markupTdStyle: React.CSSProperties = {
   ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap', minWidth: 92,
   fontVariantNumeric: 'tabular-nums',
 };
+
+// ─── Colour: band the money block, don't grade the margin ───────────────────
+// Seven columns is a long way for the eye to travel, and the three that matter
+// most sit at the far right. So the money block is banded as one region —
+// cost → markup → price — with a rule separating it from the rate terms and a
+// progressively warmer tint towards the sell price, which is the number the
+// consultant actually quotes. The tints are rgba, not solid, so the row-level
+// tints (Recommended accent, Blocked red) still show through underneath.
+//
+// Deliberately NOT colour-coded: the markup percentage. There is no red/amber/
+// green band for "good margin" — 6% at Reethi Rah is a deliberate commercial
+// decision and 40% at Beppu is normal, so a traffic light there would assert a
+// judgement the data can't support. The only colour on markup is for 0% or
+// negative, which is never intentional and always worth catching.
+const MONEY_BLOCK_EDGE = '1px solid var(--c-line)';
+const netTdStyle: React.CSSProperties = {
+  ...moneyTdStyle,
+  borderLeft: MONEY_BLOCK_EDGE,
+  background: 'rgba(0,0,0,0.022)',
+};
+const netThStyle: React.CSSProperties = {
+  ...moneyThStyle,
+  borderLeft: MONEY_BLOCK_EDGE,
+  background: 'rgba(0,0,0,0.022)',
+};
+const sellTdStyle: React.CSSProperties = {
+  ...moneyTdStyle,
+  background: 'rgba(138,106,40,0.06)',
+};
+const sellThStyle: React.CSSProperties = {
+  ...moneyThStyle,
+  background: 'rgba(138,106,40,0.06)',
+  color: 'var(--c-accent)',
+};
+const markupBandTdStyle: React.CSSProperties = { ...markupTdStyle, background: 'rgba(0,0,0,0.012)' };
+const markupBandThStyle: React.CSSProperties = { ...markupThStyle, background: 'rgba(0,0,0,0.012)' };
 // Supplier + Member/Non-Member are two badges that belong on one line;
 // "NON-" / "MEMBER" split across rows made every row two lines taller.
 const supplierTdStyle: React.CSSProperties = { ...tdStyle, whiteSpace: 'nowrap', minWidth: 118 };
