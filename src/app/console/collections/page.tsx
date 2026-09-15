@@ -592,11 +592,11 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
           </Field>
         </div>
         <Field label="Intro paragraphs (leave a blank line between paragraphs)">
-          {/* Blank line = new paragraph, so paragraphs round-trip with spacing
-              (split on blank lines, join with a blank line). A single newline
-              inside a paragraph is kept as a soft break. */}
-          <textarea className="c-input" rows={6} value={(value.intro || []).join('\n\n')}
-            onChange={(e) => set({ intro: e.target.value.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean) })} />
+          <IntroEditor
+            key={value.id ?? 'new'}
+            intro={value.intro || []}
+            onChange={(intro) => set({ intro })}
+          />
         </Field>
         <Field label="Travel guide button — label"><input className="c-input" value={value.travelGuideLabel || ''} onChange={(e) => set({ travelGuideLabel: e.target.value })} placeholder="Best of Maldives Travel Guide" /></Field>
         <Field label="Travel guide button — URL (opens in a new tab)"><input className="c-input" value={value.travelGuideUrl || ''} onChange={(e) => set({ travelGuideUrl: e.target.value })} placeholder="https://firstclass.com.au/destination/…" /></Field>
@@ -1016,6 +1016,44 @@ function PhotoPicker({ hotelId, image, images, onChange }: {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Intro paragraphs.
+ *
+ * The textarea holds the text you typed, verbatim. The parent stores intro as
+ * an ARRAY of paragraphs, and this used to be the textarea's value directly:
+ * split on blank lines, trim each, drop the empties, join back with a blank
+ * line. Every keystroke made that round trip, and anything the round trip
+ * removed never reached the screen.
+ *
+ * Which is why you could not type a space at the end of a paragraph. The trim
+ * removed it, so the value React re-rendered with was identical to the value
+ * before the keystroke; React then reset the textarea to that string and the
+ * caret jumped to the end of the text. Same for pressing Enter for a new
+ * paragraph — the empty line was dropped before you could type into it.
+ *
+ * So the raw text lives here and only the SAVED shape is parsed. Keyed on the
+ * collection id by the parent, so switching collections remounts this with the
+ * right text instead of the seed fighting what is being typed.
+ */
+function IntroEditor({ intro, onChange }: { intro: string[]; onChange: (v: string[]) => void }) {
+  const [text, setText] = useState(() => (intro || []).join('\n\n'));
+  return (
+    <textarea
+      className="c-input"
+      rows={6}
+      value={text}
+      onChange={(e) => {
+        const next = e.target.value;
+        setText(next);
+        // Blank line = new paragraph. A single newline inside a paragraph stays
+        // as a soft break. Trimming and dropping empties is right for what we
+        // STORE — it just can't be allowed to rewrite what is on screen.
+        onChange(next.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean));
+      }}
+    />
   );
 }
 
