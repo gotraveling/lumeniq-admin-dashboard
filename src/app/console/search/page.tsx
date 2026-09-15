@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
-import { Search, Star, MapPin, Loader2, ArrowLeft, Sparkles, Filter, Pencil, CheckCircle2, AlertTriangle, X, Plus, Maximize2, Minimize2, Image as ImageIcon, StickyNote, Ban } from 'lucide-react';
+import { Search, Star, MapPin, Loader2, ArrowLeft, Filter, Pencil, CheckCircle2, AlertTriangle, X, Plus, Maximize2, Minimize2, Image as ImageIcon, StickyNote, Ban } from 'lucide-react';
 import DestinationAutocomplete, { type DestinationAutocompleteHandle } from '@/components/console/DestinationAutocomplete';
 import CountryPicker from '@/components/console/CountryPicker';
 import ReactMarkdown from 'react-markdown';
@@ -12,15 +12,6 @@ import remarkGfm from 'remark-gfm';
 import DateRangePicker from '@/components/console/DateRangePicker';
 import GuestSelector, { type RoomGuests } from '@/components/console/GuestSelector';
 import { useConsoleRole } from '@/lib/useConsoleRole';
-
-// Pre-fill pills — the agent panel handles open-ended discovery; these
-// pills are for the consultant who already knows the brief.
-const PROMPT_PILLS: Array<{ label: string; q: string; nights: number; rooms: RoomGuests[] }> = [
-  { label: 'Dubai · 3n · 2 adults',         q: 'Dubai',       nights: 3, rooms: [{ adults: 2, childrenAges: [] }] },
-  { label: 'LA · 2n · 2 adults',            q: 'Los Angeles', nights: 2, rooms: [{ adults: 2, childrenAges: [] }] },
-  { label: 'Maldives · 5n · 2 adults',      q: 'Maldives',    nights: 5, rooms: [{ adults: 2, childrenAges: [] }] },
-  { label: 'Bali · 6n · 2 adults + 2 kids', q: 'Bali',        nights: 6, rooms: [{ adults: 2, childrenAges: [7, 9] }] }
-];
 
 type HotelHit = {
   id: number;
@@ -148,6 +139,8 @@ type AdminRate = {
   refundable: boolean | null;
   breakfastIncluded: boolean;
   roomImage?: string | null;
+  /** Every photo held for the matched room. roomImage is the first of these. */
+  roomImages?: string[] | null;
   // Tier of rg_ext / name match that resolved roomImage + roomGroupName.
   // 'strict' = ETG §2.4 (all 12 rg_ext fields). Degraded tiers
   // (class_bedding / class) cover sandbox rg_ext drift on luxury cert
@@ -1606,42 +1599,9 @@ export default function ConsoleSearchPage() {
           </div>
         </div>
 
-        {/* Quick prompts + search form — stays mounted; detail opens as a drawer */}
+        {/* Search form — stays mounted; detail opens as a drawer */}
         {(
           <>
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <Sparkles size={14} style={{ color: 'var(--c-accent)' }} />
-                <span style={{ fontSize: 12, color: 'var(--c-fg-muted)', letterSpacing: '0.04em', textTransform: 'uppercase', fontWeight: 700 }}>
-                  Quick prompts
-                </span>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {PROMPT_PILLS.map((p, i) => (
-                  <button
-                    key={i}
-                    onClick={() => {
-                      // Use the silent setter so the autocomplete
-                      // doesn't pop the dropdown after a programmatic
-                      // fill (otherwise the consultant has to click
-                      // the suggestion to dismiss it).
-                      destRef.current?.setSilent(p.q);
-                      const ci = todayPlus(30);
-                      const co = todayPlus(30 + p.nights);
-                      setCheckIn(ci);
-                      setCheckOut(co);
-                      setRooms(p.rooms);
-                      // Pass the just-computed dates explicitly — runSearch
-                      // would otherwise read the stale (default) checkIn/
-                      // checkOut from the closure on this same tick.
-                      runSearch(p.q, { checkIn: ci, checkOut: co });
-                    }}
-                    style={{ border: '1px solid var(--c-line)', borderRadius: 999, padding: '6px 12px', fontSize: 12, background: 'var(--c-bg)', color: 'var(--c-fg-soft)', cursor: 'pointer' }}
-                  >{p.label}</button>
-                ))}
-              </div>
-            </div>
-
             <div className="c-card" style={{ padding: 14, marginBottom: 20, overflow: 'visible' }}>
               <form
                 onSubmit={(e) => {
@@ -1693,57 +1653,6 @@ export default function ConsoleSearchPage() {
                 </button>
               </form>
 
-              {/* Star / profile filters live INSIDE the search card — they're
-                  part of the same search unit, not a floating row below it.
-                  Separated from the inputs by a hairline. 4★/5★ filter the real
-                  star_rating; 5★+/5★++ filter the curation luxury_tier; both AND
-                  into the Meili query. Changing any re-runs the current search. */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--c-line)', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', letterSpacing: '0.03em', textTransform: 'uppercase', fontWeight: 700, marginRight: 2 }}>Filters</span>
-                <select
-                  className="c-select"
-                  value={activeProfile?.slug || ''}
-                  onChange={async (e) => {
-                    const pf = await selectProfile(e.target.value);
-                    runSearch(undefined, undefined, composedFilter(pf, tierChip));
-                  }}
-                  style={{ maxWidth: 220, fontSize: 12.5 }}
-                >
-                  <option value="">No profile</option>
-                  {profiles.map((p) => (
-                    <option key={p.slug} value={p.slug}>{p.name || p.title || p.slug}</option>
-                  ))}
-                </select>
-                {activeProfile && (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--c-fg)', background: 'var(--c-accent-soft)', border: '1px solid var(--c-line)', borderRadius: 999, padding: '3px 10px' }}>
-                    {activeProfile.name || activeProfile.title || activeProfile.slug}
-                    <button
-                      onClick={() => { setActiveProfile(null); setProfileFilter(''); runSearch(undefined, undefined, composedFilter('', tierChip)); }}
-                      title="Clear profile"
-                      style={{ background: 'none', border: 0, cursor: 'pointer', color: 'var(--c-fg-soft)', padding: 0, display: 'inline-flex' }}
-                    ><X size={12} /></button>
-                  </span>
-                )}
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {(Object.keys(TIER_LABELS) as StarChip[]).map((tier) => {
-                    const on = tierChip === tier;
-                    return (
-                      <button
-                        type="button"
-                        key={tier}
-                        onClick={() => { const next = on ? null : tier; setTierChip(next); runSearch(undefined, undefined, composedFilter(profileFilter, next)); }}
-                        style={{
-                          fontSize: 12, padding: '4px 12px', borderRadius: 999,
-                          border: '1px solid var(--c-line)', cursor: 'pointer',
-                          background: on ? 'var(--c-accent-soft)' : 'var(--c-bg)',
-                          color: on ? 'var(--c-fg)' : 'var(--c-fg-soft)',
-                          fontWeight: on ? 600 : 500,
-                        }}
-                      >{TIER_LABELS[tier]}</button>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
           </>
         )}
@@ -1924,7 +1833,11 @@ export default function ConsoleSearchPage() {
               aria-label={`${detailHotel.name} rates`}
               style={{
                 position: 'fixed', top: 0, right: 0, bottom: 0,
-                width: detailExpanded ? 'min(1320px, 98vw)' : 'min(900px, 96vw)',
+                // The rate table carries supplier, plan, cancellation and three
+                // money columns; at 900px they wrapped mid-word and AUD/USD ran
+                // together. Default to ~70% of the viewport with a floor, so it
+                // is readable without expanding.
+                width: detailExpanded ? 'min(1480px, 98vw)' : 'min(96vw, max(1040px, 70vw))',
                 background: 'var(--c-bg)', borderLeft: '1px solid var(--c-line)',
                 boxShadow: '-8px 0 28px rgba(0,0,0,0.18)', zIndex: 41,
                 display: 'flex', flexDirection: 'column', transition: 'width 160ms ease'
@@ -4787,7 +4700,14 @@ function RoomGroupedRates({
         )}
       </div>
       {groups.map((g) => {
-        const groupImages = Array.from(new Set(g.rates.map(r => resolveImg(r.roomImage, '1024x768')).filter((v): v is string => !!v)));
+        // Every photo we hold for this room. roomImages carries the full set;
+        // roomImage is just the first, which is why a room with 8 photos used
+        // to read "1 photo". Deduped because the rates in a group share a room.
+        const groupImages = Array.from(new Set(
+          g.rates.flatMap(r => [...(r.roomImages || []), r.roomImage])
+            .map(u => resolveImg(u, '1024x768'))
+            .filter((v): v is string => !!v)
+        ));
         const cover = groupImages[0] || null;
         // Valentin (2026-05-28): show 3–5 rate options per room with
         // different conditions, not just the cheapest. We surface the
@@ -5006,12 +4926,12 @@ function RoomGroupedRates({
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                   <thead>
                     <tr style={{ textAlign: 'left', color: 'var(--c-fg-muted)' }}>
-                      <th style={thStyle}>Supplier</th>
+                      <th style={{ ...thStyle, minWidth: 118 }}>Supplier</th>
                       <th style={planThStyle}>Plan</th>
-                      <th style={thStyle}>Cancellation</th>
-                      <th style={thStyle}>NET (/ night · total)</th>
-                      <th style={thStyle}>Markup</th>
-                      <th style={thStyle}>Sell (/ night · total)</th>
+                      <th style={{ ...thStyle, minWidth: 150 }}>Cancellation</th>
+                      <th style={moneyThStyle}>Net cost</th>
+                      <th style={markupThStyle}>Markup</th>
+                      <th style={moneyThStyle}>Sell price</th>
                       <th style={thStyle}></th>
                     </tr>
                   </thead>
@@ -5027,7 +4947,7 @@ function RoomGroupedRates({
                         : isRecommended ? 'rgba(155,123,51,0.04)' : undefined;
                       return (
                       <tr key={i} style={{ borderTop: rowBorder, background: rowBg, opacity: rowBlocked ? 0.55 : 1 }}>
-                        <td style={tdStyle}>
+                        <td style={supplierTdStyle}>
                           {r.supplier && (
                             <span style={{ ...badgeStyle(r.supplier), textDecoration: rowBlocked ? 'line-through' : undefined }}>{r.supplier}</span>
                           )}
@@ -5165,7 +5085,7 @@ function RoomGroupedRates({
                             </div>
                           ) : null}
                         </td>
-                        <td style={tdStyle}>
+                        <td style={cancelTdStyle}>
                           {/* On-request rates need supplier confirmation — flag it
                               here (amber) so the consultant treats it as a request,
                               not an instant book. */}
@@ -5197,8 +5117,8 @@ function RoomGroupedRates({
                             );
                           })()}
                         </td>
-                        <td style={tdStyle}>
-                          <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.3 }}>
+                        <td style={moneyTdStyle}>
+                          <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.35 }}>
                             {/* NET — total-first, decluttered. Primary = AUD total
                                 (bold). Secondary = USD total (small/muted). One
                                 combined per-night line (AUD/nt · USD/nt). Falls
@@ -5231,13 +5151,19 @@ function RoomGroupedRates({
                             )}
                           </div>
                         </td>
-                        <td style={tdStyle}>
-                          <span style={{ fontFamily: 'var(--c-mono)', color: 'var(--c-fg-soft)' }}>
-                            {fmtMoneyWithCode(r.pricing.markup?.amount, r.pricing.currency || 'USD')} ({r.pricing.markup?.value ?? 0}%)
-                          </span>
+                        <td style={markupTdStyle}>
+                          {/* Percentage first: it is the number a consultant
+                              recognises and compares between rooms. The amount
+                              is the consequence, so it sits underneath. */}
+                          <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.35 }}>
+                            <div style={{ fontWeight: 600 }}>{r.pricing.markup?.value ?? 0}%</div>
+                            <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
+                              {fmtMoneyWithCode(r.pricing.markup?.amount, r.pricing.currency || 'USD')}
+                            </div>
+                          </div>
                         </td>
-                        <td style={tdStyle}>
-                          <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.3 }}>
+                        <td style={moneyTdStyle}>
+                          <div style={{ fontFamily: 'var(--c-mono)', lineHeight: 1.35 }}>
                             {/* Struck "was" SELL — when a promo applied, apply the
                                 same markup ratio to the rack (gross) rate so the
                                 consultant sees the pre-offer sell price crossed out.
@@ -5402,6 +5328,25 @@ const tdStyle: React.CSSProperties = { padding: '8px 8px', verticalAlign: 'middl
 // max-width keeps it from eating the table when the drawer is narrow, and the
 // drawer body already allows horizontal scroll as the final safety net.
 const planThStyle: React.CSSProperties = { ...thStyle, minWidth: 200, width: '26%' };
+// Money columns must never wrap. A price broken across lines ("568 AUD / total
+// / 405 USD") is the single worst thing on this table — it reads as four
+// numbers instead of one price, and AUD and USD blur together. Fixed width,
+// no wrapping, right-aligned, and tabular figures so digits line up down the
+// column and totals are comparable at a glance.
+const moneyThStyle: React.CSSProperties = { ...thStyle, textAlign: 'right', whiteSpace: 'nowrap', minWidth: 132 };
+const moneyTdStyle: React.CSSProperties = {
+  ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap', minWidth: 132,
+  fontVariantNumeric: 'tabular-nums',
+};
+const markupThStyle: React.CSSProperties = { ...thStyle, textAlign: 'right', whiteSpace: 'nowrap', minWidth: 92 };
+const markupTdStyle: React.CSSProperties = {
+  ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap', minWidth: 92,
+  fontVariantNumeric: 'tabular-nums',
+};
+// Supplier + Member/Non-Member are two badges that belong on one line;
+// "NON-" / "MEMBER" split across rows made every row two lines taller.
+const supplierTdStyle: React.CSSProperties = { ...tdStyle, whiteSpace: 'nowrap', minWidth: 118 };
+const cancelTdStyle: React.CSSProperties = { ...tdStyle, minWidth: 150, maxWidth: 210, lineHeight: 1.3 };
 const planTdStyle: React.CSSProperties = { ...tdStyle, minWidth: 200, maxWidth: 320, whiteSpace: 'normal', wordBreak: 'normal', overflowWrap: 'normal', lineHeight: 1.35 };
 
 // Loading placeholder for the rate table — shows the room-card shell
