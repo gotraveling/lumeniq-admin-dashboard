@@ -4793,13 +4793,35 @@ function RoomGroupedRates({
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                     {cover && (
-                      <div style={{
-                        width: 64, height: 44, flexShrink: 0, borderRadius: 6, overflow: 'hidden',
-                        backgroundColor: 'var(--c-bg-soft)',
-                        backgroundImage: `url(${viaResizer(cover, 400) || cover})`,
-                        backgroundSize: 'cover',
-                        backgroundPosition: 'center'
-                      }} />
+                      /* The thumbnail IS the gallery control, with the count
+                         sitting on it — the way every booking site does it, and
+                         one fewer button competing for the header row. Bigger
+                         than the old 64x44 decoration because it now has a job:
+                         at that size you couldn't tell a bathroom from a
+                         balcony, let alone read a label on top of it. */
+                      <button
+                        onClick={() => setPhotoModal({ name: g.name, images: groupImages })}
+                        title={`View ${groupImages.length} photo${groupImages.length > 1 ? 's' : ''} of ${g.name}`}
+                        style={{
+                          position: 'relative', width: 104, height: 72, flexShrink: 0,
+                          borderRadius: 6, overflow: 'hidden', padding: 0, cursor: 'pointer',
+                          border: '1px solid var(--c-line-soft)',
+                          backgroundColor: 'var(--c-bg-soft)',
+                          backgroundImage: `url(${viaResizer(cover, 400) || cover})`,
+                          backgroundSize: 'cover',
+                          backgroundPosition: 'center',
+                        }}
+                      >
+                        <span style={{
+                          position: 'absolute', left: 4, bottom: 4,
+                          display: 'inline-flex', alignItems: 'center', gap: 3,
+                          fontSize: 10, fontWeight: 700, lineHeight: 1,
+                          color: '#fff', background: 'rgba(0,0,0,0.62)',
+                          borderRadius: 4, padding: '3px 5px',
+                        }}>
+                          <ImageIcon size={10} />{groupImages.length}
+                        </span>
+                      </button>
                     )}
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 14, fontWeight: 700 }}>{g.name}</div>
@@ -4849,19 +4871,6 @@ function RoomGroupedRates({
                         }}
                       >
                         Why this rate?
-                      </button>
-                    )}
-                    {groupImages.length > 0 && (
-                      <button
-                        onClick={() => setPhotoModal({ name: g.name, images: groupImages })}
-                        style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
-                          fontSize: 11.5, fontWeight: 600, color: 'var(--c-accent)',
-                          background: 'none', border: '1px solid var(--c-line)', borderRadius: 6,
-                          padding: '3px 9px', cursor: 'pointer'
-                        }}
-                      >
-                        <ImageIcon size={12} /> {groupImages.length} photo{groupImages.length > 1 ? 's' : ''}
                       </button>
                     )}
                   </div>
