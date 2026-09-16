@@ -235,6 +235,8 @@ type HotelControl = {
   // Supersedes use_ratehawk; use_ratehawk is kept written for back-compat.
   blocked_suppliers?: string[] | null;
   markup_override_pct?: string | number | null;
+  /** Our star rating, overruling the supplier's (migration 038). */
+  star_rating_override?: string | number | null;
   // admin-controlled "Recommended" sort override (migration 021)
   recommend_rank?: string | number | null;
   transfer_type?: string | null;
@@ -1929,6 +1931,7 @@ export default function ConsoleSearchPage() {
             <ManagePanel
               hotelId={detailHotel.id}
               hotelName={detailHotel.name}
+              supplierStars={detailHotel.starRating ?? null}
               userEmail={user?.email || ''}
               onSaved={(row, opts) => {
                 refreshControl(detailHotel.id, row);
@@ -2448,6 +2451,8 @@ type ManageForm = {
   // Lowercase supplier keys currently blocked for this hotel (e.g. ['ratehawk']).
   blocked_suppliers: string[];
   markup_override_pct: string;
+  // Our star rating, overruling the supplier's. '' = use the supplier's.
+  star_rating_override: string;
   recommend_rank: string;
   transfer_type: string;
   // tri-state: '' = auto (null), 'yes' = true, 'no' = false
@@ -2554,6 +2559,7 @@ function controlToForm(c: HotelControl | null): ManageForm {
     // Folds legacy use_ratehawk===false into 'ratehawk' so existing data shows.
     blocked_suppliers: blockedSuppliersOf(c),
     markup_override_pct: str(c?.markup_override_pct),
+    star_rating_override: str(c?.star_rating_override),
     recommend_rank: str(c?.recommend_rank),
     transfer_type: str(c?.transfer_type),
     transfer_included_override: triState(c?.transfer_included_override),
@@ -2669,9 +2675,11 @@ function InlineNote({ hotelId, note, userEmail, onSaved }: {
   );
 }
 
-function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: {
+function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, onCloseDrawer }: {
   hotelId: number;
   hotelName: string;
+  /** What the supplier says, so the star override can show what it overrules. */
+  supplierStars?: number | null;
   userEmail: string;
   onSaved: (row: HotelControl, opts?: { pricingChanged?: boolean }) => void;
   // Fast-tag "Save & next": close the drawer so Tina opens the next hotel.
@@ -2969,6 +2977,7 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
       blocked_suppliers: blocked,
       use_ratehawk: !blocked.includes('ratehawk'),
       markup_override_pct: num(f.markup_override_pct),
+      star_rating_override: num(f.star_rating_override),
       recommend_rank: intNum(f.recommend_rank) ?? 0,
       transfer_type: txt(f.transfer_type),
       transfer_included_override: f.transfer_included_override === '' ? null : f.transfer_included_override === 'yes',
@@ -3158,6 +3167,36 @@ function ManagePanel({ hotelId, hotelName, userEmail, onSaved, onCloseDrawer }: 
               {/* ── Visibility ── */}
               <ManageGroup title="Visibility">
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
+                  {/* Our star rating, overruling the supplier's.
+                      Suppliers are sometimes wrong for our market — RateHawk
+                      rates Steigenberger Pyramids Cairo 5 where we call it 4 —
+                      and where a hotel comes from both suppliers they disagree
+                      on 150 of the 223 we hold twice. Neither of those has a
+                      data answer, so a person decides and it is recorded here.
+                      Never touched by a content sync, unlike the supplier
+                      value. Half steps because a strong four is not a five. */}
+                  <Field label="Star rating (overrides supplier)">
+                    <select
+                      className="c-select"
+                      style={{ maxWidth: 240 }}
+                      value={form.star_rating_override}
+                      onChange={(e) => set('star_rating_override', e.target.value)}
+                    >
+                      <option value="">
+                        Use supplier{supplierStars != null ? ` (${supplierStars}★)` : ''}
+                      </option>
+                      {['5','4.5','4','3.5','3','2.5','2','1.5','1'].map((v) => (
+                        <option key={v} value={v}>{v} ★</option>
+                      ))}
+                    </select>
+                    {form.star_rating_override !== '' && supplierStars != null
+                      && Number(form.star_rating_override) !== supplierStars && (
+                      <div style={{ marginTop: 4, fontSize: 11, color: 'var(--c-warn)' }}>
+                        Supplier says {supplierStars}★ — we will show {form.star_rating_override}★.
+                        Put the reason in Internal notes.
+                      </div>
+                    )}
+                  </Field>
                   <Field label="Network status">
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: 2 }}>
                       {([
