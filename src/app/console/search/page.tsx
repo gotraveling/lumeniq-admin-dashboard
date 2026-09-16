@@ -3868,10 +3868,18 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
             <MapPin size={12} /> {[h.city, h.country].filter(Boolean).join(', ')}
           </span>
           {!!h.starRating && (
+            // Floor, never round. This used to round, so a 4.5 showed as five
+            // filled stars — indistinguishable from a genuine five, and exactly
+            // the "everything looks 5 star" complaint that prompted the
+            // override. Four stars plus a visible ½ is honest at this size; a
+            // half-star glyph is too fussy in a dense list.
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-              {Array.from({ length: Math.round(h.starRating) }).map((_, i) => (
+              {Array.from({ length: Math.floor(h.starRating) }).map((_, i) => (
                 <Star key={i} size={11} fill="var(--c-accent)" style={{ color: 'var(--c-accent)' }} />
               ))}
+              {h.starRating % 1 >= 0.5 && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-accent)', marginLeft: 1 }}>½</span>
+              )}
             </span>
           )}
         </div>

@@ -387,7 +387,7 @@ export default function HotelEditorialPage() {
                     <div>
                       <div className="font-semibold">
                         {hotel.name}
-                        {hotel.star_rating ? <span className="ml-2 text-xs text-amber-600">{'★'.repeat(Math.round(hotel.star_rating))}</span> : null}
+                        {hotel.star_rating ? <span className="ml-2 text-xs text-amber-600">{'★'.repeat(Math.floor(hotel.star_rating))}{hotel.star_rating % 1 >= 0.5 ? '½' : ''}</span> : null}
                       </div>
                       <div className="text-sm text-gray-600">
                         {[hotel.city, hotel.country].filter(Boolean).join(', ')}
