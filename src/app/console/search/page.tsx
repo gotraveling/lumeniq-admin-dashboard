@@ -212,26 +212,25 @@ type AudBlock = {
 // Per-hotel control row (hotel-api /api/control). Numeric fields come back
 // as STRINGS from postgres numeric/int columns — Number() them at the edge.
 type NetworkStatus = 'active' | 'paused' | 'hidden' | 'deleted';
-// OUR quality opinion, deliberately separate from the certified star_rating.
-// '3plus'/'4plus' are what the trade calls 3.5 and 4.5 star: a strong three or
-// four. They are NOT a classification — nobody is certified 4.5, and RateHawk
-// ships star_rating alongside a star_certificate to prove it — so they live
-// here rather than as a fractional star rating.
-type LuxuryTier = '3plus' | '4plus' | '5plus' | '5plusplus';
+// Luxury curation ABOVE a five-star classification, where the star scale has
+// run out of room. NOT a substitute for the star rating and not a review score:
+// the star rating is the rating. Lower "3.5/4.5 star" tiers were tried and
+// dropped — that number was TripAdvisor's review average, and we do not use
+// review ratings.
+type LuxuryTier = '5plus' | '5plusplus';
 // Quick star chips next to the profile picker: 4★/5★ filter the real
 // star_rating; 5★+/5★++ filter the curation luxury_tier.
-type StarChip = '3' | '4' | '5' | '3plus' | '4plus' | '5plus' | '5plusplus';
+type StarChip = '3' | '4' | '5' | '5plus' | '5plusplus';
 // Single source of truth for the chip labels — used by both the chip row and
 // the empty-state message so the "No hotels match X" line can never drift from
 // the chip that's actually selected (the old inline ternary mislabelled 4★/5★
 // as "5★++").
 const TIER_LABELS: Record<StarChip, string> = {
-  '3': '3★', '4': '4★', '5': '5★',
-  '3plus': '3★+', '4plus': '4★+', '5plus': '5★+', '5plusplus': '5★++',
+  '3': '3★', '4': '4★', '5': '5★', '5plus': '5★+', '5plusplus': '5★++',
 };
 // 4★/5★ filter the real star_rating; 5★+/5★++ filter the curation luxury_tier.
 const isCurationTier = (t: StarChip | null): boolean =>
-  t === '3plus' || t === '4plus' || t === '5plus' || t === '5plusplus';
+  t === '5plus' || t === '5plusplus';
 type ProximityTier = 'in-terminal' | 'connected' | 'walkable' | 'short-shuttle' | 'off-airport';
 type HotelControl = {
   hotel_id?: number;
@@ -3186,9 +3185,10 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
                       value. WHOLE numbers only: this is a classification, and
                       nobody is certified 4.5 — RateHawk ships star_rating
                       alongside a star_certificate to prove it, and 0 of 291,692
-                      supplier ratings are fractional. "A strong four" is our
-                      opinion, not a classification, so it goes in Curation
-                      below as 4★+. */}
+                      supplier ratings are fractional. The 4.5 on their page is
+                      TripAdvisor's review average, not a classification, and we
+                      do not use review ratings — the star rating is the
+                      rating. */}
                   <Field label="Star rating — official classification (overrides supplier)">
                     <select
                       className="c-select"
@@ -3233,9 +3233,7 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
                   </Field>
                   <Field label="Curation (luxury tier)">
                     <select className="c-select" value={form.luxury_tier} onChange={(e) => set('luxury_tier', e.target.value as ManageForm['luxury_tier'])}>
-                      <option value="">No opinion — star rating stands alone</option>
-                      <option value="3plus">3★+ — a strong three (trade &quot;3.5 star&quot;)</option>
-                      <option value="4plus">4★+ — a strong four (trade &quot;4.5 star&quot;)</option>
+                      <option value="">Standard — star rating stands alone</option>
                       <option value="5plus">5★+ (5plus)</option>
                       <option value="5plusplus">5★++ (5plusplus)</option>
                     </select>
