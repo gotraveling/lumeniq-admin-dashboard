@@ -212,17 +212,26 @@ type AudBlock = {
 // Per-hotel control row (hotel-api /api/control). Numeric fields come back
 // as STRINGS from postgres numeric/int columns — Number() them at the edge.
 type NetworkStatus = 'active' | 'paused' | 'hidden' | 'deleted';
-type LuxuryTier = '5plus' | '5plusplus';
+// OUR quality opinion, deliberately separate from the certified star_rating.
+// '3plus'/'4plus' are what the trade calls 3.5 and 4.5 star: a strong three or
+// four. They are NOT a classification — nobody is certified 4.5, and RateHawk
+// ships star_rating alongside a star_certificate to prove it — so they live
+// here rather than as a fractional star rating.
+type LuxuryTier = '3plus' | '4plus' | '5plus' | '5plusplus';
 // Quick star chips next to the profile picker: 4★/5★ filter the real
 // star_rating; 5★+/5★++ filter the curation luxury_tier.
-type StarChip = '4' | '5' | '5plus' | '5plusplus';
+type StarChip = '3' | '4' | '5' | '3plus' | '4plus' | '5plus' | '5plusplus';
 // Single source of truth for the chip labels — used by both the chip row and
 // the empty-state message so the "No hotels match X" line can never drift from
 // the chip that's actually selected (the old inline ternary mislabelled 4★/5★
 // as "5★++").
-const TIER_LABELS: Record<StarChip, string> = { '4': '4★', '5': '5★', '5plus': '5★+', '5plusplus': '5★++' };
+const TIER_LABELS: Record<StarChip, string> = {
+  '3': '3★', '4': '4★', '5': '5★',
+  '3plus': '3★+', '4plus': '4★+', '5plus': '5★+', '5plusplus': '5★++',
+};
 // 4★/5★ filter the real star_rating; 5★+/5★++ filter the curation luxury_tier.
-const isCurationTier = (t: StarChip | null): boolean => t === '5plus' || t === '5plusplus';
+const isCurationTier = (t: StarChip | null): boolean =>
+  t === '3plus' || t === '4plus' || t === '5plus' || t === '5plusplus';
 type ProximityTier = 'in-terminal' | 'connected' | 'walkable' | 'short-shuttle' | 'off-airport';
 type HotelControl = {
   hotel_id?: number;
@@ -526,7 +535,7 @@ export default function ConsoleSearchPage() {
     const clauses: string[] = [];
     if (pf.trim()) clauses.push(`(${pf.trim()})`);
     // 4★/5★ filter the real star_rating; 5★+/5★++ filter the curation tier.
-    if (tc === '4' || tc === '5') clauses.push(`star_rating = ${tc}`);
+    if (tc === '3' || tc === '4' || tc === '5') clauses.push(`star_rating = ${tc}`);
     else if (tc) clauses.push(`luxury_tier = "${tc}"`);
     return clauses.length ? clauses.join(' AND ') : undefined;
   }
@@ -3174,8 +3183,13 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
                       on 150 of the 223 we hold twice. Neither of those has a
                       data answer, so a person decides and it is recorded here.
                       Never touched by a content sync, unlike the supplier
-                      value. Half steps because a strong four is not a five. */}
-                  <Field label="Star rating (overrides supplier)">
+                      value. WHOLE numbers only: this is a classification, and
+                      nobody is certified 4.5 — RateHawk ships star_rating
+                      alongside a star_certificate to prove it, and 0 of 291,692
+                      supplier ratings are fractional. "A strong four" is our
+                      opinion, not a classification, so it goes in Curation
+                      below as 4★+. */}
+                  <Field label="Star rating — official classification (overrides supplier)">
                     <select
                       className="c-select"
                       style={{ maxWidth: 240 }}
@@ -3185,7 +3199,7 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
                       <option value="">
                         Use supplier{supplierStars != null ? ` (${supplierStars}★)` : ''}
                       </option>
-                      {['5','4.5','4','3.5','3','2.5','2','1.5','1'].map((v) => (
+                      {['5','4','3','2','1'].map((v) => (
                         <option key={v} value={v}>{v} ★</option>
                       ))}
                     </select>
@@ -3219,7 +3233,9 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
                   </Field>
                   <Field label="Curation (luxury tier)">
                     <select className="c-select" value={form.luxury_tier} onChange={(e) => set('luxury_tier', e.target.value as ManageForm['luxury_tier'])}>
-                      <option value="">Standard 5★</option>
+                      <option value="">No opinion — star rating stands alone</option>
+                      <option value="3plus">3★+ — a strong three (trade &quot;3.5 star&quot;)</option>
+                      <option value="4plus">4★+ — a strong four (trade &quot;4.5 star&quot;)</option>
                       <option value="5plus">5★+ (5plus)</option>
                       <option value="5plusplus">5★++ (5plusplus)</option>
                     </select>
@@ -3769,9 +3785,16 @@ function Field({ label, children, style }: { label: string; children: React.Reac
 function ControlBadge({ control }: { control: HotelControl }) {
   const s = control.network_status;
   const labels: Array<{ text: string; color: string; title?: string; blocked?: boolean }> = [];
-  // Luxury curation tier — surfaced even on otherwise-active hotels.
-  if (control.luxury_tier === '5plus')     labels.push({ text: '5★+',  color: '#9a6a00' });
-  if (control.luxury_tier === '5plusplus') labels.push({ text: '5★++', color: '#9a6a00' });
+  // Our quality tier — surfaced even on otherwise-active hotels. Driven off
+  // TIER_LABELS so adding a tier does not mean remembering to badge it: 3★+ and
+  // 4★+ were invisible in the list until this stopped naming tiers one by one.
+  if (control.luxury_tier && TIER_LABELS[control.luxury_tier]) {
+    labels.push({
+      text: TIER_LABELS[control.luxury_tier],
+      color: '#9a6a00',
+      title: 'Our quality tier, not an official star classification',
+    });
+  }
   if (s === 'paused')  labels.push({ text: 'Paused',  color: '#b45309' });
   if (s === 'hidden')  labels.push({ text: 'Hidden',  color: '#6b7280' });
   if (s === 'deleted') labels.push({ text: 'Deleted', color: '#b91c1c' });
