@@ -174,6 +174,9 @@ type AdminRate = {
     included?: Array<{ name?: string; type?: string; amount: number; currency?: string }>;
     excluded?: Array<{ name?: string; type?: string; amount: number; currency?: string }>;
     excludedTotal?: number;
+    /** Excluded taxes in a currency OTHER than the rate's, per currency. Cash
+     *  paid at the property in local money — never added to our total. */
+    excludedAtHotel?: Array<{ currency: string; amount: number }>;
   } | null;
   pricing: {
     currency: string;
@@ -5401,6 +5404,30 @@ function RoomGroupedRates({
                               </>
                             )}
                             {(() => {
+                              // Taxes the guest pays at the desk. These are NOT
+                              // in the sell price and were only visible after
+                              // clicking Choose, so a consultant quoting off
+                              // this table understated the trip. Tina,
+                              // 2026-09-17: "city tax is not shown in the
+                              // front.. we should, as consultants may be reading
+                              // that rate to quote over the phone."
+                              const atHotel = r.taxes?.excludedAtHotel || [];
+                              const sameCur = r.taxes?.excludedTotal || 0;
+                              if (!atHotel.length && !sameCur) return null;
+                              const parts = [
+                                ...(sameCur ? [`${fmtMoney(sameCur)} ${r.pricing.currency}`] : []),
+                                ...atHotel.map(t => `${fmtMoney(t.amount)} ${t.currency}`),
+                              ];
+                              return (
+                                <div
+                                  title="Excluded taxes and fees — the guest pays these at the hotel, they are not in the price above"
+                                  style={{ fontSize: 10.5, color: 'var(--c-warn)', marginTop: 2, whiteSpace: 'nowrap' }}
+                                >
+                                  + {parts.join(' + ')} at hotel
+                                </div>
+                              );
+                            })()}
+                            {(() => {
                               // Compare hint: on a Member row, show how much
                               // cheaper (or dearer) it is than its Non-Member twin.
                               if (!comparing || r._channel !== 'cug') return null;
@@ -5846,8 +5873,12 @@ function BookingSidebar(props: {
               const included = r.taxes?.included || [];
               const excluded = r.taxes?.excluded || [];
               const excludedTotal = r.taxes?.excludedTotal || 0;
+              // Paid at the desk in local money. Adding these to the rate
+              // currency is what made a USD 375 booking read "1,375.72 USD" on
+              // a Japanese city tax of JPY 1000.
+              const atHotel = r.taxes?.excludedAtHotel || [];
               const hasIncluded = included.length > 0;
-              const hasExcluded = excluded.length > 0 && excludedTotal > 0;
+              const hasExcluded = excluded.length > 0;
               const grandTotal = sellTotal + excludedTotal;
               const prettify = (t: { name?: string; type?: string }) =>
                 String(t.name || t.type || 'Tax').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -5865,18 +5896,35 @@ function BookingSidebar(props: {
                       <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(t.amount)} {t.currency || r.pricing.currency}</span>
                     </div>
                   ))}
-                  {hasExcluded && excluded.map((t, i) => (
-                    <div key={`exc-${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
-                      <span>{prettify(t)}</span>
-                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(t.amount)} {t.currency || r.pricing.currency}</span>
-                    </div>
-                  ))}
+                  {hasExcluded && excluded.map((t, i) => {
+                    const cur = (t.currency || r.pricing.currency || '').toUpperCase();
+                    const foreign = cur !== String(r.pricing.currency || '').toUpperCase();
+                    return (
+                      <div key={`exc-${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
+                        <span>
+                          {prettify(t)}
+                          {foreign && <span style={{ fontStyle: 'italic', color: 'var(--c-fg-muted)' }}> (pay at hotel)</span>}
+                        </span>
+                        <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(t.amount)} {cur}</span>
+                      </div>
+                    );
+                  })}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: (hasIncluded || hasExcluded) ? 6 : 0, borderTop: (hasIncluded || hasExcluded) ? '1px solid var(--c-line-soft)' : 'none' }}>
-                    <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>Total payable</span>
+                    <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
+                      {atHotel.length ? 'Total we charge' : 'Total payable'}
+                    </span>
                     <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)' }}>
                       {fmtMoney(grandTotal)} {r.pricing.currency}
                     </span>
                   </div>
+                  {atHotel.length > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-warn)' }}>
+                      <span>Plus, paid at the hotel</span>
+                      <span style={{ fontFamily: 'var(--c-mono)' }}>
+                        {atHotel.map(t => `${fmtMoney(t.amount)} ${t.currency}`).join(' + ')}
+                      </span>
+                    </div>
+                  )}
                   {!hasIncluded && !hasExcluded && (
                     <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', textAlign: 'right' }}>
                       Includes taxes & fees (supplier did not return a breakdown)
@@ -6113,6 +6161,10 @@ function BookingSidebar(props: {
                 // gated on priceChanged before, which hid moves
                 // RateHawk didn't flip the banner flag for.
                 const base = props.prebook?.newPrice || r.pricing.sell?.totalAmount || 0;
+                // excludedTotal is same-currency only, so this addition is safe.
+                // Taxes in another currency are paid at the hotel and are NOT
+                // part of what we charge, so they must never inflate this
+                // button — it read "1,375.72 USD" on a USD 375.72 booking.
                 const grand = base + (r.taxes?.excludedTotal || 0);
                 return `Confirm · ${fmtMoney(grand)} ${r.pricing.currency}`;
               })()}
