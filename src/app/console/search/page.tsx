@@ -6088,7 +6088,14 @@ function BookingSidebar(props: {
                   </div>
                   {hasExcluded && row(
                     'Plus, the guest pays at the hotel',
-                    excluded.map(t => `${fmtMoney(t.amount)} ${String(t.currency || rateCur).toUpperCase()}`).join(' + '),
+                    // Same rule as the included taxes: a fee quoted in the
+                    // currency we asked RateHawk for is our money in disguise
+                    // and converts with the rate. A fee in any other currency
+                    // is what the property actually charges at the desk.
+                    excluded.map(t => inDisplayCur(t)
+                      ? `${fmtMoney((t.amount || 0) * taxScale)} ${cur}`
+                      : `${fmtMoney(t.amount)} ${String(t.currency).toUpperCase()}`
+                    ).join(' + '),
                     { color: 'var(--c-warn)' }
                   )}
                   {hasExcluded && (
