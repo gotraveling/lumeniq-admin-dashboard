@@ -50,6 +50,10 @@ type HotelHit = {
     // card. USD (sellNightly/sellTotal) shown small beneath. Never recomputed
     // here; rendered straight from the API.
     sellNightlyAud?: number;
+  netNightlyAud?: number;
+  /** 'supplier' = the AUD is the supplier's contracted figure, so their other
+   *  currency is a conversion we asked for and must not be shown. */
+  audSource?: 'supplier' | 'converted' | null;
     sellTotalAud?: number;
     fxRate?: number;
     netNightly?: number;
@@ -851,6 +855,8 @@ export default function ConsoleSearchPage() {
             sellNightly:             sell?.nightlyAmount,
             sellTotal:               sell?.totalAmount,
             sellNightlyAud:          aud?.nightlyAmount ?? undefined,
+            netNightlyAud:           net?.aud?.nightlyAmount ?? undefined,
+            audSource:               q.cheapestRate?.pricing?.audSource ?? undefined,
             sellTotalAud:            aud?.totalAmount ?? undefined,
             fxRate:                  aud?.fxRate ?? undefined,
             netNightly:              net?.nightlyAmount,
@@ -897,6 +903,8 @@ export default function ConsoleSearchPage() {
           sellNightly:             sell?.nightlyAmount,
           sellTotal:               sell?.totalAmount,
           sellNightlyAud:          aud?.nightlyAmount ?? undefined,
+          netNightlyAud:           net?.aud?.nightlyAmount ?? undefined,
+          audSource:               q.cheapestRate?.pricing?.audSource ?? undefined,
           sellTotalAud:            aud?.totalAmount ?? undefined,
           fxRate:                  aud?.fxRate ?? undefined,
           netNightly:              net?.nightlyAmount,
@@ -935,6 +943,8 @@ export default function ConsoleSearchPage() {
             sellNightly:             sell?.nightlyAmount,
             sellTotal:               sell?.totalAmount,
             sellNightlyAud:          aud?.nightlyAmount ?? undefined,
+            netNightlyAud:           net?.aud?.nightlyAmount ?? undefined,
+            audSource:               q.cheapestRate?.pricing?.audSource ?? undefined,
             sellTotalAud:            aud?.totalAmount ?? undefined,
             fxRate:                  aud?.fxRate ?? undefined,
             netNightly:              net?.nightlyAmount,
@@ -4126,9 +4136,15 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
                     {fmtMoney(best.sellTotalAud)} AUD total
                   </div>
                 )}
-                <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
-                  {fmtMoney(isMaldives ? best.sellTotal : best.sellNightly)} USD {isMaldives ? 'total' : '/ nt'}
-                </div>
+                {/* RateHawk invoices in AUD; the USD we also receive is a
+                    conversion we requested and appears on no invoice, so it is
+                    not shown. Hummingbird really does price in USD, so there it
+                    stays. */}
+                {best.audSource !== 'supplier' && (
+                  <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
+                    {fmtMoney(isMaldives ? best.sellTotal : best.sellNightly)} USD {isMaldives ? 'total' : '/ nt'}
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -4142,11 +4158,14 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
                 )}
               </>
             )}
-            {best.netNightly != null && (
-              <div style={{ fontSize: 11, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
-                NET {fmtMoneyWithCode(best.netNightly, best.currency || 'USD')}{best.markupPct != null ? ` · +${best.markupPct}%` : ''}
-              </div>
-            )}
+            {best.netNightly != null && (() => {
+              const inAud = best.audSource === 'supplier' && best.netNightlyAud != null;
+              return (
+                <div style={{ fontSize: 11, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
+                  NET {fmtMoneyWithCode(inAud ? best.netNightlyAud : best.netNightly, inAud ? 'AUD' : (best.currency || 'USD'))}{best.markupPct != null ? ` · +${best.markupPct}%` : ''}
+                </div>
+              );
+            })()}
             <div style={{ fontSize: 11, color: 'var(--c-accent)', fontWeight: 600, marginTop: 4 }}>Open →</div>
           </>
         )}
