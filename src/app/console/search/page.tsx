@@ -51,6 +51,7 @@ type HotelHit = {
     // here; rendered straight from the API.
     sellNightlyAud?: number;
     netNightlyAud?: number;
+    netTotalAud?: number;
     /** 'supplier' = the AUD is the supplier's contracted figure, so their
      *  other currency is a conversion we asked for, not a real price. */
     audSource?: 'supplier' | 'converted' | null;
@@ -91,6 +92,8 @@ type Quote = {
   // Derived AUD (from cheapestRate.pricing.aud) — display only.
   sellNightlyAud?: number;
   netNightlyAud?: number;
+  netTotalAud?: number;
+  netTotal?: number;
   /** 'supplier' = the AUD is the supplier's contracted figure, so their
    *  other currency is a conversion we asked for, not a real price. */
   audSource?: 'supplier' | 'converted' | null;
@@ -860,10 +863,12 @@ export default function ConsoleSearchPage() {
             sellTotal:               sell?.totalAmount,
             sellNightlyAud:          aud?.nightlyAmount ?? undefined,
             netNightlyAud:           net?.aud?.nightlyAmount ?? undefined,
+            netTotalAud:             net?.aud?.totalAmount ?? undefined,
             audSource:               q.cheapestRate?.pricing?.audSource ?? undefined,
             sellTotalAud:            aud?.totalAmount ?? undefined,
             fxRate:                  aud?.fxRate ?? undefined,
             netNightly:              net?.nightlyAmount,
+            netTotal:                 net?.totalAmount,
             markupPct:               q.cheapestRate?.pricing?.markup?.value,
             markupAmount:            q.cheapestRate?.pricing?.markup?.amount,
             markupRuleId:            q.cheapestRate?.pricing?.markup?.ruleId ?? null,
@@ -908,10 +913,12 @@ export default function ConsoleSearchPage() {
           sellTotal:               sell?.totalAmount,
           sellNightlyAud:          aud?.nightlyAmount ?? undefined,
           netNightlyAud:           net?.aud?.nightlyAmount ?? undefined,
+          netTotalAud:             net?.aud?.totalAmount ?? undefined,
           audSource:               r.cheapestRate?.pricing?.audSource ?? undefined,
           sellTotalAud:            aud?.totalAmount ?? undefined,
           fxRate:                  aud?.fxRate ?? undefined,
           netNightly:              net?.nightlyAmount,
+          netTotal:                 net?.totalAmount,
           markupPct:               r.cheapestRate?.pricing?.markup?.value,
           markupAmount:            r.cheapestRate?.pricing?.markup?.amount,
           markupRuleId:            r.cheapestRate?.pricing?.markup?.ruleId ?? null,
@@ -948,6 +955,7 @@ export default function ConsoleSearchPage() {
             sellTotal:               sell?.totalAmount,
             sellNightlyAud:          aud?.nightlyAmount ?? undefined,
             netNightlyAud:           net?.aud?.nightlyAmount ?? undefined,
+            netTotalAud:             net?.aud?.totalAmount ?? undefined,
             audSource:               r.cheapestRate?.pricing?.audSource ?? undefined,
             sellTotalAud:            aud?.totalAmount ?? undefined,
             fxRate:                  aud?.fxRate ?? undefined,
@@ -3984,7 +3992,12 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
         supplier: h.priced.supplier || null, available: true,
         sellNightly: h.priced.sellNightly, sellTotal: h.priced.sellTotal,
         sellNightlyAud: h.priced.sellNightlyAud, sellTotalAud: h.priced.sellTotalAud, fxRate: h.priced.fxRate,
-        netNightly: h.priced.netNightly, markupPct: h.priced.markupPct,
+        // Without these a single-supplier hotel — most of the list — lost the
+        // AUD net and the marker saying the AUD is the supplier's own, so the
+        // card printed USD under an AUD headline.
+        netNightlyAud: h.priced.netNightlyAud, netTotalAud: h.priced.netTotalAud,
+        audSource: h.priced.audSource,
+        netNightly: h.priced.netNightly, netTotal: h.priced.netTotal, markupPct: h.priced.markupPct,
         currency: h.priced.currency, ratePlan: h.priced.ratePlan,
         refundable: h.priced.refundable, breakfastIncluded: h.priced.breakfastIncluded,
         cancellationDeadlineUtc: h.priced.cancellationDeadlineUtc,
@@ -4208,47 +4221,55 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
                 );
               })()}
             </div>
-            {/* AUD primary (from pricing.aud) with USD small beneath; fall back
-                to USD as the primary when no AUD block came back. Display only —
-                booking still uses the USD basis. */}
-            {best.sellNightlyAud != null ? (
-              <>
-                <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
-                  {fmtMoney(isMaldives ? (best.sellTotalAud ?? best.sellNightlyAud) : best.sellNightlyAud)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> AUD {isMaldives ? 'total' : '/ nt'}</span>
-                </div>
-                {!isMaldives && best.sellTotalAud != null && best.sellTotalAud !== best.sellNightlyAud && (
-                  <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
-                    {fmtMoney(best.sellTotalAud)} AUD total
+            {/* Net leads. A consultant reads this list to work out what a stay
+                costs us and what it leaves; the client's price follows. Shown
+                in the currency the supplier actually invoices — RateHawk bills
+                our account in AUD, so their USD is a conversion we asked for
+                and is not printed. Hummingbird really does price in USD. */}
+            {(() => {
+              const audIsReal = best.audSource === 'supplier' || best.sellNightlyAud != null;
+              const showUsd = best.audSource !== 'supplier';
+              const cur = audIsReal ? 'AUD' : (best.currency || 'USD');
+              const netUnit  = audIsReal ? (best.netNightlyAud ?? best.netNightly) : best.netNightly;
+              const netTotal = audIsReal ? (best.netTotalAud ?? best.netTotal) : best.netTotal;
+              const sellUnit  = audIsReal ? (best.sellNightlyAud ?? best.sellNightly) : best.sellNightly;
+              const sellTotal = audIsReal ? (best.sellTotalAud ?? best.sellTotal) : best.sellTotal;
+              // Maldives: the package total is the meaningful figure, per-night
+              // is misleading once transfers and meals are in it.
+              const headline = isMaldives ? (netTotal ?? netUnit) : netUnit;
+              const unitLabel = isMaldives ? 'total net' : 'net / nt';
+              // Nothing to lead with if the supplier gave us no net (public
+              // channel): fall back to the sell price rather than an empty card.
+              if (headline == null) {
+                return (
+                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
+                    {fmtMoney(isMaldives ? sellTotal : sellUnit)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> {cur} {isMaldives ? 'total' : '/ nt'}</span>
                   </div>
-                )}
-                {/* RateHawk invoices in AUD; the USD we also receive is a
-                    conversion we requested and appears on no invoice, so it is
-                    not shown. Hummingbird really does price in USD, so there it
-                    stays. */}
-                {best.audSource !== 'supplier' && (
-                  <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
-                    {fmtMoney(isMaldives ? best.sellTotal : best.sellNightly)} USD {isMaldives ? 'total' : '/ nt'}
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
-                  {fmtMoney(best.sellNightly)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> {best.currency || 'USD'} / nt</span>
-                </div>
-                {best.sellTotal != null && best.sellTotal !== best.sellNightly && (
-                  <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
-                    {fmtMoneyWithCode(best.sellTotal, best.currency || 'USD')} total
-                  </div>
-                )}
-              </>
-            )}
-            {best.netNightly != null && (() => {
-              const inAud = best.audSource === 'supplier' && best.netNightlyAud != null;
+                );
+              }
               return (
-                <div style={{ fontSize: 11, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
-                  NET {fmtMoneyWithCode(inAud ? best.netNightlyAud : best.netNightly, inAud ? 'AUD' : (best.currency || 'USD'))}{best.markupPct != null ? ` · +${best.markupPct}%` : ''}
-                </div>
+                <>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
+                    {fmtMoney(headline)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> {cur} {unitLabel}</span>
+                  </div>
+                  {!isMaldives && netTotal != null && netTotal !== netUnit && (
+                    <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
+                      {fmtMoney(netTotal)} {cur} total net
+                    </div>
+                  )}
+                  {sellUnit != null && (
+                    <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)', marginTop: 2 }}>
+                      Client {fmtMoney(isMaldives ? (sellTotal ?? sellUnit) : sellUnit)} {cur}
+                      {!isMaldives && sellTotal != null && sellTotal !== sellUnit ? ` · ${fmtMoney(sellTotal)} total` : ''}
+                      {best.markupPct != null ? ` · +${best.markupPct}%` : ''}
+                    </div>
+                  )}
+                  {showUsd && best.netNightly != null && (
+                    <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
+                      {fmtMoney(isMaldives ? best.netTotal : best.netNightly)} {best.currency || 'USD'} net {isMaldives ? 'total' : '/ nt'}
+                    </div>
+                  )}
+                </>
               );
             })()}
             <div style={{ fontSize: 11, color: 'var(--c-accent)', fontWeight: 600, marginTop: 4 }}>Open →</div>
