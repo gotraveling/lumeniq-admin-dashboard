@@ -50,10 +50,10 @@ type HotelHit = {
     // card. USD (sellNightly/sellTotal) shown small beneath. Never recomputed
     // here; rendered straight from the API.
     sellNightlyAud?: number;
-  netNightlyAud?: number;
-  /** 'supplier' = the AUD is the supplier's contracted figure, so their other
-   *  currency is a conversion we asked for and must not be shown. */
-  audSource?: 'supplier' | 'converted' | null;
+    netNightlyAud?: number;
+    /** 'supplier' = the AUD is the supplier's contracted figure, so their
+     *  other currency is a conversion we asked for, not a real price. */
+    audSource?: 'supplier' | 'converted' | null;
     sellTotalAud?: number;
     fxRate?: number;
     netNightly?: number;
@@ -90,6 +90,10 @@ type Quote = {
   sellTotal?: number;
   // Derived AUD (from cheapestRate.pricing.aud) — display only.
   sellNightlyAud?: number;
+  netNightlyAud?: number;
+  /** 'supplier' = the AUD is the supplier's contracted figure, so their
+   *  other currency is a conversion we asked for, not a real price. */
+  audSource?: 'supplier' | 'converted' | null;
   sellTotalAud?: number;
   fxRate?: number;
   netNightly?: number;
@@ -904,7 +908,7 @@ export default function ConsoleSearchPage() {
           sellTotal:               sell?.totalAmount,
           sellNightlyAud:          aud?.nightlyAmount ?? undefined,
           netNightlyAud:           net?.aud?.nightlyAmount ?? undefined,
-          audSource:               q.cheapestRate?.pricing?.audSource ?? undefined,
+          audSource:               r.cheapestRate?.pricing?.audSource ?? undefined,
           sellTotalAud:            aud?.totalAmount ?? undefined,
           fxRate:                  aud?.fxRate ?? undefined,
           netNightly:              net?.nightlyAmount,
@@ -944,7 +948,7 @@ export default function ConsoleSearchPage() {
             sellTotal:               sell?.totalAmount,
             sellNightlyAud:          aud?.nightlyAmount ?? undefined,
             netNightlyAud:           net?.aud?.nightlyAmount ?? undefined,
-            audSource:               q.cheapestRate?.pricing?.audSource ?? undefined,
+            audSource:               r.cheapestRate?.pricing?.audSource ?? undefined,
             sellTotalAud:            aud?.totalAmount ?? undefined,
             fxRate:                  aud?.fxRate ?? undefined,
             netNightly:              net?.nightlyAmount,
@@ -2275,11 +2279,11 @@ function channelBadgeStyle(channel: 'cug' | 'b2c' | 'all'): React.CSSProperties 
     color, border: `1px solid ${color}33`, background: `${color}11`, padding: '2px 8px', borderRadius: 999
   };
 }
-function fmtMoney(n?: number) {
+function fmtMoney(n?: number | null) {
   if (n === undefined || n === null || isNaN(n)) return '—';
   return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
-function fmtMoneyWithCode(n?: number, currency = 'USD') {
+function fmtMoneyWithCode(n?: number | null, currency = 'USD') {
   const amount = fmtMoney(n);
   return amount === '—' ? amount : `${amount} ${currency || 'USD'}`;
 }
@@ -5638,7 +5642,7 @@ function RoomGroupedRates({
  * audSource 'supplier' means the AUD is RateHawk's own contracted figure.
  * Anything else (Hummingbird) is already quoted in its real currency.
  */
-function quotedTotal(r: Rate, prebookPrice?: number | null): { amount: number | undefined; currency: string } {
+function quotedTotal(r: AdminRate, prebookPrice?: number | null): { amount: number | undefined; currency: string } {
   const inAud = r.pricing?.audSource === 'supplier' && typeof r.pricing.aud?.totalAmount === 'number';
   if (!inAud) {
     return {
@@ -5648,7 +5652,7 @@ function quotedTotal(r: Rate, prebookPrice?: number | null): { amount: number | 
   }
   const fx = r.pricing.aud?.fxRate || 1;
   return {
-    amount: prebookPrice != null ? prebookPrice * fx : r.pricing.aud?.totalAmount,
+    amount: prebookPrice != null ? prebookPrice * fx : (r.pricing.aud?.totalAmount ?? undefined),
     currency: 'AUD',
   };
 }
@@ -6018,14 +6022,16 @@ function BookingSidebar(props: {
                 : (r.pricing.net?.totalAmount ?? null);
               const included = r.taxes?.included || [];
               const excluded = r.taxes?.excluded || [];
-              const excludedTotal = (r.taxes?.excludedTotal || 0) * fx;
+              // Excluded taxes are, by the supplier's own definition, not in the
+              // price. The guest settles them at the property, so they are not
+              // part of what we charge and never enter the total we POST.
               // Paid at the desk in local money. Adding these to the rate
               // currency is what made a USD 375 booking read "1,375.72 USD" on
               // a Japanese city tax of JPY 1000.
               const atHotel = r.taxes?.excludedAtHotel || [];
               const hasIncluded = included.length > 0;
               const hasExcluded = excluded.length > 0;
-              const grandTotal = sellTotal + excludedTotal;
+              const grandTotal = sellTotal;
               const prettify = (t: { name?: string; type?: string }) =>
                 String(t.name || t.type || 'Tax').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
               return (
@@ -6044,12 +6050,11 @@ function BookingSidebar(props: {
                   ))}
                   {hasExcluded && excluded.map((t, i) => {
                     const cur = (t.currency || r.pricing.currency || '').toUpperCase();
-                    const foreign = cur !== String(r.pricing.currency || '').toUpperCase();
                     return (
                       <div key={`exc-${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
                         <span>
                           {prettify(t)}
-                          {foreign && <span style={{ fontStyle: 'italic', color: 'var(--c-fg-muted)' }}> (pay at hotel)</span>}
+                          <span style={{ fontStyle: 'italic', color: 'var(--c-fg-muted)' }}> (pay at hotel)</span>
                         </span>
                         <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(t.amount)} {cur}</span>
                       </div>
@@ -6057,7 +6062,7 @@ function BookingSidebar(props: {
                   })}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: (hasIncluded || hasExcluded) ? 6 : 0, borderTop: (hasIncluded || hasExcluded) ? '1px solid var(--c-line-soft)' : 'none' }}>
                     <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
-                      {atHotel.length ? 'Total we charge' : 'Total payable'}
+                      {(atHotel.length || hasExcluded) ? 'Total we charge' : 'Total payable'}
                     </span>
                     <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)' }}>
                       {fmtMoney(grandTotal)} {cur}
@@ -6069,11 +6074,14 @@ function BookingSidebar(props: {
                       <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(netTotal)} {cur}</span>
                     </div>
                   )}
-                  {atHotel.length > 0 && (
+                  {(atHotel.length > 0 || hasExcluded) && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-warn)' }}>
                       <span>Plus, paid at the hotel</span>
                       <span style={{ fontFamily: 'var(--c-mono)' }}>
-                        {atHotel.map(t => `${fmtMoney(t.amount)} ${t.currency}`).join(' + ')}
+                        {[
+                          ...excluded.map(t => `${fmtMoney(t.amount)} ${(t.currency || r.pricing.currency || '').toUpperCase()}`),
+                          ...atHotel.map(t => `${fmtMoney(t.amount)} ${t.currency}`),
+                        ].join(' + ')}
                       </span>
                     </div>
                   )}
@@ -6337,12 +6345,10 @@ function BookingSidebar(props: {
                 // fx is 1 unless we are quoting in AUD, so this is a no-op
                 // for suppliers that already quote in their real currency.
                 const base = (props.prebook?.newPrice || r.pricing.sell?.totalAmount || 0) * fx;
-                // excludedTotal is same-currency only, so this addition is safe.
-                // Taxes in another currency are paid at the hotel and are NOT
-                // part of what we charge, so they must never inflate this
-                // button — it read "1,375.72 USD" on a USD 375.72 booking.
-                const grand = base + ((r.taxes?.excludedTotal || 0) * fx);
-                return `${r.onRequest ? 'Send request' : 'Confirm'} · ${fmtMoney(grand)} ${cur}`;
+                // This button must read the same number we POST as
+                // expectedTotalAmount, so it adds nothing to the rate. Excluded
+                // taxes are settled at the property and are itemised above.
+                return `${r.onRequest ? 'Send request' : 'Confirm'} · ${fmtMoney(base)} ${cur}`;
               })()}
             </button>
           )}
