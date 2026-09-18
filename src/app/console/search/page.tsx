@@ -1476,7 +1476,6 @@ export default function ConsoleSearchPage() {
         // Terms the consultant was looking at when they booked. The
         // confirmation email states them, so the guest is told the same policy
         // that was quoted rather than nothing at all.
-        ratePlan:                chosenRate.ratePlan || undefined,
         cancellationPolicy:      chosenRate.cancellationPolicy || undefined,
         cancellationDeadlineUtc: chosenRate.cancellationDeadlineUtc || undefined,
         refundable:              chosenRate.refundable ?? undefined,
@@ -6028,68 +6027,73 @@ function BookingSidebar(props: {
                 ? (r.pricing.net?.aud?.totalAmount ?? null)
                 : (r.pricing.net?.totalAmount ?? null);
               const included = r.taxes?.included || [];
+              // Every excluded tax is settled at the property — excludedAtHotel
+              // is the foreign-currency subset of this same list, so listing
+              // both printed "1,000 JPY + 1,000 JPY" for one city tax.
               const excluded = r.taxes?.excluded || [];
-              // Excluded taxes are, by the supplier's own definition, not in the
-              // price. The guest settles them at the property, so they are not
-              // part of what we charge and never enter the total we POST.
-              // Paid at the desk in local money. Adding these to the rate
-              // currency is what made a USD 375 booking read "1,375.72 USD" on
-              // a Japanese city tax of JPY 1000.
-              const atHotel = r.taxes?.excludedAtHotel || [];
+              // Taxes come back in the rate's own currency. When we quote AUD,
+              // the rate's currency is a conversion we asked for, so a tax in
+              // it has to move by the same ratio or the VAT line reads USD
+              // under an AUD total. A tax in any other currency (a city tax in
+              // yen) is real local money and stays as it is.
+              const taxScale = inAud && r.pricing.sell?.totalAmount
+                ? sellTotal / r.pricing.sell.totalAmount
+                : 1;
+              const rateCur = String(r.pricing.currency || '').toUpperCase();
+              const inDisplayCur = (t: { currency?: string }) =>
+                !t.currency || String(t.currency).toUpperCase() === rateCur;
               const hasIncluded = included.length > 0;
               const hasExcluded = excluded.length > 0;
-              const grandTotal = sellTotal;
+              const markupAmount = netTotal != null ? sellTotal - netTotal : (r.pricing.markup?.amount ?? null);
+              const markupPct = r.pricing.markup?.value ?? null;
               const prettify = (t: { name?: string; type?: string }) =>
                 String(t.name || t.type || 'Tax').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+              const row = (label: React.ReactNode, value: React.ReactNode, style: React.CSSProperties = {}) => (
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12, color: 'var(--c-fg-soft)', ...style }}>
+                  <span>{label}</span>
+                  <span style={{ fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>{value}</span>
+                </div>
+              );
               return (
                 <div style={{ display: 'grid', gap: 6 }}>
-                  {(hasIncluded || hasExcluded) && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
-                      <span>Room rate</span>
-                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(sellTotal)} {cur}</span>
-                    </div>
+                  {/* Net first. On the trade side the consultant is working out
+                      margin, so what we are invoiced leads and the client's
+                      price is the conclusion. */}
+                  {netTotal != null && row(
+                    <>Supplier net <span style={{ color: 'var(--c-fg-muted)' }}>(what we are invoiced)</span></>,
+                    <>{fmtMoney(netTotal)} {cur}</>,
+                    { fontWeight: 600, color: 'var(--c-fg)' }
                   )}
                   {hasIncluded && included.map((t, i) => (
                     <div key={`inc-${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--c-fg-muted)', paddingLeft: 12 }}>
-                      <span>↳ {prettify(t)} <span style={{ fontStyle: 'italic' }}>(included)</span></span>
-                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney((t.amount || 0) * (t.currency ? 1 : fx))} {t.currency || cur}</span>
+                      <span>↳ {prettify(t)} <span style={{ fontStyle: 'italic' }}>(already in the rate)</span></span>
+                      <span style={{ fontFamily: 'var(--c-mono)' }}>
+                        {inDisplayCur(t)
+                          ? <>{fmtMoney((t.amount || 0) * taxScale)} {cur}</>
+                          : <>{fmtMoney(t.amount)} {String(t.currency).toUpperCase()}</>}
+                      </span>
                     </div>
                   ))}
-                  {hasExcluded && excluded.map((t, i) => {
-                    const cur = (t.currency || r.pricing.currency || '').toUpperCase();
-                    return (
-                      <div key={`exc-${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
-                        <span>
-                          {prettify(t)}
-                          <span style={{ fontStyle: 'italic', color: 'var(--c-fg-muted)' }}> (pay at hotel)</span>
-                        </span>
-                        <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(t.amount)} {cur}</span>
-                      </div>
-                    );
-                  })}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: (hasIncluded || hasExcluded) ? 6 : 0, borderTop: (hasIncluded || hasExcluded) ? '1px solid var(--c-line-soft)' : 'none' }}>
+                  {markupAmount != null && row(
+                    <>+ Markup{markupPct != null ? ` ${markupPct}%` : ''}</>,
+                    <>{fmtMoney(markupAmount)} {cur}</>
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, paddingTop: 6, borderTop: '1px solid var(--c-line-soft)' }}>
                     <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
-                      {(atHotel.length || hasExcluded) ? 'Total we charge' : 'Total payable'}
+                      Total we charge the client
                     </span>
-                    <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)' }}>
-                      {fmtMoney(grandTotal)} {cur}
+                    <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>
+                      {fmtMoney(sellTotal)} {cur}
                     </span>
                   </div>
-                  {netTotal != null && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--c-fg-muted)' }}>
-                      <span>Supplier net (what we are invoiced)</span>
-                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(netTotal)} {cur}</span>
-                    </div>
+                  {hasExcluded && row(
+                    'Plus, the guest pays at the hotel',
+                    excluded.map(t => `${fmtMoney(t.amount)} ${String(t.currency || rateCur).toUpperCase()}`).join(' + '),
+                    { color: 'var(--c-warn)' }
                   )}
-                  {(atHotel.length > 0 || hasExcluded) && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-warn)' }}>
-                      <span>Plus, paid at the hotel</span>
-                      <span style={{ fontFamily: 'var(--c-mono)' }}>
-                        {[
-                          ...excluded.map(t => `${fmtMoney(t.amount)} ${(t.currency || r.pricing.currency || '').toUpperCase()}`),
-                          ...atHotel.map(t => `${fmtMoney(t.amount)} ${t.currency}`),
-                        ].join(' + ')}
-                      </span>
+                  {hasExcluded && (
+                    <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', paddingLeft: 12 }}>
+                      {excluded.map(t => prettify(t)).join(' · ')}, settled at the property
                     </div>
                   )}
                   {!hasIncluded && !hasExcluded && (
@@ -6100,20 +6104,10 @@ function BookingSidebar(props: {
                 </div>
               );
             })()}
-            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--c-fg-muted)', display: 'flex', justifyContent: 'space-between' }}>
-              {/* What we owe the supplier vs what the client pays. RateHawk
-                  bills net from our deposit balance and invoices us, so the
-                  consultant needs both numbers in the invoiced currency before
-                  committing. */}
-              <span>{(() => {
-                const native = r.pricing?.audSource !== 'supplier';
-                const c = native ? (r.pricing.currency || 'USD') : 'AUD';
-                const n = native ? r.pricing.net?.totalAmount : r.pricing.net?.aud?.totalAmount;
-                const s2 = native ? r.pricing.sell?.totalAmount : r.pricing.aud?.totalAmount;
-                const m = (typeof n === 'number' && typeof s2 === 'number') ? s2 - n : r.pricing.markup?.amount;
-                return `Net ${fmtMoneyWithCode(n, c)} · +Markup ${fmtMoneyWithCode(m, c)} (${r.pricing.markup?.value ?? 0}%)`;
-              })()}</span>
-              <span>{totalAdults} adult{totalAdults !== 1 ? 's' : ''}{totalChildren ? ` · ${totalChildren} child${totalChildren !== 1 ? 'ren' : ''}` : ''}</span>
+            {/* Net and markup now lead the breakdown above, so this line
+                carries occupancy only. */}
+            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--c-fg-muted)', textAlign: 'right' }}>
+              {totalAdults} adult{totalAdults !== 1 ? 's' : ''}{totalChildren ? ` · ${totalChildren} child${totalChildren !== 1 ? 'ren' : ''}` : ''}
             </div>
           </div>
 
