@@ -5107,6 +5107,22 @@ function RoomGroupedRates({
                         && r.pricing.net?.nightlyAmount != null
                         && Math.round(r.pricing.net.totalAmount) === Math.round(r.pricing.net.nightlyAmount);
                       const showPerNight = !isMaldives && !perNightSameAsTotal;
+                      // Which currency is REAL for this rate.
+                      //
+                      // RateHawk bills our AU contract in AUD and also returns a
+                      // conversion into whatever currency we asked for. We ask
+                      // for USD, so every rate carries a USD figure that will
+                      // never appear on an invoice: the Nikko rate reading
+                      // "USD 1,107" is invoiced as AUD 1,552. Showing that USD
+                      // next to the AUD implied two real prices and made
+                      // consultants reconcile a number we invented.
+                      //
+                      // audSource already records which is which: 'supplier'
+                      // means the AUD IS their contracted figure (so the other
+                      // currency is ours to discard), 'converted' means we did
+                      // the FX and their own currency is the real cost — true
+                      // for Hummingbird, which genuinely prices in USD.
+                      const nativeIsReal = r.pricing?.audSource !== 'supplier';
                       const rowBorder = isRecommended
                         ? '1.5px solid var(--c-accent)'
                         : '1px solid var(--c-line-soft)';
@@ -5306,12 +5322,15 @@ function RoomGroupedRates({
                                 <div style={{ fontWeight: 600 }}>
                                   {fmtMoney(r.pricing.net.aud.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>AUD total</span>
                                 </div>
-                                <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
-                                  {fmtMoney(r.pricing.net?.totalAmount)} {r.pricing.currency}
-                                </div>
+                                {nativeIsReal && (
+                                  <div style={{ color: 'var(--c-fg-soft)', fontSize: 11 }}>
+                                    {fmtMoney(r.pricing.net?.totalAmount)} {r.pricing.currency}
+                                  </div>
+                                )}
                                 {showPerNight && (
                                   <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                    {fmtMoney(r.pricing.net.aud.nightlyAmount ?? undefined)} AUD/nt · {fmtMoney(r.pricing.net?.nightlyAmount)} {r.pricing.currency}/nt
+                                    {fmtMoney(r.pricing.net.aud.nightlyAmount ?? undefined)} AUD/nt
+                                    {nativeIsReal && <> · {fmtMoney(r.pricing.net?.nightlyAmount)} {r.pricing.currency}/nt</>}
                                   </div>
                                 )}
                               </>
@@ -5376,9 +5395,11 @@ function RoomGroupedRates({
                                   <div style={{ fontWeight: 600, fontSize: 12.5 }}>
                                     {fmtMoney(audAmt)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 500 }}>AUD</span>
                                   </div>
-                                  <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                    {fmtMoney(nativeAmt)} {r.pricing.currency}
-                                  </div>
+                                  {nativeIsReal && (
+                                    <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
+                                      {fmtMoney(nativeAmt)} {r.pricing.currency}
+                                    </div>
+                                  )}
                                 </>
                               );
                             })()}
@@ -5423,12 +5444,15 @@ function RoomGroupedRates({
                                 <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
                                   {fmtMoney(r.pricing.aud.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>AUD total</span>
                                 </div>
-                                <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
-                                  {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency}
-                                </div>
+                                {nativeIsReal && (
+                                  <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
+                                    {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency}
+                                  </div>
+                                )}
                                 {showPerNight && (
                                   <div style={{ color: 'var(--c-fg-muted)', fontSize: 10.5 }}>
-                                    {fmtMoney(r.pricing.aud.nightlyAmount ?? undefined)} AUD/nt · {fmtMoney(r.pricing.sell?.nightlyAmount)} {r.pricing.currency}/nt
+                                    {fmtMoney(r.pricing.aud.nightlyAmount ?? undefined)} AUD/nt
+                                    {nativeIsReal && <> · {fmtMoney(r.pricing.sell?.nightlyAmount)} {r.pricing.currency}/nt</>}
                                   </div>
                                 )}
                               </>
@@ -5910,10 +5934,24 @@ function BookingSidebar(props: {
                 "of which" rows for consultant transparency, then
                 excluded taxes as separate line items added on top. */}
             {(() => {
-              const sellTotal = r.pricing.sell?.totalAmount || 0;
+              // Quote in the currency RateHawk will actually invoice.
+              // Their AU contract bills AUD (payment_types[0].currency_code);
+              // the USD we also receive is a conversion we asked for and
+              // appears on no invoice. audSource 'supplier' marks the rates
+              // where the AUD is theirs, not ours.
+              const nativeIsReal = r.pricing?.audSource !== 'supplier';
+              const inAud = !nativeIsReal && typeof r.pricing.aud?.totalAmount === 'number';
+              const cur = inAud ? 'AUD' : (r.pricing.currency || 'USD');
+              const fx = inAud && r.pricing.aud?.fxRate ? r.pricing.aud.fxRate : 1;
+              const sellTotal = inAud
+                ? (r.pricing.aud?.totalAmount || 0)
+                : (r.pricing.sell?.totalAmount || 0);
+              const netTotal = inAud
+                ? (r.pricing.net?.aud?.totalAmount ?? null)
+                : (r.pricing.net?.totalAmount ?? null);
               const included = r.taxes?.included || [];
               const excluded = r.taxes?.excluded || [];
-              const excludedTotal = r.taxes?.excludedTotal || 0;
+              const excludedTotal = (r.taxes?.excludedTotal || 0) * fx;
               // Paid at the desk in local money. Adding these to the rate
               // currency is what made a USD 375 booking read "1,375.72 USD" on
               // a Japanese city tax of JPY 1000.
@@ -5928,13 +5966,13 @@ function BookingSidebar(props: {
                   {(hasIncluded || hasExcluded) && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-fg-soft)' }}>
                       <span>Room rate</span>
-                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(sellTotal)} {r.pricing.currency}</span>
+                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(sellTotal)} {cur}</span>
                     </div>
                   )}
                   {hasIncluded && included.map((t, i) => (
                     <div key={`inc-${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--c-fg-muted)', paddingLeft: 12 }}>
                       <span>↳ {prettify(t)} <span style={{ fontStyle: 'italic' }}>(included)</span></span>
-                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(t.amount)} {t.currency || r.pricing.currency}</span>
+                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney((t.amount || 0) * (t.currency ? 1 : fx))} {t.currency || cur}</span>
                     </div>
                   ))}
                   {hasExcluded && excluded.map((t, i) => {
@@ -5955,9 +5993,15 @@ function BookingSidebar(props: {
                       {atHotel.length ? 'Total we charge' : 'Total payable'}
                     </span>
                     <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)' }}>
-                      {fmtMoney(grandTotal)} {r.pricing.currency}
+                      {fmtMoney(grandTotal)} {cur}
                     </span>
                   </div>
+                  {netTotal != null && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--c-fg-muted)' }}>
+                      <span>Supplier net (what we are invoiced)</span>
+                      <span style={{ fontFamily: 'var(--c-mono)' }}>{fmtMoney(netTotal)} {cur}</span>
+                    </div>
+                  )}
                   {atHotel.length > 0 && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-warn)' }}>
                       <span>Plus, paid at the hotel</span>
@@ -5975,7 +6019,18 @@ function BookingSidebar(props: {
               );
             })()}
             <div style={{ marginTop: 6, fontSize: 11, color: 'var(--c-fg-muted)', display: 'flex', justifyContent: 'space-between' }}>
-              <span>Net {fmtMoneyWithCode(r.pricing.net?.totalAmount, r.pricing.currency || 'USD')} · +Markup {fmtMoneyWithCode(r.pricing.markup?.amount, r.pricing.currency || 'USD')} ({r.pricing.markup?.value ?? 0}%)</span>
+              {/* What we owe the supplier vs what the client pays. RateHawk
+                  bills net from our deposit balance and invoices us, so the
+                  consultant needs both numbers in the invoiced currency before
+                  committing. */}
+              <span>{(() => {
+                const native = r.pricing?.audSource !== 'supplier';
+                const c = native ? (r.pricing.currency || 'USD') : 'AUD';
+                const n = native ? r.pricing.net?.totalAmount : r.pricing.net?.aud?.totalAmount;
+                const s2 = native ? r.pricing.sell?.totalAmount : r.pricing.aud?.totalAmount;
+                const m = (typeof n === 'number' && typeof s2 === 'number') ? s2 - n : r.pricing.markup?.amount;
+                return `Net ${fmtMoneyWithCode(n, c)} · +Markup ${fmtMoneyWithCode(m, c)} (${r.pricing.markup?.value ?? 0}%)`;
+              })()}</span>
               <span>{totalAdults} adult{totalAdults !== 1 ? 's' : ''}{totalChildren ? ` · ${totalChildren} child${totalChildren !== 1 ? 'ren' : ''}` : ''}</span>
             </div>
           </div>
@@ -6201,13 +6256,21 @@ function BookingSidebar(props: {
                 // button so the consultant sees the real total. Was
                 // gated on priceChanged before, which hid moves
                 // RateHawk didn't flip the banner flag for.
-                const base = props.prebook?.newPrice || r.pricing.sell?.totalAmount || 0;
+                const nativeIsReal = r.pricing?.audSource !== 'supplier';
+                const inAud = !nativeIsReal && typeof r.pricing.aud?.totalAmount === 'number';
+                const cur = inAud ? 'AUD' : (r.pricing.currency || 'USD');
+                const fx = inAud && r.pricing.aud?.fxRate ? r.pricing.aud.fxRate : 1;
+                // prebook returns the supplier's own currency; scale it the
+                // same way so the button cannot mix currencies.
+                // fx is 1 unless we are quoting in AUD, so this is a no-op
+                // for suppliers that already quote in their real currency.
+                const base = (props.prebook?.newPrice || r.pricing.sell?.totalAmount || 0) * fx;
                 // excludedTotal is same-currency only, so this addition is safe.
                 // Taxes in another currency are paid at the hotel and are NOT
                 // part of what we charge, so they must never inflate this
                 // button — it read "1,375.72 USD" on a USD 375.72 booking.
-                const grand = base + (r.taxes?.excludedTotal || 0);
-                return `Confirm · ${fmtMoney(grand)} ${r.pricing.currency}`;
+                const grand = base + ((r.taxes?.excludedTotal || 0) * fx);
+                return `Confirm · ${fmtMoney(grand)} ${cur}`;
               })()}
             </button>
           )}
