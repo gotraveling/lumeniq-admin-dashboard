@@ -2923,6 +2923,12 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
         const res = await fetch(`/api/admin/control?hotelId=${hotelId}`, { cache: 'no-store' });
         const json = await res.json().catch(() => null);
         if (cancelled) return;
+        // A non-OK response used to fall through as "no row yet", leaving a
+        // blank form that looked like a never-managed hotel. Saving that wrote
+        // blanks over real settings. Fail loudly instead.
+        if (!res.ok) {
+          throw new Error(json?.error || json?.message || `Could not load controls (HTTP ${res.status})`);
+        }
         // hotel-api returns the row directly or wrapped in .data; a missing
         // row (never managed) → defaults.
         const row: HotelControl | null = json && typeof json === 'object'
@@ -3069,11 +3075,46 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
     setSaveErr(null);
     setRuleNote(null);
     try {
-      const body = formToBody(form);
+      // Send ONLY the fields this panel actually changed.
+      //
+      // It used to send the whole form every time, which made every save a
+      // full overwrite. Two ways that destroyed data:
+      //
+      //  1. If the control fetch failed or returned an unexpected shape, the
+      //     form stayed at its blank defaults — and a non-OK response did not
+      //     even raise an error. Saving then wrote blanks over every field.
+      //  2. A note added on the rates page (InlineNote, or the MCP
+      //     set_hotel_note tool) after this panel opened was invisible to the
+      //     stale form, so saving wrote the old empty value back over it.
+      //
+      // Tina reported internal notes disappearing; (2) is the everyday path,
+      // since she adds a note on the rates page and then opens Manage to set a
+      // markup. A diff against `baseline` fixes both: untouched fields are
+      // never transmitted, so they cannot be clobbered.
+      const full = formToBody(form);
+      const baseFull = formToBody(baseline);
+      const body: Record<string, unknown> = {};
+      for (const k of Object.keys(full)) {
+        if (k === 'updated_by') continue;
+        if (JSON.stringify((full as any)[k]) !== JSON.stringify((baseFull as any)[k])) {
+          body[k] = (full as any)[k];
+        }
+      }
+      // use_ratehawk mirrors blocked_suppliers for back-compat; ship it only
+      // when the block list moved, never on its own.
+      if ('blocked_suppliers' in body) body.use_ratehawk = full.use_ratehawk;
+      else delete body.use_ratehawk;
+      if (userEmail) body.updated_by = userEmail;
+      // Nothing edited: don't touch the row at all.
+      if (Object.keys(body).filter(k => k !== 'updated_by').length === 0) {
+        setSavedAt(Date.now());
+        setSaving(false);
+        return;
+      }
       // 1) Pricing rule first (only when the markup actually changed) so the
       //    note is ready before we report the save.
       let note: string | null = null;
-      const pct = body.markup_override_pct;
+      const pct = full.markup_override_pct;
       const pricingChanged = typeof pct === 'number' && form.markup_override_pct !== baseline.markup_override_pct;
       if (pricingChanged) {
         note = await writePricingRule(pct);
@@ -3087,7 +3128,7 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error || json?.message || `Save failed (HTTP ${res.status})`);
-      const saved: HotelControl = (json && json.data && typeof json.data === 'object') ? json.data : (json || body);
+      const saved: HotelControl = (json && json.data && typeof json.data === 'object') ? json.data : (json || full);
       const f = controlToForm(saved);
       setForm(f);
       setBaseline(f);
