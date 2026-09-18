@@ -2000,7 +2000,18 @@ export default function ConsoleSearchPage() {
               userEmail={user?.email || ''}
               onSaved={(row) => refreshControl(detailHotel.id, row)}
             />
-            {ratesErr && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 10 }}>Error: {ratesErr}</div>}
+            {ratesErr && (
+              <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span>{friendlyRateError(ratesErr).message}</span>
+                <button
+                  onClick={() => { if (detailHotel) void loadRatesFor(detailHotel, 'cug', undefined, { noCache: true }); }}
+                  disabled={ratesBusy}
+                  style={{ background: 'none', border: '1px solid #fecaca', borderRadius: 5, color: 'var(--c-danger)', padding: '4px 10px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                >
+                  {ratesBusy ? 'Refreshing…' : 'Refresh rates'}
+                </button>
+              </div>
+            )}
 
             {/* Hotel info section — appears above the rate list so the
                 consultant has context (description, amenities, policies)
@@ -2015,7 +2026,15 @@ export default function ConsoleSearchPage() {
                 the shell immediately rather than a lone "fetching" line. */}
             {ratesBusy && <RatesSkeleton hasContent={!!detailContent} />}
             {!ratesBusy && !ratesErr && rates.length === 0 && (
-              <div style={{ color: 'var(--c-fg-muted)', fontSize: 13 }}>No rates returned for these dates.</div>
+              <div style={{ color: 'var(--c-fg-muted)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span>No rates for these dates.</span>
+                <button
+                  onClick={() => { if (detailHotel) void loadRatesFor(detailHotel, 'cug', undefined, { noCache: true }); }}
+                  style={{ background: 'none', border: '1px solid var(--c-line)', borderRadius: 5, color: 'var(--c-fg-soft)', padding: '4px 10px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                >
+                  Refresh
+                </button>
+              </div>
             )}
 
             {/* Supplier filter banner: when user clicked a supplier row
@@ -2193,6 +2212,16 @@ export default function ConsoleSearchPage() {
           // confirmation before unlocking the submit button.
           prebookBusy={prebookBusy}
           prebookErr={prebookErr}
+          refreshingRates={ratesBusy}
+          onRefreshRates={() => {
+            // Ignore the cache — the whole point is that what we hold is out of
+            // date — then send the consultant back to a current list.
+            if (detailHotel) void loadRatesFor(detailHotel, 'cug', undefined, { noCache: true });
+            setPrebookErr(null);
+            setChosenRate(null);
+            setBookingErr(null);
+            setBookingResult(null);
+          }}
           prebook={prebook}
           acceptedNewPrice={acceptedNewPrice}
           onAcceptNewPrice={() => setAcceptedNewPrice(true)}
@@ -2285,6 +2314,34 @@ function channelBadgeStyle(channel: 'cug' | 'b2c' | 'all'): React.CSSProperties 
     color, border: `1px solid ${color}33`, background: `${color}11`, padding: '2px 8px', borderRadius: 999
   };
 }
+/**
+ * Supplier error text, in words a consultant can act on.
+ *
+ * RateHawk lists rates it will not always sell — the cheapest line on a hotel
+ * can fail while the one above it books fine — and their reason codes reach the
+ * screen raw ("no_available_rates"), which reads like a fault on our side.
+ */
+function friendlyRateError(raw?: string | null): { message: string; canRetry: boolean } {
+  const t = String(raw || '').toLowerCase();
+  if (t.includes('no_available_rates') || t.includes('sold_out') || t.includes('soldout')) {
+    return {
+      message: 'The supplier has just sold out of this rate. It is still showing in their list, but they will not sell it. Refresh for current rates and pick another — the next one up usually books.',
+      canRetry: true,
+    };
+  }
+  if (t.includes('rate_not_found') || t.includes('book_hash') || t.includes('expired')) {
+    return { message: 'This rate has expired. Refresh to load current prices, then choose again.', canRetry: true };
+  }
+  if (t.includes('rate_limit') || t.includes('exceeded_limit') || t.includes('429')) {
+    return { message: 'The supplier is asking us to slow down. Wait about 30 seconds, then refresh.', canRetry: true };
+  }
+  if (t.includes('timeout') || t.includes('etimedout') || t.includes('econnreset')) {
+    return { message: 'The supplier did not answer in time. Refresh and try again.', canRetry: true };
+  }
+  if (!raw) return { message: 'We could not verify this rate with the supplier.', canRetry: true };
+  return { message: `We could not verify this rate with the supplier: ${raw}`, canRetry: true };
+}
+
 function fmtMoney(n?: number | null) {
   if (n === undefined || n === null || isNaN(n)) return '—';
   return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
@@ -5932,6 +5989,10 @@ function BookingSidebar(props: {
   result: any;
   prebookBusy: boolean;
   prebookErr: string | null;
+  /** Re-runs the rate search for this hotel, ignoring the cache, and closes the
+   *  panel so the consultant lands back on a current list. */
+  onRefreshRates?: () => void;
+  refreshingRates?: boolean;
   prebook: {
     prebookHash: string;
     priceChanged: boolean;            // truthful delta — informational
@@ -6127,11 +6188,27 @@ function BookingSidebar(props: {
               Verifying rate with supplier…
             </div>
           )}
-          {props.prebookErr && (
-            <div style={{ padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 13, color: 'var(--c-danger)', marginBottom: 12 }}>
-              Rate verification failed: {props.prebookErr}. <button onClick={props.onClose} style={{ background: 'none', border: 0, color: 'var(--c-danger)', textDecoration: 'underline', cursor: 'pointer', padding: 0 }}>Pick another</button>
-            </div>
-          )}
+          {props.prebookErr && (() => {
+            const f = friendlyRateError(props.prebookErr);
+            const btn: React.CSSProperties = {
+              background: 'none', border: '1px solid #fecaca', borderRadius: 5, color: 'var(--c-danger)',
+              padding: '5px 10px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            };
+            return (
+              <div style={{ padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 13, color: 'var(--c-danger)', marginBottom: 12 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>This rate is no longer bookable</div>
+                <div style={{ lineHeight: 1.5, color: '#9f1239' }}>{f.message}</div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                  {props.onRefreshRates && (
+                    <button onClick={props.onRefreshRates} disabled={props.refreshingRates} style={{ ...btn, opacity: props.refreshingRates ? 0.6 : 1 }}>
+                      {props.refreshingRates ? 'Refreshing…' : 'Refresh rates'}
+                    </button>
+                  )}
+                  <button onClick={props.onClose} style={btn}>Pick another</button>
+                </div>
+              </div>
+            );
+          })()}
           {props.prebook?.supplierFlaggedChange && !props.acceptedNewPrice && (
             // Premium price-change banner — ported from B2C ReserveSidebar
             // for consistency across audiences. Same cert evidence on
