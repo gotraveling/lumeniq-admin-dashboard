@@ -1452,7 +1452,13 @@ export default function ConsoleSearchPage() {
         // to chosenRate when prebook never ran (e.g. Hummingbird).
         expectedTotalAmount: quotedTotal(chosenRate, prebook?.newPrice).amount,
         expectedCurrency:    quotedTotal(chosenRate, prebook?.newPrice).currency,
-        availabilityType:    'free_sell',
+        // The rate's OWN availability, never a constant. Hardcoding 'free_sell'
+        // meant every on-request booking was recorded as an instant sale:
+        // booking.js branches on this to set status
+        // 'awaiting_supplier_confirmation' and to log booking_request_submitted,
+        // so a Soneva Secret hold (every rate there is on_request) came back as
+        // "Booking confirmed" with nothing actually held.
+        availabilityType:    chosenRate.availabilityType || 'free_sell',
         // Audit-trail handoff: stamp the rate_decisions row with this
         // booking's internalBookingId once it's created.
         searchId:            searchId || undefined
@@ -5952,7 +5958,9 @@ function BookingSidebar(props: {
         <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--c-line)', background: 'var(--c-bg-soft)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 700 }}>
-              {props.result ? 'Booking confirmed' : 'Book on behalf of customer'}
+              {props.result
+                ? (r.onRequest ? 'Request submitted' : 'Booking confirmed')
+                : (r.onRequest ? 'Request on behalf of customer' : 'Book on behalf of customer')}
             </div>
             <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {props.hotel?.name} · {props.checkIn} → {props.checkOut}
@@ -6168,7 +6176,12 @@ function BookingSidebar(props: {
           {props.result && (
             <div>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 6, color: 'var(--c-success)', fontSize: 13.5, fontWeight: 700, marginBottom: 14 }}>
-                <CheckCircle2 size={16} /> Booking confirmed
+                <CheckCircle2 size={16} /> {r.onRequest ? 'Request submitted' : 'Booking confirmed'}
+                {r.onRequest && (
+                  <span style={{ display: 'block', marginTop: 4, fontSize: 11.5, fontWeight: 500, color: 'var(--c-warn)' }}>
+                    Awaiting hotel confirmation — do not charge the client yet.
+                  </span>
+                )}
               </div>
               <div style={{ display: 'grid', gap: 8, fontSize: 13 }}>
                 <Row label="Status"           value={String(props.result.status || '—')} />
@@ -6317,7 +6330,7 @@ function BookingSidebar(props: {
                 // part of what we charge, so they must never inflate this
                 // button — it read "1,375.72 USD" on a USD 375.72 booking.
                 const grand = base + ((r.taxes?.excludedTotal || 0) * fx);
-                return `Confirm · ${fmtMoney(grand)} ${cur}`;
+                return `${r.onRequest ? 'Send request' : 'Confirm'} · ${fmtMoney(grand)} ${cur}`;
               })()}
             </button>
           )}
