@@ -1296,8 +1296,8 @@ export default function ConsoleSearchPage() {
               guests: rooms.map(r => ({ adults: r.adults, children: r.childrenAges })),
               nationalityCode: citizenship
             },
-            expectedTotalAmount: chosenRate.pricing.sell?.totalAmount,
-            expectedCurrency:    chosenRate.pricing.currency,
+            expectedTotalAmount: quotedTotal(chosenRate).amount,
+            expectedCurrency:    quotedTotal(chosenRate).currency,
             // Use the CHOSEN rate's own channel so prebook hits the same
             // credentials/pool the rate was quoted under (member vs b2c).
             accountType: chosenRate._channel || 'cug'
@@ -1360,8 +1360,8 @@ export default function ConsoleSearchPage() {
           // the p-* prebookHash. RateHawk's prebook on an existing
           // p-hash isn't supported; we need a fresh round.
           rateKey: chosenRate.rateKey,
-          expectedTotalAmount: prebook?.newPrice || chosenRate.pricing.sell?.totalAmount,
-          expectedCurrency:    chosenRate.pricing.currency,
+          expectedTotalAmount: quotedTotal(chosenRate, prebook?.newPrice).amount,
+          expectedCurrency:    quotedTotal(chosenRate, prebook?.newPrice).currency,
           accountType: chosenRate._channel || 'cug',
           searchParams: {
             checkIn, checkOut,
@@ -1440,8 +1440,8 @@ export default function ConsoleSearchPage() {
         // booking row + audit + email must record what the customer is
         // actually charged, not the stale search-time quote. Falls back
         // to chosenRate when prebook never ran (e.g. Hummingbird).
-        expectedTotalAmount: prebook?.newPrice || chosenRate.pricing.sell?.totalAmount,
-        expectedCurrency:    prebook?.currency || chosenRate.pricing.currency,
+        expectedTotalAmount: quotedTotal(chosenRate, prebook?.newPrice).amount,
+        expectedCurrency:    quotedTotal(chosenRate, prebook?.newPrice).currency,
         availabilityType:    'free_sell',
         // Audit-trail handoff: stamp the rate_decisions row with this
         // booking's internalBookingId once it's created.
@@ -5588,6 +5588,34 @@ function RoomGroupedRates({
     </div>
   );
 }
+/**
+ * What we quoted, in the currency we quoted it in.
+ *
+ * RateHawk bills our AU contract in AUD and also hands back a conversion into
+ * whatever currency we asked for (we ask USD). The console now quotes the AUD,
+ * so the booking must be recorded in AUD too — otherwise the booking row, the
+ * bookings list and the confirmation email all say USD while the invoice says
+ * AUD, and commission silently comes out null because it is only computed when
+ * the sell and net currencies match.
+ *
+ * audSource 'supplier' means the AUD is RateHawk's own contracted figure.
+ * Anything else (Hummingbird) is already quoted in its real currency.
+ */
+function quotedTotal(r: Rate, prebookPrice?: number | null): { amount: number | undefined; currency: string } {
+  const inAud = r.pricing?.audSource === 'supplier' && typeof r.pricing.aud?.totalAmount === 'number';
+  if (!inAud) {
+    return {
+      amount: prebookPrice ?? r.pricing.sell?.totalAmount,
+      currency: r.pricing.currency || 'USD',
+    };
+  }
+  const fx = r.pricing.aud?.fxRate || 1;
+  return {
+    amount: prebookPrice != null ? prebookPrice * fx : r.pricing.aud?.totalAmount,
+    currency: 'AUD',
+  };
+}
+
 /**
  * Room facilities, as the supplier slugs them.
  *
