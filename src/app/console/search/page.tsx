@@ -1473,6 +1473,13 @@ export default function ConsoleSearchPage() {
         // so a Soneva Secret hold (every rate there is on_request) came back as
         // "Booking confirmed" with nothing actually held.
         availabilityType:    chosenRate.availabilityType || 'free_sell',
+        // Terms the consultant was looking at when they booked. The
+        // confirmation email states them, so the guest is told the same policy
+        // that was quoted rather than nothing at all.
+        ratePlan:                chosenRate.ratePlan || undefined,
+        cancellationPolicy:      chosenRate.cancellationPolicy || undefined,
+        cancellationDeadlineUtc: chosenRate.cancellationDeadlineUtc || undefined,
+        refundable:              chosenRate.refundable ?? undefined,
         // Audit-trail handoff: stamp the rate_decisions row with this
         // booking's internalBookingId once it's created.
         searchId:            searchId || undefined
