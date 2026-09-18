@@ -1338,8 +1338,18 @@ export default function ConsoleSearchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chosenRate?.rateKey, detailHotel?.id]);
 
+  // Guards a real double-charge. There is no idempotency key on the booking
+  // path, and each submit mints a NEW partnerOrderId, so two clicks become two
+  // independent supplier orders rather than one deduped by the supplier. The
+  // disabled prop alone is not enough: a slow finish call (the supplier axios
+  // timeout is 300s) can outlive the platform request timeout, the consultant
+  // sees a failure, and clicks again. A ref, not state, because two clicks in
+  // the same tick would both read the old state value.
+  const bookingInFlight = useRef(false);
+
   async function confirmBooking() {
     if (!detailHotel || !chosenRate) return;
+    if (bookingInFlight.current) return;
     const missingExtra = extraRoomGuests.findIndex(g => !g.firstName.trim() || !g.lastName.trim());
     if (missingExtra !== -1) {
       setBookingErr(`Lead guest for Room ${missingExtra + 2} is required (ETG cert §5).`);
@@ -1463,6 +1473,7 @@ export default function ConsoleSearchPage() {
         // booking's internalBookingId once it's created.
         searchId:            searchId || undefined
       };
+      bookingInFlight.current = true;
       const res = await fetch('/api/admin/bookings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-consultant-email': user?.email || '' },
@@ -1475,6 +1486,7 @@ export default function ConsoleSearchPage() {
       setBookingErr(e.message || 'Booking failed');
     } finally {
       setBookingBusy(false);
+      bookingInFlight.current = false;
     }
   }
 
