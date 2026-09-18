@@ -29,6 +29,10 @@ export async function POST(request: NextRequest) {
     // accountType used at prebook (the p-* hash is credential-scoped on
     // RateHawk's side).
     if (!body.accountType) body.accountType = 'cug';
+    // Confirmations for trade bookings go to the consultant who placed them,
+    // never to the traveller. Tina's call: the consultant decides what the
+    // client is sent and when.
+    if (consultantEmail && !body.notifyEmail) body.notifyEmail = consultantEmail;
     const res = await fetch(`${BOOKING_API_URL}/api/bookings`, {
       method: 'POST',
       headers: {
