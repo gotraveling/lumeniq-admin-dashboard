@@ -619,6 +619,8 @@ export default function ConsoleSearchPage() {
     currency?: string | null;
     isFreeCancellation?: boolean | null;
     partnerOrderId?: string;
+    /** What the supplier charges us, as their prebook stated it. cug only. */
+    supplierNetPrice?: number | null;
     supplier?: string;
     skipped?: string;
   };
@@ -1485,6 +1487,11 @@ export default function ConsoleSearchPage() {
         // confirmation email states them, so the guest is told the same policy
         // that was quoted rather than nothing at all.
         cancellationPolicy:      chosenRate.cancellationPolicy || undefined,
+        // The supplier's own net, as their prebook stated it a moment ago.
+        // RateHawk does not repeat it on the booking response, so without this
+        // the booking is filed with no net and no margin.
+        expectedNetAmount:       prebook?.supplierNetPrice ?? undefined,
+        expectedNetCurrency:     prebook?.currency ?? undefined,
         cancellationDeadlineUtc: chosenRate.cancellationDeadlineUtc || undefined,
         refundable:              chosenRate.refundable ?? undefined,
         // Audit-trail handoff: stamp the rate_decisions row with this
@@ -6024,6 +6031,7 @@ function BookingSidebar(props: {
     isFreeCancellation?: boolean | null;
     partnerOrderId?: string;
     supplier?: string;
+    supplierNetPrice?: number | null;
     skipped?: string;
   } | null;
   acceptedNewPrice: boolean;
