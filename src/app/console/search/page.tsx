@@ -6157,10 +6157,15 @@ function BookingSidebar(props: {
                   {/* Net first. On the trade side the consultant is working out
                       margin, so what we are invoiced leads and the client's
                       price is the conclusion. */}
-                  {netTotal != null && row(
-                    <>Supplier net <span style={{ color: 'var(--c-fg-muted)' }}>(what we are invoiced)</span></>,
-                    <>{fmtMoney(netTotal)} {cur}</>,
-                    { fontWeight: 600, color: 'var(--c-fg)' }
+                  {netTotal != null && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+                      <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
+                        Supplier net <span style={{ color: 'var(--c-fg-muted)' }}>(what we are invoiced)</span>
+                      </span>
+                      <span style={{ fontSize: 19, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>
+                        {fmtMoney(netTotal)} {cur}
+                      </span>
+                    </div>
                   )}
                   {hasIncluded && included.map((t, i) => (
                     <div key={`inc-${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--c-fg-muted)', paddingLeft: 12 }}>
@@ -6172,17 +6177,25 @@ function BookingSidebar(props: {
                       </span>
                     </div>
                   ))}
-                  {markupAmount != null && row(
-                    <>+ Markup{markupPct != null ? ` ${markupPct}%` : ''}</>,
-                    <>{fmtMoney(markupAmount)} {cur}</>
-                  )}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, paddingTop: 6, borderTop: '1px solid var(--c-line-soft)' }}>
-                    <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
-                      Total we charge the client
-                    </span>
-                    <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>
-                      {fmtMoney(sellTotal)} {cur}
-                    </span>
+                  {/* What we add and what the client pays, boxed off from the
+                      cost above so the two are never read as one running total. */}
+                  <div style={{
+                    marginTop: 4, padding: '8px 10px', borderRadius: 7,
+                    border: '1px solid var(--c-line)', background: 'var(--c-bg-soft)',
+                    display: 'grid', gap: 5,
+                  }}>
+                    {markupAmount != null && row(
+                      <>+ Markup{markupPct != null ? ` ${markupPct}%` : ''}</>,
+                      <>{fmtMoney(markupAmount)} {cur}</>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+                      <span style={{ fontSize: 12, color: 'var(--c-fg-soft)', fontWeight: 600 }}>
+                        Total we charge the client
+                      </span>
+                      <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-fg)', fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>
+                        {fmtMoney(sellTotal)} {cur}
+                      </span>
+                    </div>
                   </div>
                   {hasExcluded && row(
                     'Plus, the guest pays at the hotel',
