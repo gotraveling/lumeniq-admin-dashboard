@@ -20,6 +20,16 @@ interface Booking {
   confirmationNumber: string;
   cancellationNumber?: string | null;
   specialRequests?: string | null;
+  payment?: {
+    status: 'unpaid' | 'deposit' | 'paid' | 'refunded';
+    amount?: number | null;
+    currency?: string | null;
+    method?: string | null;
+    reference?: string | null;
+    note?: string | null;
+    at?: string | null;
+    by?: string | null;
+  } | null;
   createdAt: string;
   updatedAt?: string | null;
   cancelledAt?: string | null;
@@ -184,6 +194,7 @@ export default function ConsoleBookingsPage() {
                 <th>Created (AEST)</th>
                 <th>Total</th>
                 <th>Supplier</th>
+                <th>Paid</th>
                 <th>Status</th>
                 <th></th>
               </tr>
@@ -239,6 +250,19 @@ export default function ConsoleBookingsPage() {
                         : '—'}
                     </td>
                     <td style={{ fontSize: 12, color: 'var(--c-fg-soft)' }}>{b.supplierId}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {(() => {
+                        const st = b.payment?.status || 'unpaid';
+                        const map: Record<string, { text: string; fg: string }> = {
+                          unpaid:   { text: 'Not paid', fg: '#b45309' },
+                          deposit:  { text: 'Deposit',  fg: '#b45309' },
+                          paid:     { text: 'Paid',     fg: '#166534' },
+                          refunded: { text: 'Refunded', fg: 'var(--c-fg-muted)' },
+                        };
+                        const m = map[st] || map.unpaid;
+                        return <span style={{ fontSize: 12, fontWeight: 600, color: m.fg }}>{m.text}</span>;
+                      })()}
+                    </td>
                     <td><StatusPill status={b.status} /></td>
                     <td>
                       <button
@@ -381,6 +405,43 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
       if (r.ok && j.success) { setCancelOutcome(j.data); flash(true, 'Booking cancelled. Guest has been emailed.'); await refresh(); }
       else flash(false, j.error || j.message || `Cancellation failed (${r.status})`);
     } catch { flash(false, 'Network error cancelling booking'); }
+    finally { setBusy(null); }
+  };
+
+  // Payment is taken on our own terminal, so this only records what happened.
+  // Every change is written to the booking history with the consultant's name,
+  // because this is the field most likely to be argued about later.
+  const savePayment = async (status: 'unpaid' | 'deposit' | 'paid' | 'refunded') => {
+    const current = b.payment || {};
+    let amount: number | null | undefined;
+    let reference = current.reference || '';
+    if (status !== 'unpaid') {
+      const suggested = status === 'refunded'
+        ? (current.amount ?? b.totalAmount)
+        : b.totalAmount;
+      const entered = prompt(
+        status === 'deposit' ? 'Deposit taken (amount):'
+        : status === 'refunded' ? 'Amount refunded:'
+        : 'Amount taken:',
+        suggested != null ? String(suggested) : ''
+      );
+      if (entered === null) return;
+      const n = Number(entered);
+      if (!Number.isFinite(n) || n < 0) { flash(false, 'That is not an amount.'); return; }
+      amount = n;
+      reference = prompt('Receipt or transaction reference (optional):', reference) || '';
+    }
+    setBusy('payment');
+    try {
+      const r = await fetch(`/api/bookings/${id}/payment`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, amount, currency: b.currency, reference, method: 'terminal' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.success) { flash(true, status === 'unpaid' ? 'Payment record cleared.' : 'Payment recorded.'); await refresh(); }
+      else flash(false, j.error || j.details || `Could not record payment (${r.status})`);
+    } catch { flash(false, 'Network error recording payment'); }
     finally { setBusy(null); }
   };
 
@@ -571,6 +632,54 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
                 </span>
               </div>
             </div>
+            {/* Has the client paid? Taken offline on our terminal, recorded here
+                so the answer is not somebody's memory. */}
+            {(() => {
+              const pay = b.payment || { status: 'unpaid' };
+              const label: Record<string, string> = {
+                unpaid: 'Not paid', deposit: 'Deposit taken', paid: 'Paid in full', refunded: 'Refunded',
+              };
+              const tone: Record<string, { fg: string; bg: string; bd: string }> = {
+                unpaid:   { fg: '#92400e', bg: 'rgba(245,158,11,0.10)', bd: '#f59e0b' },
+                deposit:  { fg: '#92400e', bg: 'rgba(245,158,11,0.10)', bd: '#f59e0b' },
+                paid:     { fg: '#166534', bg: 'rgba(22,101,52,0.08)',  bd: '#16a34a' },
+                refunded: { fg: 'var(--c-fg-soft)', bg: 'var(--c-bg-soft)', bd: 'var(--c-line)' },
+              };
+              const t = tone[pay.status] || tone.unpaid;
+              return (
+                <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 7, border: `1px solid ${t.bd}`, background: t.bg }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: t.fg }}>{label[pay.status] || pay.status}</span>
+                    {pay.amount != null && (
+                      <span className="c-mono" style={{ fontSize: 13, fontWeight: 700, color: t.fg, whiteSpace: 'nowrap' }}>
+                        {fmtMoney(pay.amount, pay.currency || b.currency)}
+                      </span>
+                    )}
+                  </div>
+                  {(pay.reference || pay.by || pay.at) && (
+                    <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginTop: 3 }}>
+                      {pay.reference ? `ref ${pay.reference} · ` : ''}
+                      {pay.by ? `${pay.by} · ` : ''}
+                      {pay.at ? new Date(pay.at).toLocaleString('en-AU') : ''}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                    {pay.status !== 'paid' && (
+                      <button className="c-btn" disabled={busy === 'payment'} onClick={() => savePayment('paid')}>Mark paid</button>
+                    )}
+                    {pay.status === 'unpaid' && (
+                      <button className="c-btn" disabled={busy === 'payment'} onClick={() => savePayment('deposit')}>Deposit</button>
+                    )}
+                    {pay.status !== 'unpaid' && pay.status !== 'refunded' && (
+                      <button className="c-btn" disabled={busy === 'payment'} onClick={() => savePayment('refunded')}>Refunded</button>
+                    )}
+                    {pay.status !== 'unpaid' && (
+                      <button className="c-btn" disabled={busy === 'payment'} onClick={() => savePayment('unpaid')}>Clear</button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
             {pb?.supplierNet == null && (
               <div style={{ fontSize: 11.5, color: '#92400e', background: 'rgba(245,158,11,0.10)', border: '1px solid #f59e0b', borderRadius: 6, padding: '6px 8px', marginBottom: 8 }}>
                 The supplier did not state their net on this booking, so the margin cannot be shown. Bookings made from now on record it.
