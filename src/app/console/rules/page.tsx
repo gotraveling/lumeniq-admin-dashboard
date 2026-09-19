@@ -16,8 +16,11 @@ const TIERS: { key: Tier; label: string; blurb: string }[] = [
   { key: 'hotel', label: 'Hotel', blurb: 'One specific property' },
 ];
 
+// A fixed markup is added to the supplier net in the RATE's own currency
+// (pricingService applyMarkup), so it has no currency of its own — "+$40"
+// implied dollars on a rate that may be quoted in anything.
 const markupLabel = (r: ConsoleRule) =>
-  r.markup_type === 'percentage' ? `+${r.markup_value}%` : `+$${r.markup_value}`;
+  r.markup_type === 'percentage' ? `+${r.markup_value}%` : `+${r.markup_value} flat`;
 
 function conditionSummary(c: RuleConditions): string {
   const parts: string[] = [];
@@ -119,11 +122,13 @@ export default function ConsoleRulesPage() {
         const out: Record<number, { perNight: number; total: number; currency: string; month: string }> = {};
         for (const [hid, v] of Object.entries<any>(json.results || {})) {
           const best = (v.months || []).find((m: any) => m.month === v.bestMonth);
-          if (!best?.fromTotal) continue;
+          // No currency on the warmed row means we cannot label the figure,
+          // and an unlabelled price is worse than none.
+          if (!best?.fromTotal || !best?.currency) continue;
           out[Number(hid)] = {
             perNight: Math.round(best.fromNightly ?? best.fromTotal / (best.nights || 7)),
             total: Math.round(best.fromTotal),
-            currency: best.currency || '',
+            currency: best.currency,
             month: best.month,
           };
         }
@@ -413,7 +418,7 @@ function RuleForm({
           </select>
         </div>
         <div>
-          <label className="c-label">Markup value {markupType === 'percentage' ? '(%)' : '($)'}</label>
+          <label className="c-label">Markup value {markupType === 'percentage' ? '(%)' : "(flat, in the rate's own currency)"}</label>
           <input className="c-input" type="number" step="0.01" value={markupValue} onChange={(e) => setMarkupValue(e.target.value)} />
         </div>
         <div>

@@ -3540,7 +3540,9 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
                     <input className="c-input" type="number" step="0.01" value={form.transfer_cost_child} onChange={(e) => set('transfer_cost_child', e.target.value)} />
                   </Field>
                   <Field label="Currency">
-                    <input className="c-input" value={form.transfer_currency} maxLength={3} onChange={(e) => set('transfer_currency', e.target.value.toUpperCase())} placeholder="USD" />
+                    {/* Blank is read as AUD where the surcharge is rendered, so
+                        the placeholder must say AUD, not USD. */}
+                    <input className="c-input" value={form.transfer_currency} maxLength={3} onChange={(e) => set('transfer_currency', e.target.value.toUpperCase())} placeholder="AUD" />
                   </Field>
                   <Field label="Duration">
                     <input className="c-input" value={form.transfer_duration} onChange={(e) => set('transfer_duration', e.target.value)} placeholder="e.g. 45 min" />
@@ -4185,18 +4187,29 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
                 }
                 if (best.grossTotal && best.discountAmount) {
                   const cur = best.currency || 'USD';
-                  rows.push(['Discount', `${cur} ${fmtMoney(best.grossTotal)} gross − ${fmtMoney(best.discountAmount)} = ${fmtMoney(best.grossTotal - best.discountAmount)} net`]);
+                  rows.push(['Discount', `${fmtMoney(best.grossTotal)} gross − ${fmtMoney(best.discountAmount)} = ${fmtMoney(best.grossTotal - best.discountAmount)} ${cur} net`]);
                 }
                 if (best.rateKey) rows.push(['Rate key', best.rateKey]);
-                if (best.netNightly != null) rows.push(['NET (supplier cost)', `${fmtMoney(best.netNightly)} USD`]);
-                if (best.markupPct != null && best.sellNightly != null)
-                  rows.push([`+ ${best.markupPct}% markup (${markupSource}) → sell`, `${fmtMoney(best.sellNightly)} USD`]);
+                // audSource 'supplier' = RateHawk's AUD is their own contracted
+                // figure and the currency we asked for is a conversion that
+                // appears on no invoice — so the derivation runs in AUD and the
+                // request-currency numbers are not printed at all.
+                const audIsSupplier = best.audSource === 'supplier';
+                const nativeCur = best.currency || 'USD';
+                const netUnit  = audIsSupplier ? (best.netNightlyAud ?? best.netNightly) : best.netNightly;
+                const sellUnit = audIsSupplier ? (best.sellNightlyAud ?? best.sellNightly) : best.sellNightly;
+                const trailCur = audIsSupplier ? 'AUD' : nativeCur;
+                if (netUnit != null) rows.push(['NET (supplier cost)', `${fmtMoney(netUnit)} ${trailCur}`]);
+                if (best.markupPct != null && sellUnit != null)
+                  rows.push([`+ ${best.markupPct}% markup (${markupSource}) → sell`, `${fmtMoney(sellUnit)} ${trailCur}`]);
                 // A merged property has one hotel_id per supplier; say so when
                 // the winning rule lives on a different one than this rate.
                 if (best.markupViaCanonical && best.markupRuleHotelId != null)
                   rows.push(['Markup set on', `hotel ${best.markupRuleHotelId} (same property, other supplier) — this rate is hotel ${best.markupMatchedHotelId}`]);
-                if (best.fxRate != null && best.sellNightlyAud != null)
-                  rows.push([`× FX ${best.fxRate} (USD→AUD)`, `${fmtMoney(best.sellNightlyAud)} AUD / nt`]);
+                if (audIsSupplier)
+                  rows.push(['Billed in', 'AUD — the supplier\u2019s own contracted amount, not a conversion']);
+                else if (best.fxRate != null && best.sellNightlyAud != null)
+                  rows.push([`\u00d7 FX ${best.fxRate} (${nativeCur}\u2192AUD)`, `${fmtMoney(best.sellNightlyAud)} AUD / nt`]);
                 if (best.sellTotalAud != null)
                   rows.push([`× ${nights} night${nights !== 1 ? 's' : ''}`, `${fmtMoney(best.sellTotalAud)} AUD total`]);
                 return (
@@ -6117,7 +6130,6 @@ function BookingSidebar(props: {
               const nativeIsReal = r.pricing?.audSource !== 'supplier';
               const inAud = !nativeIsReal && typeof r.pricing.aud?.totalAmount === 'number';
               const cur = inAud ? 'AUD' : (r.pricing.currency || 'USD');
-              const fx = inAud && r.pricing.aud?.fxRate ? r.pricing.aud.fxRate : 1;
               const sellTotal = inAud
                 ? (r.pricing.aud?.totalAmount || 0)
                 : (r.pricing.sell?.totalAmount || 0);
@@ -6471,25 +6483,14 @@ function BookingSidebar(props: {
                 // button so the consultant sees the real total. Was
                 // gated on priceChanged before, which hid moves
                 // RateHawk didn't flip the banner flag for.
-                const nativeIsReal = r.pricing?.audSource !== 'supplier';
-                const inAud = !nativeIsReal && typeof r.pricing.aud?.totalAmount === 'number';
-                const cur = inAud ? 'AUD' : (r.pricing.currency || 'USD');
-                const fx = inAud && r.pricing.aud?.fxRate ? r.pricing.aud.fxRate : 1;
-                // prebook returns the supplier's own currency; scale it the
-                // same way so the button cannot mix currencies.
-                // fx is 1 unless we are quoting in AUD, so this is a no-op
-                // for suppliers that already quote in their real currency.
-                // Same trap as quotedTotal: a held price already in AUD must not
-                // be converted again. fx is 1 for anything we are not quoting
-                // in AUD, so only the held-price case needs the check.
-                const heldIsAud = String(props.prebook?.currency || '').toUpperCase() === 'AUD';
-                const base = props.prebook?.newPrice != null
-                  ? (heldIsAud ? props.prebook.newPrice : props.prebook.newPrice * fx)
-                  : (r.pricing.sell?.totalAmount || 0) * fx;
                 // This button must read the same number we POST as
-                // expectedTotalAmount, so it adds nothing to the rate. Excluded
-                // taxes are settled at the property and are itemised above.
-                return `${r.onRequest ? 'Send request' : 'Confirm'} · ${fmtMoney(base)} ${cur}`;
+                // expectedTotalAmount, so it asks quotedTotal rather than
+                // re-deriving it — the duplicate arithmetic here was one FX
+                // multiply away from disagreeing with the booking. It adds
+                // nothing to the rate: excluded taxes are settled at the
+                // property and are itemised above.
+                const q = quotedTotal(r, props.prebook?.newPrice, props.prebook?.currency);
+                return `${r.onRequest ? 'Send request' : 'Confirm'} · ${fmtMoney(q.amount)} ${q.currency}`;
               })()}
             </button>
           )}

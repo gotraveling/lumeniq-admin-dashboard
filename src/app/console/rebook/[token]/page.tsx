@@ -40,7 +40,9 @@ type Payload = {
 };
 
 const money = (n?: number | null, ccy?: string) =>
-  n == null ? '—' : `${Number(n).toFixed(2)} ${ccy || ''}`.trim();
+  // Never a bare number: without the code there is no way to tell a net in
+  // AUD from one in USD.
+  n == null || !ccy ? '—' : `${Number(n).toFixed(2)} ${ccy}`;
 
 const stayDate = (d?: string | null) => {
   if (!d) return '—';

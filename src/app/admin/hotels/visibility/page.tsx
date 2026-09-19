@@ -471,6 +471,15 @@ export default function HotelVisibilityPage() {
 
                   {ruleForm.rule_type === 'price_range' && (
                     <div className="grid grid-cols-3 gap-4">
+                      {/* The threshold is compared against the stored nightly
+                          rate exactly as the supplier quoted it — hotel-api's
+                          price_range query does not convert, so the currency
+                          here records intent only. Said out loud so nobody
+                          reads an AUD threshold as filtering AUD rates. */}
+                      <p className="col-span-3 text-xs text-gray-500 -mb-2">
+                        Compared against the stored nightly rate in the supplier&rsquo;s own
+                        currency — nothing is converted.
+                      </p>
                       <div>
                         <label className="block text-sm font-medium mb-1">Operator</label>
                         <select

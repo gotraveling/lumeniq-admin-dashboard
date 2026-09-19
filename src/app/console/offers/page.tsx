@@ -116,6 +116,12 @@ function fmtMoney(n?: number | null) {
   if (n == null || isNaN(n)) return '—';
   return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
+// An amount with no currency code cannot be read safely, so we show nothing
+// rather than a bare number.
+function fmtMoneyCcy(n?: number | null, ccy?: string | null) {
+  if (n == null || isNaN(n) || !ccy) return '—';
+  return `${fmtMoney(n)} ${ccy}`;
+}
 function boardOf(ratePlan?: string) {
   return String(ratePlan || '').split('·')[0].trim() || null;
 }
@@ -194,9 +200,13 @@ async function collectOfferRows(
       region: hotel.country || null, checkIn, nights,
       promoName: best.offers?.[0]?.name ?? null,
       discountPct,
-      netTotal: best.pricing?.net?.aud?.totalAmount ?? best.pricing?.net?.totalAmount ?? null,
-      sellTotal: best.pricing?.aud?.totalAmount ?? best.pricing?.sell?.totalAmount ?? null,
-      currency: best.pricing?.aud?.totalAmount ? 'AUD' : (best.pricing?.currency ?? null),
+      // Net and sell must come from the SAME currency basis or the margin
+      // between the two columns is a subtraction across currencies.
+      ...(best.pricing?.aud?.totalAmount != null && best.pricing?.net?.aud?.totalAmount != null
+        ? { netTotal: best.pricing.net.aud.totalAmount, sellTotal: best.pricing.aud.totalAmount, currency: 'AUD' }
+        : { netTotal: best.pricing?.net?.totalAmount ?? null,
+            sellTotal: best.pricing?.sell?.totalAmount ?? null,
+            currency: best.pricing?.currency ?? null }),
       board: boardOf(best.ratePlan ?? undefined), transfer: best.transfer ?? null,
       refundable: typeof best.refundable === 'boolean' ? best.refundable : null,
       supplier: best.supplier ?? null,
@@ -820,10 +830,10 @@ function ReportDetail({ report, onBack, onSaved }: { report: Report | null; onBa
                     <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: (r.discountPct ?? 0) > 0 ? 700 : 400, color: (r.discountPct ?? 0) > 0 ? 'var(--c-accent)' : 'var(--c-fg-muted)' }}>
                       {(r.discountPct ?? 0) > 0 ? `${r.discountPct}%` : '—'}
                     </td>
-                    <td style={{ padding: '7px 8px', textAlign: 'right', color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>{fmtMoney(r.netTotal)}</td>
-                    <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: 600, fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>{fmtMoney(r.sellTotal)} {r.currency}</td>
+                    <td style={{ padding: '7px 8px', textAlign: 'right', color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>{fmtMoneyCcy(r.netTotal, r.currency)}</td>
+                    <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: 600, fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>{fmtMoneyCcy(r.sellTotal, r.currency)}</td>
                     <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: 700, fontFamily: 'var(--c-mono)', whiteSpace: 'nowrap' }}>
-                      {perNight(r) != null ? fmtMoney(perNight(r)) : '—'}
+                      {fmtMoneyCcy(perNight(r), r.currency)}
                     </td>
                     <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>{r.board || '—'}</td>
                     <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>{r.transfer || '—'}</td>
@@ -901,7 +911,7 @@ function MonthlyScoutPanel({
   const adLine = (r: { hotelName: string; best: MonthlyRate | null; swingPct: number | null }) => {
     if (!r.best) return '';
     const month = new Date(`${r.best.month}-15T00:00:00`).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
-    const price = `${fmtMoney(r.best.fromTotal)} ${r.best.currency || ''}`.trim();
+    const price = fmtMoneyCcy(r.best.fromTotal, r.best.currency);
     const parts = [
       `${r.hotelName}: ${r.best.nights} nights from ${price}`,
       month,
@@ -956,7 +966,7 @@ function MonthlyScoutPanel({
                   <td style={{ padding: '7px 8px', fontWeight: 600 }}>{r.hotelName}</td>
                   <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>{r.best ? fmtMonth(r.best.month) : '—'}</td>
                   <td style={{ padding: '7px 8px', textAlign: 'right', fontFamily: 'var(--c-mono)', fontWeight: 700 }}>
-                    {r.best ? `${fmtMoney(r.best.fromTotal)} ${r.best.currency || ''}` : '—'}
+                    {r.best ? fmtMoneyCcy(r.best.fromTotal, r.best.currency) : '—'}
                   </td>
                   <td style={{ padding: '7px 8px', textAlign: 'right', color: (r.swingPct || 0) > 0 ? 'var(--c-accent)' : 'var(--c-fg-muted)', fontWeight: 700 }}>
                     {r.swingPct != null && r.swingPct > 0 ? `${r.swingPct}%` : '—'}

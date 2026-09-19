@@ -32,7 +32,9 @@ type Candidate = {
 };
 
 const money = (n: any, ccy?: string) =>
-  n == null ? '—' : `${Number(n).toFixed(2)} ${ccy || ''}`.trim();
+  // Never a bare number: without the code there is no way to tell a net in
+  // AUD from one in USD.
+  n == null || !ccy ? '—' : `${Number(n).toFixed(2)} ${ccy}`;
 
 export default function RebookListPage() {
   const router = useRouter();

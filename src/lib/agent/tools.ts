@@ -83,10 +83,22 @@ export const agentTools = {
           ratePlan: r.ratePlan,
           refundable: r.refundable,
           cancellationDeadlineUtc: r.cancellationDeadlineUtc,
-          net:    r.pricing?.net?.totalAmount,
-          markup: r.pricing?.markup?.amount,
-          sell:   r.pricing?.sell?.totalAmount,
-          currency: r.pricing?.currency
+          // Report the currency the supplier actually invoices. RateHawk
+          // contracts our account in AUD (audSource 'supplier') and the
+          // currency we asked for is a conversion that appears on no invoice.
+          ...(r.pricing?.audSource === 'supplier' && r.pricing?.aud?.totalAmount != null
+            ? { net: r.pricing?.net?.aud?.totalAmount,
+                sell: r.pricing.aud.totalAmount,
+                // markup.amount is in the request currency — in AUD it is the
+                // difference between the two AUD figures, not that number.
+                markup: r.pricing?.net?.aud?.totalAmount != null
+                  ? Math.round((r.pricing.aud.totalAmount - r.pricing.net.aud.totalAmount) * 100) / 100
+                  : undefined,
+                currency: 'AUD' }
+            : { net: r.pricing?.net?.totalAmount,
+                sell: r.pricing?.sell?.totalAmount,
+                markup: r.pricing?.markup?.amount,
+                currency: r.pricing?.currency })
         }))
       };
     }

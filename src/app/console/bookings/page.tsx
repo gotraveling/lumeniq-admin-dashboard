@@ -716,7 +716,12 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
               </div>
             )}
             {pb?.markupRule && <KV k="Markup rule" v={`${pb.markupRule.name}${pb.markupRule.type === 'percentage' ? ` · ${pb.markupRule.percentage}%` : pb.markupRule.fixedAmount != null ? ` · +${pb.markupRule.fixedAmount}` : ''}`} />}
-            {pb?.expectedTotalAmount != null && pb?.sellingTotal != null && Math.abs(pb.expectedTotalAmount - pb.sellingTotal) > 0.01 && (
+            {/* Only a like-for-like comparison is a discrepancy. When the two
+                figures are in different currencies the difference is the
+                currency, not the price, and subtracting them says nothing. */}
+            {pb?.expectedTotalAmount != null && pb?.sellingTotal != null
+              && (pb.expectedCurrency || '').toUpperCase() === (pb.sellingCurrency || '').toUpperCase()
+              && Math.abs(pb.expectedTotalAmount - pb.sellingTotal) > 0.01 && (
               <div style={{ fontSize: 11.5, color: '#92400e', background: 'rgba(245,158,11,0.10)', border: '1px solid #f59e0b', borderRadius: 6, padding: '6px 8px' }}>
                 Customer saw {fmtMoney(pb.expectedTotalAmount, pb.expectedCurrency)} at search, booked at {fmtMoney(pb.sellingTotal, pb.sellingCurrency)}.
               </div>

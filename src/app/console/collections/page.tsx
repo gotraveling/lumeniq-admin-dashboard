@@ -148,7 +148,9 @@ function packageFromOfferRow(row: OfferReportRow): CollectionPackage {
     row.transfer || null,
     row.refundable == null ? null : row.refundable ? 'Refundable' : 'Non-refundable',
   ].filter(Boolean);
-  const price = row.sellTotal == null ? '' : `${money(row.sellTotal)} ${row.currency || 'AUD'}`.trim();
+  // No currency, no price: guessing AUD over a figure that may be the
+  // supplier's own currency puts the wrong number on a collection card.
+  const price = row.sellTotal == null || !row.currency ? '' : `${money(row.sellTotal)} ${row.currency}`;
   return {
     summary: row.packageSummary || `${row.nights} nights · ${monthLabel(row.checkIn)}`,
     inclusions: row.packageInclusions || bits.join(' · '),
@@ -496,9 +498,13 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
             nights: combo.nights,
             promoName: best.offers?.[0]?.name ?? null,
             discountPct: gross > 0 && disc > 0 ? Math.round((disc / gross) * 100) : 0,
-            netTotal: best.pricing?.net?.aud?.totalAmount ?? best.pricing?.net?.totalAmount ?? null,
-            sellTotal: best.pricing?.aud?.totalAmount ?? best.pricing?.sell?.totalAmount ?? null,
-            currency: best.pricing?.aud?.totalAmount ? 'AUD' : (best.pricing?.currency ?? null),
+            // Net and sell must share one currency basis — the margin between
+            // them is meaningless otherwise.
+            ...(best.pricing?.aud?.totalAmount != null && best.pricing?.net?.aud?.totalAmount != null
+              ? { netTotal: best.pricing.net.aud.totalAmount, sellTotal: best.pricing.aud.totalAmount, currency: 'AUD' }
+              : { netTotal: best.pricing?.net?.totalAmount ?? null,
+                  sellTotal: best.pricing?.sell?.totalAmount ?? null,
+                  currency: best.pricing?.currency ?? null }),
             board: boardOf(best.ratePlan),
             transfer: best.transfer ?? null,
             refundable: typeof best.refundable === 'boolean' ? best.refundable : null,
@@ -855,8 +861,10 @@ function OfferSelector({ hotelId, packageNights, selection, onChange }: {
         <div style={{ marginTop: 6, display: 'grid', gap: 2 }}>
           {rows.map((r) => {
             const on = mode === 'manual' && selection?.month === r.month;
-            const cur = r.currency || 'USD';
-            const was = r.supplierWasTotal && r.fromTotal && r.supplierWasTotal > r.fromTotal
+            // The warmed row carries its own currency — assuming USD would
+            // mislabel a RateHawk price that is contracted in AUD.
+            const cur = r.currency || null;
+            const was = cur && r.supplierWasTotal && r.fromTotal && r.supplierWasTotal > r.fromTotal
               ? ` (was ${cur} ${Math.round(r.supplierWasTotal).toLocaleString()})` : '';
             return (
               <button key={r.month} type="button" className="c-btn"
@@ -878,7 +886,7 @@ function OfferSelector({ hotelId, packageNights, selection, onChange }: {
                   {r.offerName ? ` · ${r.offerName}` : ' · no offer'}
                 </span>
                 <span className="c-mono">
-                  {r.fromTotal != null ? `${cur} ${Math.round(r.fromTotal).toLocaleString()}` : '—'}{was}
+                  {r.fromTotal != null && cur ? `${cur} ${Math.round(r.fromTotal).toLocaleString()}` : '—'}{was}
                 </span>
               </button>
             );
