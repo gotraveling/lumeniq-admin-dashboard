@@ -546,10 +546,36 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
           </Section>
 
           <Section label="Pricing &amp; margin">
-            <KV k="Total payable" v={<strong>{fmtMoney(b.totalAmount, b.currency)}</strong>} />
-            {pb?.sellingTotal != null && <KV k="Selling total" v={fmtMoney(pb.sellingTotal, pb.sellingCurrency)} />}
-            {pb?.supplierNet != null && <KV k="Supplier net" v={fmtMoney(pb.supplierNet, pb.supplierNetCurrency)} />}
-            {pb?.commissionAmount != null && <KV k="Commission" v={`${fmtMoney(pb.commissionAmount, pb.sellingCurrency)}${pb.commissionPercent != null ? ` (${pb.commissionPercent}%)` : ''}`} />}
+            {/* Two numbers a consultant needs without arithmetic: what the
+                supplier invoices us, and what the client is charged. Net leads;
+                the client's side is boxed off so the two are never read as one
+                running total. */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 6 }}>
+              <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
+                Supplier net {pb?.supplierNet == null ? '' : '(what we are invoiced)'}
+              </span>
+              <span className="c-mono" style={{ fontSize: 19, fontWeight: 700, color: 'var(--c-accent)', whiteSpace: 'nowrap' }}>
+                {pb?.supplierNet != null
+                  ? fmtMoney(pb.supplierNet, pb.supplierNetCurrency || pb.sellingCurrency)
+                  : 'not recorded'}
+              </span>
+            </div>
+            <div style={{ padding: '8px 10px', borderRadius: 7, border: '1px solid var(--c-line)', background: 'var(--c-bg-soft)', display: 'grid', gap: 5, marginBottom: 8 }}>
+              {pb?.commissionAmount != null && (
+                <KV k={`Our margin${pb.commissionPercent != null ? ` (${pb.commissionPercent}%)` : ''}`} v={fmtMoney(pb.commissionAmount, pb.sellingCurrency)} />
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+                <span style={{ fontSize: 12, color: 'var(--c-fg-soft)', fontWeight: 600 }}>Charge the client</span>
+                <span className="c-mono" style={{ fontSize: 15, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                  {fmtMoney(b.totalAmount, b.currency)}
+                </span>
+              </div>
+            </div>
+            {pb?.supplierNet == null && (
+              <div style={{ fontSize: 11.5, color: '#92400e', background: 'rgba(245,158,11,0.10)', border: '1px solid #f59e0b', borderRadius: 6, padding: '6px 8px', marginBottom: 8 }}>
+                The supplier did not state their net on this booking, so the margin cannot be shown. Bookings made from now on record it.
+              </div>
+            )}
             {pb?.markupRule && <KV k="Markup rule" v={`${pb.markupRule.name}${pb.markupRule.type === 'percentage' ? ` · ${pb.markupRule.percentage}%` : pb.markupRule.fixedAmount != null ? ` · +${pb.markupRule.fixedAmount}` : ''}`} />}
             {pb?.expectedTotalAmount != null && pb?.sellingTotal != null && Math.abs(pb.expectedTotalAmount - pb.sellingTotal) > 0.01 && (
               <div style={{ fontSize: 11.5, color: '#92400e', background: 'rgba(245,158,11,0.10)', border: '1px solid #f59e0b', borderRadius: 6, padding: '6px 8px' }}>
