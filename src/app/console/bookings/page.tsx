@@ -445,6 +445,27 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
     finally { setBusy(null); }
   };
 
+  // "Is this cheaper today?" on demand. Same comparison the nightly watcher
+  // makes, so anything it finds is acted on through the same reviewed path.
+  const checkCheaper = async () => {
+    setBusy('cheaper');
+    try {
+      const r = await fetch(`/api/admin/rebook/check/${id}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.success) { flash(false, j.message || j.error || 'Could not check'); return; }
+      if (j.data.cheaper) {
+        const c = j.data.candidate;
+        flash(true, `Cheaper by ${Number(c.saving).toFixed(2)} ${c.currency}. Opening it…`);
+        setTimeout(() => { window.location.href = `/console/rebook/${c.action_token}`; }, 900);
+      } else {
+        flash(true, `No saving: ${j.data.reason}`);
+      }
+    } catch { flash(false, 'Network error checking for a cheaper rate'); }
+    finally { setBusy(null); }
+  };
+
   const handleResend = async () => {
     setBusy('resend');
     try {
@@ -518,6 +539,15 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
             {active && (
               <button className="c-btn" disabled={!!busy} onClick={handleResend} style={{ padding: '5px 11px', fontSize: 12 }}>
                 {busy === 'resend' ? 'Sending…' : 'Resend email'}
+              </button>
+            )}
+            {active && (
+              <button
+                className="c-btn" disabled={!!busy} onClick={checkCheaper}
+                title="Ask the supplier whether the same room is cheaper today. Only useful while the booking is still refundable."
+                style={{ padding: '5px 11px', fontSize: 12 }}
+              >
+                {busy === 'cheaper' ? 'Checking…' : 'Cheaper today?'}
               </button>
             )}
             {active && (

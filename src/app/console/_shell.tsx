@@ -22,8 +22,7 @@ import {
   SlidersHorizontal,
   Link2,
   Tag,
-  LayoutList,
-} from 'lucide-react';
+  LayoutList, TrendingDown } from 'lucide-react';
 
 /**
  * Console shell — sidebar nav + topbar + content slot.
@@ -47,6 +46,7 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
     items: [
       { href: '/console/bookings',         label: 'Bookings',        icon: ClipboardList },
       { href: '/console/search',           label: 'B2B Search',      icon: Search },
+      { href: '/console/rebook',           label: 'Rebook watch',    icon: TrendingDown },
       { href: '/console/offers',           label: 'Offers',          icon: Tag, adminOnly: true },
       // AI Agent search disabled — driven via MCP now (2026-06-28)
       { href: '/console/search-activity',  label: 'Search Activity', icon: BarChart3, adminOnly: true },
