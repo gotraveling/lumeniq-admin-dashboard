@@ -1394,8 +1394,8 @@ export default function ConsoleSearchPage() {
           // the p-* prebookHash. RateHawk's prebook on an existing
           // p-hash isn't supported; we need a fresh round.
           rateKey: chosenRate.rateKey,
-          expectedTotalAmount: quotedTotal(chosenRate, prebook?.newPrice).amount,
-          expectedCurrency:    quotedTotal(chosenRate, prebook?.newPrice).currency,
+          expectedTotalAmount: quotedTotal(chosenRate, prebook?.newPrice, prebook?.currency).amount,
+          expectedCurrency:    quotedTotal(chosenRate, prebook?.newPrice, prebook?.currency).currency,
           accountType: chosenRate._channel || 'cug',
           searchParams: {
             checkIn, checkOut,
@@ -1474,8 +1474,8 @@ export default function ConsoleSearchPage() {
         // booking row + audit + email must record what the customer is
         // actually charged, not the stale search-time quote. Falls back
         // to chosenRate when prebook never ran (e.g. Hummingbird).
-        expectedTotalAmount: quotedTotal(chosenRate, prebook?.newPrice).amount,
-        expectedCurrency:    quotedTotal(chosenRate, prebook?.newPrice).currency,
+        expectedTotalAmount: quotedTotal(chosenRate, prebook?.newPrice, prebook?.currency).amount,
+        expectedCurrency:    quotedTotal(chosenRate, prebook?.newPrice, prebook?.currency).currency,
         // The rate's OWN availability, never a constant. Hardcoding 'free_sell'
         // meant every on-request booking was recorded as an instant sale:
         // booking.js branches on this to set status
@@ -5733,7 +5733,11 @@ function RoomGroupedRates({
  * audSource 'supplier' means the AUD is RateHawk's own contracted figure.
  * Anything else (Hummingbird) is already quoted in its real currency.
  */
-function quotedTotal(r: AdminRate, prebookPrice?: number | null): { amount: number | undefined; currency: string } {
+function quotedTotal(
+  r: AdminRate,
+  prebookPrice?: number | null,
+  prebookCurrency?: string | null,
+): { amount: number | undefined; currency: string } {
   const inAud = r.pricing?.audSource === 'supplier' && typeof r.pricing.aud?.totalAmount === 'number';
   if (!inAud) {
     return {
@@ -5741,11 +5745,15 @@ function quotedTotal(r: AdminRate, prebookPrice?: number | null): { amount: numb
       currency: r.pricing.currency || 'USD',
     };
   }
-  const fx = r.pricing.aud?.fxRate || 1;
-  return {
-    amount: prebookPrice != null ? prebookPrice * fx : (r.pricing.aud?.totalAmount ?? undefined),
-    currency: 'AUD',
-  };
+  // The held price arrives in whatever currency the supplier settled it in.
+  // Converting one that is already AUD charged the client the rate twice over:
+  // a 422 AUD net quoted at 523.28 was sent as 733.64.
+  if (prebookPrice != null) {
+    const heldIsAud = String(prebookCurrency || '').toUpperCase() === 'AUD';
+    const fx = r.pricing.aud?.fxRate || 1;
+    return { amount: heldIsAud ? prebookPrice : prebookPrice * fx, currency: 'AUD' };
+  }
+  return { amount: r.pricing.aud?.totalAmount ?? undefined, currency: 'AUD' };
 }
 
 /**
@@ -6458,7 +6466,13 @@ function BookingSidebar(props: {
                 // same way so the button cannot mix currencies.
                 // fx is 1 unless we are quoting in AUD, so this is a no-op
                 // for suppliers that already quote in their real currency.
-                const base = (props.prebook?.newPrice || r.pricing.sell?.totalAmount || 0) * fx;
+                // Same trap as quotedTotal: a held price already in AUD must not
+                // be converted again. fx is 1 for anything we are not quoting
+                // in AUD, so only the held-price case needs the check.
+                const heldIsAud = String(props.prebook?.currency || '').toUpperCase() === 'AUD';
+                const base = props.prebook?.newPrice != null
+                  ? (heldIsAud ? props.prebook.newPrice : props.prebook.newPrice * fx)
+                  : (r.pricing.sell?.totalAmount || 0) * fx;
                 // This button must read the same number we POST as
                 // expectedTotalAmount, so it adds nothing to the rate. Excluded
                 // taxes are settled at the property and are itemised above.
