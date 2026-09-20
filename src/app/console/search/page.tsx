@@ -1493,6 +1493,38 @@ export default function ConsoleSearchPage() {
         // can tell whether it is comparing the same product.
         roomTypeName:            chosenRate.roomTypeName || undefined,
         roomTypeCode:            chosenRate.roomTypeCode || undefined,
+        // The rate exactly as it was quoted. Months later the rate is gone from
+        // the supplier and this is the only record of what was sold.
+        rateSnapshot: {
+          supplier:                chosenRate.supplier,
+          rateKey:                 chosenRate.rateKey,
+          roomTypeName:            chosenRate.roomTypeName,
+          roomTypeCode:            chosenRate.roomTypeCode ?? null,
+          roomGroupName:           chosenRate.roomGroupName ?? null,
+          originalRateName:        chosenRate.originalRateName ?? null,
+          ratePlan:                chosenRate.ratePlan ?? null,
+          breakfastIncluded:       chosenRate.breakfastIncluded ?? null,
+          transfer:                (chosenRate as any).transfer ?? null,
+          refundable:              chosenRate.refundable ?? null,
+          cancellationPolicy:      chosenRate.cancellationPolicy ?? null,
+          cancellationDeadlineUtc: chosenRate.cancellationDeadlineUtc ?? null,
+          supplierCancellationDeadlineUtc: chosenRate.supplierCancellationDeadlineUtc ?? null,
+          cancellationPenaltyPercent:      (chosenRate as any).cancellationPenaltyPercent ?? null,
+          availabilityType:        chosenRate.availabilityType ?? null,
+          taxes:                   chosenRate.taxes ?? null,
+          pricing: {
+            currency:   chosenRate.pricing?.currency ?? null,
+            audSource:  chosenRate.pricing?.audSource ?? null,
+            netTotal:   chosenRate.pricing?.net?.totalAmount ?? null,
+            netTotalAud: chosenRate.pricing?.net?.aud?.totalAmount ?? null,
+            sellTotal:  chosenRate.pricing?.sell?.totalAmount ?? null,
+            sellTotalAud: chosenRate.pricing?.aud?.totalAmount ?? null,
+            fxRate:     chosenRate.pricing?.aud?.fxRate ?? null,
+            markupPct:  chosenRate.pricing?.markup?.value ?? null,
+            markupRule: chosenRate.pricing?.markup?.ruleName ?? null,
+          },
+          quotedAt: new Date().toISOString(),
+        },
         cancellationPolicy:      chosenRate.cancellationPolicy || undefined,
         // The supplier's own net, as their prebook stated it a moment ago.
         // RateHawk does not repeat it on the booking response, so without this

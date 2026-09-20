@@ -334,6 +334,9 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
     departure: { date: string; airline: string; number: string };
   }>({ guests: [], arrival: { date: '', airline: '', number: '' }, departure: { date: '', airline: '', number: '' } });
   const [cancelOutcome, setCancelOutcome] = useState<any | null>(null);
+  // Every price check ever made against this booking — including the ones that
+  // found nothing, which is most of them and is the point.
+  const [priceHistory, setPriceHistory] = useState<any | null>(null);
 
   const id = booking ? (booking.internalBookingId || booking.bookingId) : null;
 
@@ -358,7 +361,9 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
         if (!abort && j?.success) setDetail(j.data);
       } catch { /* fall back to the list row */ }
     })();
+    void loadHistory();
     return () => { abort = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   if (!booking) return null;
@@ -447,6 +452,15 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
 
   // "Is this cheaper today?" on demand. Same comparison the nightly watcher
   // makes, so anything it finds is acted on through the same reviewed path.
+  const loadHistory = async () => {
+    if (!id) return;
+    try {
+      const r = await fetch(`/api/admin/rebook/history/${id}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j?.success) setPriceHistory(j.data);
+    } catch { /* the booking still renders without it */ }
+  };
+
   const checkCheaper = async () => {
     setBusy('cheaper');
     try {
@@ -462,6 +476,7 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
       } else {
         flash(true, `No saving: ${j.data.reason}`);
       }
+      await loadHistory();
     } catch { flash(false, 'Network error checking for a cheaper rate'); }
     finally { setBusy(null); }
   };
@@ -727,6 +742,41 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
               </div>
             )}
           </Section>
+
+          {priceHistory?.checks?.length > 0 && (
+            <Section label="Price watch">
+              <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginBottom: 6 }}>
+                {priceHistory.summary.count} check{priceHistory.summary.count === 1 ? '' : 's'}
+                {priceHistory.summary.lowestSeen != null && <> · lowest seen {fmtMoney(priceHistory.summary.lowestSeen, priceHistory.currency)}</>}
+                {priceHistory.summary.highestSeen != null && <> · highest {fmtMoney(priceHistory.summary.highestSeen, priceHistory.currency)}</>}
+                {priceHistory.summary.timesActionable > 0
+                  ? <> · {priceHistory.summary.timesActionable} worth acting on</>
+                  : <> · never worth moving</>}
+              </div>
+              <div style={{ display: 'grid', gap: 3, maxHeight: 210, overflowY: 'auto' }}>
+                {priceHistory.checks.map((c: any) => (
+                  <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}>
+                    <span style={{ color: 'var(--c-fg-muted)', whiteSpace: 'nowrap' }}>
+                      {new Date(c.checked_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      {c.source !== 'scan' ? ` · ${c.source}` : ''}
+                    </span>
+                    <span className="c-mono" style={{ textAlign: 'right' }}>
+                      {c.best_net != null ? (
+                        <>
+                          {fmtMoney(c.best_net, c.currency)}
+                          {c.saving != null && Number(c.saving) > 0 && (
+                            <span style={{ color: '#166534' }}> · {fmtMoney(c.saving, c.currency)} less</span>
+                          )}
+                        </>
+                      ) : (
+                        <span style={{ color: 'var(--c-fg-muted)' }}>{c.reason || 'nothing comparable'}</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
 
           <Section label="Guest">
             <KV k="Name" v={`${b.guestInfo?.firstName || ''} ${b.guestInfo?.lastName || ''}`.trim() || '—'} />
