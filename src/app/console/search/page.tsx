@@ -142,6 +142,9 @@ type AdminRate = {
   _channel?: 'cug' | 'b2c';
   rateKey: string;
   roomTypeName: string;
+  /** Supplier's own code for the room. Firmer than the name when asking later
+   *  whether a rate on offer is the same product. */
+  roomTypeCode?: string;
   // Precise sub-variant from static content (room_groups[].name on
   // RateHawk, room_types[].name on Hummingbird). RateHawk often
   // refines "Ocean Villa" → "Ocean Villa, 1 king bed, ocean view".
@@ -1486,6 +1489,10 @@ export default function ConsoleSearchPage() {
         // Terms the consultant was looking at when they booked. The
         // confirmation email states them, so the guest is told the same policy
         // that was quoted rather than nothing at all.
+        // Which room was sold, so anything asked later — is this cheaper now? —
+        // can tell whether it is comparing the same product.
+        roomTypeName:            chosenRate.roomTypeName || undefined,
+        roomTypeCode:            chosenRate.roomTypeCode || undefined,
         cancellationPolicy:      chosenRate.cancellationPolicy || undefined,
         // The supplier's own net, as their prebook stated it a moment ago.
         // RateHawk does not repeat it on the booking response, so without this
