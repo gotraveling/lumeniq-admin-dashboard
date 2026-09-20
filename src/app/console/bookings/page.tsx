@@ -343,6 +343,10 @@ async function enrichWithHotelNames(list: Booking[], setBookings: (next: any) =>
  */
 function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Booking | null; onClose: () => void; onChanged: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Who is doing this. Cancelling and marking a payment are the two things most
+  // likely to be argued about later, and both used to be recorded as the
+  // literal string 'console'.
+  const [user] = useAuthState(auth);
   const [detail, setDetail] = useState<any | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -417,18 +421,39 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
     try { const r = await fetch(`/api/bookings/${id}`); const j = await r.json(); if (j?.success) setDetail(j.data); } catch {}
   };
 
+  // What cancelling costs, from the penalty ladder captured when the rate was
+  // sold. Reading it beforehand is the whole point: the supplier only tells us
+  // the fee once the room is already gone.
+  const penaltyNow = (() => {
+    const ladder = b.bookingDetails?.rateTerms?.cancellationPenalties;
+    if (!Array.isArray(ladder) || !ladder.length) return null;
+    const now = Date.now();
+    // The step in force right now: the last one whose "from" has passed, else
+    // the opening one.
+    const active = ladder.filter((p: any) => !p.from || Date.parse(p.from) <= now).pop() || ladder[0];
+    if (!active || active.amount == null) return null;
+    return { amount: Number(active.amount), currency: active.currency || b.currency, until: active.until || null };
+  })();
+
   const handleCancel = async () => {
     const atRisk = b.totalAmount != null ? fmtMoney(b.totalAmount, b.currency) : 'the booking total';
-    const warn = isHB
-      ? `Cancel ${b.bookingId}?\n\nHummingbird returns no itemised penalty — if this rate is non-refundable, up to ${atRisk} may be charged.\nThis cannot be undone.`
-      : `Cancel ${b.bookingId}?\n\nA cancellation penalty may apply (the supplier's figure is shown after).\nThis cannot be undone.`;
-    if (!confirm(warn)) return;
+    const cost = penaltyNow
+      ? (penaltyNow.amount > 0
+          ? `The supplier will charge ${fmtMoney(penaltyNow.amount, penaltyNow.currency)} to cancel this now.`
+          : `Free to cancel now${penaltyNow.until ? `, until ${new Date(penaltyNow.until).toLocaleString('en-AU')}` : ''}.`)
+      : (isHB
+          ? `Hummingbird returns no itemised penalty — if this rate is non-refundable, up to ${atRisk} may be charged.`
+          : `A cancellation penalty may apply (the supplier's figure is shown after).`);
+    const owed = (b.payment?.status === 'paid' || b.payment?.status === 'deposit')
+      ? `\n\nThe client has paid ${fmtMoney(b.payment.amount, b.payment.currency)}. You will need to refund them and record it here.`
+      : '';
+    if (!confirm(`Cancel ${b.bookingId}?\n\n${cost}${owed}\n\nThis cannot be undone.`)) return;
     const reason = prompt('Cancellation reason (optional, logged in audit):') || '';
     setBusy('cancel');
     try {
       const r = await fetch(`/api/bookings/${id}`, {
         method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason, actor: 'console' }),
+        body: JSON.stringify({ reason, actor: user?.email || 'console' }),
       });
       const j = await r.json().catch(() => ({}));
       if (r.ok && j.success) { setCancelOutcome(j.data); flash(true, 'Booking cancelled. Guest has been emailed.'); await refresh(); }
@@ -464,7 +489,7 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
     try {
       const r = await fetch(`/api/bookings/${id}/payment`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-consultant-email': user?.email || '' },
         body: JSON.stringify({ status, amount, currency: b.currency, reference, method: 'terminal' }),
       });
       const j = await r.json().catch(() => ({}));
@@ -476,6 +501,50 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
 
   // "Is this cheaper today?" on demand. Same comparison the nightly watcher
   // makes, so anything it finds is acted on through the same reviewed path.
+  // An on-request booking waits on the supplier. The endpoint to settle it has
+  // existed all along; the only screen for it was an unlinked legacy page, so
+  // a consultant with a pending hold had nowhere to go.
+  const settleOnRequest = async (outcome: 'confirmed' | 'rejected') => {
+    const verb = outcome === 'confirmed' ? 'confirm' : 'reject';
+    if (!confirm(
+      outcome === 'confirmed'
+        ? `Confirm ${b.bookingId}?\n\nOnly do this once the supplier has told you the room is held. It sends the guest their confirmation.`
+        : `Reject ${b.bookingId}?\n\nThe supplier could not hold this room. The guest is told it did not go ahead.`
+    )) return;
+    setBusy(verb);
+    try {
+      const r = await fetch(`/api/bookings/${id}/supplier-confirmation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-consultant-email': user?.email || '' },
+        body: JSON.stringify({ outcome, actor: user?.email || 'console' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.success !== false) { flash(true, j.message || `Booking ${outcome}.`); await refresh(); }
+      else flash(false, j.message || j.error || `Could not ${verb} (${r.status})`);
+    } catch { flash(false, `Network error trying to ${verb}`); }
+    finally { setBusy(null); }
+  };
+
+  // Ask the supplier what they think the status is. Useful when a booking was
+  // cancelled or changed on their side and the webhook never reached us.
+  const syncFromSupplier = async () => {
+    setBusy('sync');
+    try {
+      const r = await fetch(`/api/bookings/${id}/sync-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-consultant-email': user?.email || '' },
+        body: JSON.stringify({ actor: user?.email || 'console' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.success !== false) {
+        const st = j.data?.status || j.status;
+        flash(true, st ? `Supplier says: ${st}.` : (j.message || 'Status checked.'));
+        await refresh();
+      } else flash(false, j.message || j.error || `Could not check with the supplier (${r.status})`);
+    } catch { flash(false, 'Network error checking with the supplier'); }
+    finally { setBusy(null); }
+  };
+
   const loadHistory = async () => {
     if (!id) return;
     try {
@@ -509,7 +578,7 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
     setBusy('resend');
     try {
       const r = await fetch(`/api/bookings/${id}/resend-confirmation`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actor: 'console' }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actor: user?.email || 'console' }),
       });
       const j = await r.json().catch(() => ({}));
       flash(r.ok, r.ok ? (j.message || 'Confirmation re-sent.') : (j.error || `Resend failed (${r.status})`));
@@ -575,6 +644,33 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
           </div>
           {/* Action bar */}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+            {b.status === 'awaiting_supplier_confirmation' && (
+              <>
+                <button
+                  className="c-btn c-btn-primary" disabled={!!busy}
+                  onClick={() => settleOnRequest('confirmed')}
+                  title="The supplier has held the room. Confirms the booking and sends the guest their confirmation."
+                  style={{ padding: '5px 11px', fontSize: 12 }}
+                >
+                  {busy === 'confirm' ? 'Confirming…' : 'Supplier confirmed'}
+                </button>
+                <button
+                  className="c-btn" disabled={!!busy}
+                  onClick={() => settleOnRequest('rejected')}
+                  title="The supplier could not hold the room."
+                  style={{ padding: '5px 11px', fontSize: 12 }}
+                >
+                  {busy === 'reject' ? 'Rejecting…' : 'Supplier declined'}
+                </button>
+              </>
+            )}
+            <button
+              className="c-btn" disabled={!!busy} onClick={syncFromSupplier}
+              title="Ask the supplier what status they hold for this booking"
+              style={{ padding: '5px 11px', fontSize: 12 }}
+            >
+              {busy === 'sync' ? 'Checking…' : 'Check with supplier'}
+            </button>
             {active && (
               <button className="c-btn" disabled={!!busy} onClick={handleResend} style={{ padding: '5px 11px', fontSize: 12 }}>
                 {busy === 'resend' ? 'Sending…' : 'Resend email'}
@@ -766,6 +862,22 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
               </div>
             )}
           </Section>
+
+          {penaltyNow && (
+            <Section label="Cancelling">
+              <div style={{ fontSize: 13 }}>
+                {penaltyNow.amount > 0 ? (
+                  <>Cancelling now costs <b>{fmtMoney(penaltyNow.amount, penaltyNow.currency)}</b>.</>
+                ) : (
+                  <>Free to cancel{penaltyNow.until ? <> until <b>{new Date(penaltyNow.until).toLocaleString('en-AU')}</b></> : null}.</>
+                )}
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', marginTop: 3 }}>
+                From the terms captured when this rate was sold. The supplier states the final
+                figure only once the room is released.
+              </div>
+            </Section>
+          )}
 
           {priceHistory?.checks?.length > 0 && (
             <Section label="Price watch">
