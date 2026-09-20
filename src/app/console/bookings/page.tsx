@@ -192,7 +192,8 @@ export default function ConsoleBookingsPage() {
                 <th>Hotel</th>
                 <th>Stay</th>
                 <th>Created (AEST)</th>
-                <th>Total</th>
+                <th>Net</th>
+                <th>Client pays</th>
                 <th>Supplier</th>
                 <th>Paid</th>
                 <th>Status</th>
@@ -230,6 +231,15 @@ export default function ConsoleBookingsPage() {
                           {[b.hotelCity, b.hotelCountry].filter(Boolean).join(', ')}
                         </div>
                       )}
+                      {/* Which room was actually sold. Two bookings at the same
+                          hotel on the same dates are different products, and the
+                          room is the difference. */}
+                      {b.bookingDetails?.rateTerms?.roomTypeName && (
+                        <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', marginTop: 2 }}>
+                          {b.bookingDetails.rateTerms.roomTypeName}
+                          {b.bookingDetails.rateTerms.ratePlan ? ` · ${b.bookingDetails.rateTerms.ratePlan}` : ''}
+                        </div>
+                      )}
                     </td>
                     <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                       <div>{fmtStayDate(checkIn)} → {fmtStayDate(checkOut)}</div>
@@ -243,10 +253,19 @@ export default function ConsoleBookingsPage() {
                       {fmtCreatedAt(b.createdAt)}
                     </td>
                     <td className="c-mono" style={{ whiteSpace: 'nowrap' }}>
+                      {/* What the supplier invoices us. A consultant scanning this
+                          list is working out margin, so the cost belongs beside
+                          the client's price rather than one click away. */}
+                      {(() => {
+                        const net = b.priceBreakdown?.supplierNet;
+                        const ccy = b.priceBreakdown?.supplierNetCurrency;
+                        if (net == null) return <span style={{ color: 'var(--c-fg-muted)' }}>—</span>;
+                        return `${new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(net))}${ccy ? ` ${ccy}` : ''}`;
+                      })()}
+                    </td>
+                    <td className="c-mono" style={{ whiteSpace: 'nowrap' }}>
                       {b.totalAmount != null
-                        ? new Intl.NumberFormat('en-AU', {
-                            style: 'currency', currency: b.currency || 'AUD', maximumFractionDigits: 0,
-                          }).format(Number(b.totalAmount))
+                        ? `${new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(b.totalAmount))} ${b.currency || 'AUD'}`
                         : '—'}
                     </td>
                     <td style={{ fontSize: 12, color: 'var(--c-fg-soft)' }}>{b.supplierId}</td>
@@ -376,10 +395,15 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
   const pb = b.priceBreakdown || null;
   const isHB = b.supplierId === 'hummingbird';
   const active = b.status !== 'cancelled' && b.status !== 'awaiting_supplier_confirmation';
-  const fmtMoney = (amt?: number | null, ccy?: string) =>
-    amt == null ? '—' : new Intl.NumberFormat('en-AU', {
-      style: 'currency', currency: ccy || b.currency || 'AUD', maximumFractionDigits: 2,
-    }).format(Number(amt));
+  // "$523" reads as either currency depending on who is looking. Everything
+  // here is money from two different sides of a trade, so the code is never
+  // optional.
+  const fmtMoney = (amt?: number | null, ccy?: string) => {
+    if (amt == null) return '—';
+    const n = new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      .format(Number(amt));
+    return `${n} ${ccy || b.currency || 'AUD'}`;
+  };
 
   // Cancellation economics: prefer the live cancel response, else the
   // 'cancelled' audit event payload persisted on the booking.
@@ -745,6 +769,10 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
 
           {priceHistory?.checks?.length > 0 && (
             <Section label="Price watch">
+              <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', marginBottom: 4 }}>
+                We pay <b>{fmtMoney(priceHistory.bookedNet, priceHistory.currency)}</b> for this room.
+                Each line is the cheapest the same room and board has been since.
+              </div>
               <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginBottom: 6 }}>
                 {priceHistory.summary.count} check{priceHistory.summary.count === 1 ? '' : 's'}
                 {priceHistory.summary.lowestSeen != null && <> · lowest seen {fmtMoney(priceHistory.summary.lowestSeen, priceHistory.currency)}</>}
