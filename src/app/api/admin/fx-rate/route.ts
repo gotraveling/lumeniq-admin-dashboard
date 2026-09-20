@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 /**
  * Server-side proxy for the USD→AUD FX rate used across search/booking
@@ -26,7 +27,9 @@ function adminHeaders(extra?: Record<string, string>) {
   };
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   try {
     const res = await fetch(FX_ENDPOINT, {
       method: 'GET',
@@ -42,6 +45,8 @@ export async function GET() {
 }
 
 export async function PUT(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   try {
     const body = await request.json();
     const rate = Number(body?.rate);

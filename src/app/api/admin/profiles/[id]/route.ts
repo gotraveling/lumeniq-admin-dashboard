@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 /** Fetch (GET) / update meta (PUT) / delete (DELETE) a profile by id. See ../route.ts. */
 const HOTEL_API_URL = process.env.HOTEL_API_URL
@@ -7,6 +8,8 @@ const HOTEL_API_URL = process.env.HOTEL_API_URL
 const ADMIN_KEY = process.env.COLLECTIONS_ADMIN_KEY || '';
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireConsoleUser(_request);
+  if ('response' in auth) return auth.response;
   const { id } = await params;
   try {
     const res = await fetch(`${HOTEL_API_URL}/api/profiles/${encodeURIComponent(id)}`, {
@@ -20,6 +23,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 }
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   const { id } = await params;
   try {
     const body = await request.json();
@@ -36,6 +41,8 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireConsoleUser(_request);
+  if ('response' in auth) return auth.response;
   const { id } = await params;
   try {
     const res = await fetch(`${HOTEL_API_URL}/api/profiles/${encodeURIComponent(id)}`, {

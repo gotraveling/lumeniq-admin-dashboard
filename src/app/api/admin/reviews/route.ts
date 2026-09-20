@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 /**
  * Server-side proxy for the entity-agnostic reviews API.
@@ -18,6 +19,8 @@ const HOTEL_API_URL = process.env.HOTEL_API_URL
 const ADMIN_KEY = process.env.COLLECTIONS_ADMIN_KEY || '';
 
 export async function GET(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   // Forward the entire querystring through (entity_type / entity_ref / status / tag / limit / offset).
   const qs = request.nextUrl.searchParams.toString();
   try {
@@ -32,6 +35,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   try {
     const body = await request.json();
     const res = await fetch(`${HOTEL_API_URL}/api/reviews`, {

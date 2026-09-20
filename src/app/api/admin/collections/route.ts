@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 /**
  * Server-side proxy for the collections editor (/console/collections).
@@ -14,6 +15,8 @@ const HOTEL_API_URL = process.env.HOTEL_API_URL
 const ADMIN_KEY = process.env.COLLECTIONS_ADMIN_KEY || '';
 
 export async function GET(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   const status = request.nextUrl.searchParams.get('status') || 'all';
   try {
     const res = await fetch(`${HOTEL_API_URL}/api/collections?status=${encodeURIComponent(status)}`, {
@@ -27,6 +30,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   try {
     const body = await request.json();
     const res = await fetch(`${HOTEL_API_URL}/api/collections`, {

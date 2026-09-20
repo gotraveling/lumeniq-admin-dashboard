@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { toConsole, toBackend, TENANT } from '@/lib/pricingRulesMap';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 // Server-side proxy to the AUTHORITATIVE pricing rules — the booking-engine
 // `pricing_rules` table that pricingService.js actually applies as markup.
@@ -7,7 +8,9 @@ import { toConsole, toBackend, TENANT } from '@/lib/pricingRulesMap';
 const BOOKING_API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.australia-southeast1.run.app';
 const API_KEY = process.env.BOOKING_API_KEY || '';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   try {
     const r = await fetch(`${BOOKING_API_URL}/api/inventory/pricing-rules/${TENANT}`, {
       headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
@@ -24,6 +27,8 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   try {
     const input = await request.json();
     const r = await fetch(`${BOOKING_API_URL}/api/inventory/pricing-rules`, {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 /**
  * Server-side proxy for the cross-supplier room-mapping review console
@@ -17,6 +18,8 @@ const HOTEL_API_URL = process.env.HOTEL_API_URL
   || 'https://hotel-api-91901273027.australia-southeast1.run.app';
 
 export async function GET(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   // Forward the entire querystring through (hotelId / status / hotelIds).
   const qs = request.nextUrl.searchParams.toString();
   try {

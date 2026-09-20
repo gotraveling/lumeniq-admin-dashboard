@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 /**
  * Write proxy for a single room-mapping row. Attaches COLLECTIONS_ADMIN_KEY as
@@ -13,6 +14,8 @@ const HOTEL_API_URL = process.env.HOTEL_API_URL
 const ADMIN_KEY = process.env.COLLECTIONS_ADMIN_KEY || '';
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   const { id } = await params;
   try {
     const body = await request.json();
@@ -29,6 +32,8 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   const { id } = await params;
   try {
     const res = await fetch(`${HOTEL_API_URL}/api/room-mappings/${encodeURIComponent(id)}`, {

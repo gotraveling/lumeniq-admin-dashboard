@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 /** Replace the ordered block list for a page (bulk save). See ../route.ts. */
 const HOTEL_API_URL = process.env.HOTEL_API_URL
@@ -7,6 +8,8 @@ const HOTEL_API_URL = process.env.HOTEL_API_URL
 const ADMIN_KEY = process.env.COLLECTIONS_ADMIN_KEY || '';
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   const { slug } = await params;
   try {
     const body = await request.json();

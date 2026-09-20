@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 /**
  * Single-hotel collection membership proxy.
@@ -16,6 +17,8 @@ const HOTEL_API_URL = process.env.HOTEL_API_URL
 const ADMIN_KEY = process.env.COLLECTIONS_ADMIN_KEY || '';
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string; hotelId: string }> }) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   const { id, hotelId } = await params;
   try {
     const res = await fetch(`${HOTEL_API_URL}/api/collections/${encodeURIComponent(id)}/hotels/${encodeURIComponent(hotelId)}`, {
@@ -30,6 +33,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 }
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string; hotelId: string }> }) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   const { id, hotelId } = await params;
   try {
     const res = await fetch(`${HOTEL_API_URL}/api/collections/${encodeURIComponent(id)}/hotels/${encodeURIComponent(hotelId)}`, {

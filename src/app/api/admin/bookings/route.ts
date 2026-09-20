@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 /**
  * Server-side proxy for the consultant book-on-behalf flow.
@@ -18,6 +19,8 @@ const BOOKING_API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engi
 const API_KEY = process.env.BOOKING_API_KEY || '';
 
 export async function POST(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   try {
     const body = await request.json();
     const consultantEmail = request.headers.get('x-consultant-email') || body.consultantEmail || null;

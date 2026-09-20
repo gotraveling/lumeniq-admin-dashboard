@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 /**
  * Read a composable page + its ordered blocks. Proxied server-side (rather than
@@ -11,6 +12,8 @@ const HOTEL_API_URL = process.env.HOTEL_API_URL
 const ADMIN_KEY = process.env.COLLECTIONS_ADMIN_KEY || '';
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
+  const auth = await requireConsoleUser(_request);
+  if ('response' in auth) return auth.response;
   const { slug } = await params;
   try {
     const res = await fetch(`${HOTEL_API_URL}/api/pages/${encodeURIComponent(slug)}`, {

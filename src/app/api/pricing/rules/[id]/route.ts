@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { toConsole, toBackend } from '@/lib/pricingRulesMap';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 const BOOKING_API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://booking-engine-api-91901273027.australia-southeast1.run.app';
 const API_KEY = process.env.BOOKING_API_KEY || '';
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   try {
     const { id } = await params;
     const input = await request.json();
@@ -23,6 +26,8 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireConsoleUser(_request);
+  if ('response' in auth) return auth.response;
   try {
     const { id } = await params;
     const r = await fetch(`${BOOKING_API_URL}/api/inventory/pricing-rules/${id}`, {

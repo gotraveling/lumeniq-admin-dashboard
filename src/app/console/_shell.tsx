@@ -95,6 +95,39 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
   const [user, loading] = useAuthState(auth);
   const { isAdmin, loading: roleLoading } = useConsoleRole();
 
+  // Prove who is calling, on every console request to our own API.
+  //
+  // Those routes attach the engine's privileged key on the way out, so until
+  // the server could identify the caller the only thing in front of them was
+  // the role check below — which stops a consultant clicking the wrong button
+  // and stops nobody else. Patching fetch once here means the token rides on
+  // every existing call site without any of them changing, and it only ever
+  // goes to our own /api paths, never to a third party.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const w = window as typeof window & { __consoleFetchPatched?: boolean };
+    if (w.__consoleFetchPatched) return;
+    w.__consoleFetchPatched = true;
+
+    const original = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const sameOriginApi = url.startsWith('/api/') || url.startsWith(`${window.location.origin}/api/`);
+      if (!sameOriginApi) return original(input, init);
+      try {
+        const token = await auth.currentUser?.getIdToken();
+        if (!token) return original(input, init);
+        const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+        headers.set('Authorization', `Bearer ${token}`);
+        return original(input, { ...init, headers });
+      } catch {
+        // A token we cannot mint is the server's problem to reject, not a
+        // reason to swallow the request here.
+        return original(input, init);
+      }
+    };
+  }, []);
+
   // Same auth gate /admin uses — push the visitor to /auth/login the
   // moment we know they're not signed in. Without this, /console/*
   // pages were rendering shell + (possibly empty) content for anon

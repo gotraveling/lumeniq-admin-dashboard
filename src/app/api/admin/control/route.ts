@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireConsoleUser } from '@/lib/apiAuth';
 
 /**
  * Server-side proxy for the per-hotel "Manage" controls (/console/search drawer).
@@ -18,6 +19,8 @@ const HOTEL_API_URL = process.env.HOTEL_API_URL
 const ADMIN_KEY = process.env.COLLECTIONS_ADMIN_KEY || '';
 
 export async function GET(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   const hotelId = request.nextUrl.searchParams.get('hotelId');
   const ids = request.nextUrl.searchParams.get('ids');
   try {
@@ -33,6 +36,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
   const hotelId = request.nextUrl.searchParams.get('hotelId');
   if (!hotelId) {
     return NextResponse.json({ error: 'hotelId required' }, { status: 400 });
