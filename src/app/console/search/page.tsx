@@ -3812,6 +3812,8 @@ type RateObservation = {
   id: number;
   hotel_id: number | string;
   better_sources: string[];
+  /** Sellers we do not integrate with, named by whoever saw the rate. */
+  other_sources?: string[] | null;
   note: string | null;
   observed_by: string | null;
   observed_at: string;
@@ -3831,6 +3833,12 @@ function RateComparisonLog({ hotelId, userEmail }: { hotelId: number; userEmail:
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [sources, setSources] = useState<string[]>([]);
+  // Free-typed sellers: Klook, Agoda, a consortium rate. The interesting answer
+  // is often none of our four, and those were ending up buried in the note
+  // where nothing could count them.
+  const [otherOn, setOtherOn] = useState(false);
+  const [otherName, setOtherName] = useState('');
+  const [knownOthers, setKnownOthers] = useState<string[]>([]);
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -3846,6 +3854,19 @@ function RateComparisonLog({ hotelId, userEmail }: { hotelId: number; userEmail:
 
   useEffect(() => { load(); }, [load]);
 
+  // Names anyone has used before, so the same seller is not recorded as
+  // "Klook", "klook" and "KLOOK " and counted three times.
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/admin/rate-observations/providers', { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (Array.isArray(j)) setKnownOthers(j.map((p: any) => String(p.name)).filter(Boolean));
+      } catch { /* suggestions are a convenience, never a blocker */ }
+    })();
+  }, []);
+
   const save = async () => {
     setSaving(true); setErr(null);
     try {
@@ -3855,13 +3876,14 @@ function RateComparisonLog({ hotelId, userEmail }: { hotelId: number; userEmail:
         body: JSON.stringify({
           hotel_id: hotelId,
           better_sources: sources,
+          other_sources: otherOn && otherName.trim() ? [otherName.trim()] : [],
           note: note.trim() || null,
           observed_by: userEmail || null,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      setSources([]); setNote('');
+      setSources([]); setNote(''); setOtherOn(false); setOtherName('');
       await load();
     } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
   };
@@ -3897,20 +3919,45 @@ function RateComparisonLog({ hotelId, userEmail }: { hotelId: number; userEmail:
             {s.label}
           </label>
         ))}
+        <label style={checkLabelStyle}>
+          <input type="checkbox" checked={otherOn} onChange={(e) => setOtherOn(e.target.checked)} />
+          Other
+        </label>
+        {otherOn && (
+          <>
+            <input
+              className="c-input"
+              list="fc-known-sellers"
+              value={otherName}
+              onChange={(e) => setOtherName(e.target.value)}
+              placeholder="Which one? e.g. Klook"
+              title="The seller that was cheaper. Kept as a name so we can count it later — pick from the list when it is one we have seen before."
+              style={{ width: 190, fontSize: 12.5 }}
+            />
+            <datalist id="fc-known-sellers">
+              {knownOthers.map((n) => <option key={n} value={n} />)}
+            </datalist>
+          </>
+        )}
       </div>
       <Field label="Note (optional)" style={{ marginTop: 10 }}>
-        <input
+        {/* A comparison is rarely one sentence: which room, which dates, what
+            their rate included. A single line meant all of that ran together or
+            got left out. Enter adds a line; the button saves. */}
+        <textarea
           className="c-input"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="e.g. Expedia ~8% under us on Deluxe, we win on suites"
+          rows={4}
+          placeholder={'e.g. Klook cheapest on every date checked\nDeluxe King, 12-15 Nov, AUD 210/nt vs our 246\nTheirs is room only, ours includes breakfast'}
+          style={{ resize: 'vertical', minHeight: 72, lineHeight: 1.5, fontFamily: 'inherit' }}
         />
       </Field>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
         <button
           className="c-btn"
           onClick={save}
-          disabled={saving || (!sources.length && !note.trim())}
+          disabled={saving || (!sources.length && !note.trim() && !(otherOn && otherName.trim()))}
         >
           {saving ? 'Saving…' : 'Log comparison'}
         </button>
@@ -3929,12 +3976,14 @@ function RateComparisonLog({ hotelId, userEmail }: { hotelId: number; userEmail:
           rows.map((r) => (
             <div key={r.id} style={{
               display: 'flex', alignItems: 'baseline', gap: 8, padding: '6px 0',
-              borderTop: '1px solid var(--c-line)', fontSize: 12.5
+              borderTop: '1px solid var(--c-line)', fontSize: 12.5, flexWrap: 'wrap'
             }}>
               <span style={{ fontWeight: 600 }}>
-                {r.better_sources.length ? r.better_sources.map(label).join(' + ') : '—'}
+                {[...r.better_sources.map(label), ...(r.other_sources || [])].join(' + ') || '—'}
               </span>
-              {r.note && <span style={{ color: 'var(--c-fg-soft)' }}>{r.note}</span>}
+              {r.note && (
+                <span style={{ color: 'var(--c-fg-soft)', whiteSpace: 'pre-line' }}>{r.note}</span>
+              )}
               <span style={{ marginLeft: 'auto', color: 'var(--c-fg-muted)', fontSize: 11, whiteSpace: 'nowrap' }}>
                 {when(r.observed_at)}{r.observed_by ? ` · ${r.observed_by.split('@')[0]}` : ''}
               </span>
