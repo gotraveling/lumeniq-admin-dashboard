@@ -12,7 +12,7 @@
  * with optional per-hotel editorial/offer overrides layered on top.
  */
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { FolderOpen, Plus, Trash2, ArrowUp, ArrowDown, Search, Save, X, RefreshCw } from 'lucide-react';
+import { FolderOpen, Plus, Trash2, ArrowUp, ArrowDown, Search, Save, X, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 
 const HOTEL_API = process.env.NEXT_PUBLIC_HOTEL_API_URL
   || 'https://hotel-api-91901273027.australia-southeast1.run.app';
@@ -438,7 +438,24 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
   const addPkg = (hi: number) => setHotel(hi, { packages: [...(value.hotels[hi].packages || []), {}] });
   const removePkg = (hi: number, pi: number) =>
     setHotel(hi, { packages: (value.hotels[hi].packages || []).filter((_, j) => j !== pi) });
-  const addHotel = (h: CollectionHotel) => set({ hotels: [...value.hotels, h] });
+  // Which hotels are expanded for editing. Collapsed, a hotel is a listing row
+  // (photo + the handful of fields that identify it); expanded, it is the full
+  // form. Keyed by hotelId rather than index so moving a hotel up or down does
+  // not hand its open state to whichever row took its place.
+  const rowKey = (h: CollectionHotel, i: number) => (h.hotelId ? `id:${h.hotelId}` : `idx:${i}`);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleRow = (k: string) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    return next;
+  });
+
+  const addHotel = (h: CollectionHotel) => {
+    // A hotel you just added has nothing filled in, so open it straight away
+    // rather than making you hunt for it at the bottom and click again.
+    setExpanded((prev) => new Set(prev).add(h.hotelId ? `id:${h.hotelId}` : `idx:${value.hotels.length}`));
+    set({ hotels: [...value.hotels, h] });
+  };
   const visibleCount = value.hotels.filter((h) => !h.hidden).length;
   const hiddenCount = value.hotels.length - visibleCount;
   const applyRows = (rows: OfferReportRow[], sourceName: string) => {
@@ -649,6 +666,13 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {/* With 15 hotels open at once you lose the list again, so give a
+                one-click way back to it. */}
+            {expanded.size > 0 && (
+              <button className="c-btn" onClick={() => setExpanded(new Set())}>
+                Collapse all ({expanded.size})
+              </button>
+            )}
             <button className="c-btn c-btn-primary" onClick={runCollectionOffers} disabled={!!runningOffers || applyingReport || value.hotels.length === 0}>
               <RefreshCw size={13} /> {runningOffers ? `${runningOffers.done}/${runningOffers.total}` : 'Run collection offers'}
             </button>
@@ -676,7 +700,13 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
             while you scroll through that hotel's fields, so the name of the
             hotel you are editing is always on screen. */}
         <div style={{ display: 'grid', gap: 22, marginTop: 12 }}>
-          {value.hotels.map((h, i) => (
+          {value.hotels.map((h, i) => {
+            const key = rowKey(h, i);
+            const isOpen = expanded.has(key);
+            const thumb = h.image || h.images?.[0] || '';
+            const pkgCount = h.packages?.length || 0;
+            const firstPrice = h.packages?.find((p) => p.ourOffer)?.ourOffer || '';
+            return (
             <div key={i} style={{ display: 'grid', gap: 8 }}>
             {h.hidden && (i === 0 || !value.hotels[i - 1]?.hidden) && (
               <div className="c-label" style={{ marginTop: 6 }}>Hidden / check rates later</div>
@@ -692,39 +722,73 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
               // top corner radius, so nothing needs clipping here.
               overflow: 'visible',
             }}>
-              <div style={{
-                position: 'sticky', top: 0, zIndex: 2,
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
-                padding: '10px 12px',
-                background: 'var(--c-bg-soft, #f6f4ef)',
-                borderBottom: '1px solid var(--c-line)',
-                borderRadius: '6px 6px 0 0',
-              }}>
-                <strong style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              {/* Listing row: photo left, identity right. Click anywhere on it
+                  to open the full form. The reorder/remove buttons stop the
+                  click so they don't toggle the row out from under you. */}
+              <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={isOpen}
+                onClick={() => toggleRow(key)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRow(key); }
+                }}
+                style={{
+                  position: isOpen ? 'sticky' : 'static', top: 0, zIndex: 2,
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: 10,
+                  cursor: 'pointer',
+                  background: isOpen ? 'var(--c-bg-soft, #f6f4ef)' : 'var(--c-bg)',
+                  borderBottom: isOpen ? '1px solid var(--c-line)' : 'none',
+                  borderRadius: '6px 6px 0 0',
+                }}
+              >
+                <span style={{
+                  flex: 'none',
+                  width: 20, height: 20, borderRadius: 999,
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 11, fontWeight: 700,
+                  background: 'var(--c-accent, #7a6a45)', color: '#fff',
+                }}>{i + 1}</span>
+                {thumb ? (
+                  <img src={thumb} alt="" loading="lazy"
+                    style={{ flex: 'none', width: 92, height: 62, objectFit: 'cover', borderRadius: 5, border: '1px solid var(--c-line)' }} />
+                ) : (
                   <span style={{
-                    flex: 'none',
-                    width: 22, height: 22, borderRadius: 999,
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 11, fontWeight: 700,
-                    background: 'var(--c-accent, #7a6a45)', color: '#fff',
-                  }}>{i + 1}</span>
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {h.name || '(unnamed)'}
-                  </span>
-                  {h.hotelId
-                    ? <span className="c-mono" style={{ flex: 'none', color: 'var(--c-fg-muted)', fontWeight: 400 }}>#{h.hotelId}</span>
-                    : <span className="c-pill c-pill-warn" style={{ flex: 'none' }}>enquiry-only</span>}
-                  {h.hidden ? <span className="c-pill c-pill-warn" style={{ flex: 'none' }}>hidden</span> : null}
-                  <span style={{ flex: 'none', fontSize: 11, fontWeight: 400, color: 'var(--c-fg-muted)' }}>
-                    {(h.packages?.length || 0)} package{(h.packages?.length || 0) === 1 ? '' : 's'}
-                  </span>
-                </strong>
-                <div style={{ whiteSpace: 'nowrap', flex: 'none' }}>
+                    flex: 'none', width: 92, height: 62, borderRadius: 5,
+                    border: '1px dashed var(--c-line)', display: 'inline-flex',
+                    alignItems: 'center', justifyContent: 'center',
+                    fontSize: 10, color: 'var(--c-fg-muted)',
+                  }}>no image</span>
+                )}
+                <div style={{ minWidth: 0, flex: 1, display: 'grid', gap: 2 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {h.name || '(unnamed)'}
+                    </strong>
+                    {h.hotelId
+                      ? <span className="c-mono" style={{ flex: 'none', fontSize: 11, color: 'var(--c-fg-muted)' }}>#{h.hotelId}</span>
+                      : <span className="c-pill c-pill-warn" style={{ flex: 'none' }}>enquiry-only</span>}
+                    {h.hidden ? <span className="c-pill c-pill-warn" style={{ flex: 'none' }}>hidden</span> : null}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {[h.atoll, h.offer].filter(Boolean).join(' · ') || 'No location or offer text yet'}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>
+                    {pkgCount} package{pkgCount === 1 ? '' : 's'}
+                    {pkgCount > 0 && firstPrice ? ` · ${firstPrice}` : ''}
+                  </div>
+                </div>
+                <div style={{ whiteSpace: 'nowrap', flex: 'none' }} onClick={(e) => e.stopPropagation()}>
                   <button className="c-btn" title="Move up" onClick={() => move(i, -1)} disabled={i === 0}><ArrowUp size={13} /></button>{' '}
                   <button className="c-btn" title="Move down" onClick={() => move(i, 1)} disabled={i === value.hotels.length - 1}><ArrowDown size={13} /></button>{' '}
                   <button className="c-btn c-btn-danger" title="Remove from collection" onClick={() => removeHotel(i)}><Trash2 size={13} /></button>
                 </div>
+                <span style={{ flex: 'none', color: 'var(--c-fg-muted)', display: 'inline-flex' }}>
+                  {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                </span>
               </div>
+              {isOpen && (
               <div style={{ padding: 12, display: 'grid', gap: 8 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <Field label="Display name"><input className="c-input" value={h.name} onChange={(e) => setHotel(i, { name: e.target.value })} /></Field>
@@ -822,9 +886,11 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
                 )}
               </div>
             </div>
+            )}
             </div>
             </div>
-          ))}
+            );
+          })}
           {value.hotels.length === 0 && <div className="c-empty">No hotels yet — search above to add.</div>}
         </div>
       </div>
