@@ -442,6 +442,12 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
   // (photo + the handful of fields that identify it); expanded, it is the full
   // form. Keyed by hotelId rather than index so moving a hotel up or down does
   // not hand its open state to whichever row took its place.
+  // The collection's own fields (slug, hero, intro, campaign dates, travel
+  // guide...) are ~16 inputs you set once and rarely touch, sitting above the
+  // hotel list you came to edit. Collapsed by default on an existing
+  // collection; open on a new one, where they all still need filling in.
+  const [metaOpen, setMetaOpen] = useState(!value.id);
+
   const rowKey = (h: CollectionHotel, i: number) => (h.hotelId ? `id:${h.hotelId}` : `idx:${i}`);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleRow = (k: string) => setExpanded((prev) => {
@@ -607,6 +613,31 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
         </div>
       </div>
 
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={metaOpen}
+        onClick={() => setMetaOpen((o) => !o)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMetaOpen((o) => !o); } }}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          padding: '8px 10px', cursor: 'pointer', borderRadius: 6,
+          border: '1px solid var(--c-line)', background: 'var(--c-bg-soft, #f6f4ef)',
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <strong style={{ fontSize: 13 }}>Collection details</strong>
+          <span style={{ fontSize: 12, color: 'var(--c-fg-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {value.slug || 'no slug'} · {value.status}
+            {value.searchDestination ? ` · ${value.searchDestination}` : ''}
+          </span>
+        </span>
+        <span style={{ color: 'var(--c-fg-muted)', display: 'inline-flex', flex: 'none' }}>
+          {metaOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </span>
+      </div>
+
+      {metaOpen && (
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <Field label="Slug (URL)"><input className="c-input" value={value.slug}
           onChange={(e) => set({ slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') })}
@@ -656,6 +687,7 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
         <Field label="Travel guide button — URL (opens in a new tab)"><input className="c-input" value={value.travelGuideUrl || ''} onChange={(e) => set({ travelGuideUrl: e.target.value })} placeholder="https://firstclass.com.au/destination/…" /></Field>
         <Field label="Quote / reference"><input className="c-input" value={value.quoteRef || ''} onChange={(e) => set({ quoteRef: e.target.value })} /></Field>
       </div>
+      )}
 
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
