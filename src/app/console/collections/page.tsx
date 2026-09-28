@@ -963,6 +963,11 @@ interface MonthRate {
  * Candidates come from the warmed rate cache, so opening this costs nothing and
  * hits no supplier. Running a fresh scan widens the net; it still only proposes.
  */
+/** Stay lengths worth trying. Maldives resorts commonly gate their best
+ *  offers behind 7 nights, which is why a collection configured for 4 finds
+ *  none of them — see the Joali Being / Soneva cases. */
+const STAY_LENGTHS = [3, 4, 5, 7, 10];
+
 function OfferSelector({ hotelId, packageNights, selection, onChange }: {
   hotelId: number;
   packageNights?: number | null;
@@ -974,12 +979,20 @@ function OfferSelector({ hotelId, packageNights, selection, onChange }: {
   const [err, setErr] = useState<string | null>(null);
   const mode = selection?.mode === 'manual' ? 'manual' : 'auto';
 
-  const load = useCallback(async () => {
+  // Stay length to LOOK at, separate from the stay length this hotel's card is
+  // priced for. Tina can try 7 nights to see whether an offer appears without
+  // committing the card to a 7-night basis; `stored` is the committed value.
+  const [los, setLos] = useState<number>(packageNights || 4);
+  const [stored, setStored] = useState<number | null>(packageNights ?? null);
+  const [savingNights, setSavingNights] = useState(false);
+  const [nightsNote, setNightsNote] = useState<string | null>(null);
+
+  const load = useCallback(async (nights: number) => {
     setLoading(true);
     setErr(null);
     try {
       const qs = new URLSearchParams({ hotelIds: String(hotelId), months: '12' });
-      if (packageNights) qs.set('los', String(packageNights));
+      if (nights) qs.set('los', String(nights));
       const r = await fetch(`/api/admin/rates-by-month?${qs.toString()}`, { cache: 'no-store' });
       const j = await r.json().catch(() => null);
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
@@ -990,7 +1003,30 @@ function OfferSelector({ hotelId, packageNights, selection, onChange }: {
     } finally {
       setLoading(false);
     }
-  }, [hotelId, packageNights]);
+  }, [hotelId]);
+
+  // Commit the stay length this hotel's card prices at. hotel_control's PUT is
+  // a partial upsert, so sending package_nights alone leaves every other
+  // control field (markup, transfers, visibility) untouched. Note this is a
+  // PER-HOTEL setting, not per-collection — it follows the hotel everywhere.
+  const saveNights = async () => {
+    setSavingNights(true); setNightsNote(null);
+    try {
+      const r = await fetch(`/api/admin/control?hotelId=${hotelId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ package_nights: los }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStored(los);
+      setNightsNote(`Card now prices ${los} nights for this hotel.`);
+    } catch (e: unknown) {
+      setNightsNote(e instanceof Error ? e.message : 'could not save');
+    } finally {
+      setSavingNights(false);
+    }
+  };
 
   // The picked window, if it is still in the warmed set. When it is not, the
   // selection has lapsed — the offer ended or the window aged out — and the
@@ -1010,8 +1046,8 @@ function OfferSelector({ hotelId, packageNights, selection, onChange }: {
           Auto — best current offer
         </button>
         <button type="button" className="c-btn" style={{ fontSize: 11, padding: '3px 8px' }}
-          onClick={() => { if (!rows) load(); }} disabled={loading}>
-          {loading ? 'loading…' : rows ? 'Reload months' : 'Pick a month…'}
+          onClick={() => load(los)} disabled={loading}>
+          {loading ? 'loading…' : rows ? 'Reload months' : 'Find offers…'}
         </button>
         {mode === 'manual' && selection?.month && (
           <span style={{ fontSize: 11, color: lapsed ? 'var(--c-warning, #b45309)' : 'var(--c-fg-muted)' }}>
@@ -1022,11 +1058,40 @@ function OfferSelector({ hotelId, packageNights, selection, onChange }: {
         )}
       </div>
 
+      {/* Stay length. Looking at a length and pricing the card at it are two
+          different decisions, so they are two different controls: the chips
+          re-query, "Use Nn on the card" commits. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+        <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>Stay length</span>
+        {STAY_LENGTHS.map((n) => (
+          <button key={n} type="button" className="c-btn"
+            style={{
+              fontSize: 11, padding: '2px 8px',
+              background: n === los ? 'var(--c-accent)' : undefined,
+              color: n === los ? '#fff' : undefined,
+            }}
+            onClick={() => { setLos(n); setNightsNote(null); load(n); }}
+            disabled={loading}>
+            {n}n{n === stored ? ' ✓' : ''}
+          </button>
+        ))}
+        {los !== stored && (
+          <button type="button" className="c-btn" style={{ fontSize: 11, padding: '2px 8px' }}
+            onClick={saveNights} disabled={savingNights}>
+            {savingNights ? 'saving…' : `Use ${los}n on the card`}
+          </button>
+        )}
+        <span style={{ fontSize: 10.5, color: 'var(--c-fg-muted)' }}>
+          {stored ? `card prices ${stored}n` : 'card follows the collection default'}
+        </span>
+      </div>
+      {nightsNote && <div style={{ fontSize: 11, color: 'var(--c-fg-soft)', marginTop: 3 }}>{nightsNote}</div>}
+
       {err && <div style={{ fontSize: 11, color: 'var(--c-warning, #b45309)', marginTop: 4 }}>{err}</div>}
 
       {rows && rows.length === 0 && !loading && (
         <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginTop: 4 }}>
-          No warmed rates for this hotel{packageNights ? ` at ${packageNights} nights` : ''} — run the collection prewarm first.
+          No warmed rates for this hotel at {los} nights — try another stay length, or run the collection prewarm.
         </div>
       )}
 
@@ -1048,7 +1113,7 @@ function OfferSelector({ hotelId, packageNights, selection, onChange }: {
                 onClick={() => onChange({
                   mode: 'manual',
                   month: r.month,
-                  nights: r.nights ?? packageNights ?? undefined,
+                  nights: r.nights ?? los ?? undefined,
                   board: r.board ?? undefined,
                   transfer: r.transfer ?? undefined,
                   // Display only — the name on the page is always read live.
@@ -1065,7 +1130,7 @@ function OfferSelector({ hotelId, packageNights, selection, onChange }: {
             );
           })}
           <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', marginTop: 2 }}>
-            Cheapest warmed check-in per month. Only the choice is saved — the price and offer name on the page are read live.
+            Cheapest warmed check-in per month at {los} nights. Only the choice is saved — the price and offer name on the page are read live.
           </div>
         </div>
       )}
