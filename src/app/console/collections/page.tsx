@@ -977,21 +977,34 @@ function PhotoPicker({ hotelId, image, images, onChange }: {
 }) {
   const [open, setOpen] = useState(false);
   const [gallery, setGallery] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const load = async () => {
     setOpen((o) => !o);
-    if (gallery) return;
+    if (gallery || busy) return;
+    setBusy(true);
+    setError('');
     try {
       const res = await fetch(`${HOTEL_API}/api/hotels/${hotelId}`);
+      if (!res.ok) throw new Error(`hotel-api ${res.status}`);
       const hotel = await res.json();
       const urls = (Array.isArray(hotel.images) ? hotel.images : [])
-        .map((img: unknown) => typeof img === 'string' ? img
-          : (img as { url?: string; image_url?: string } | null)?.url || (img as { image_url?: string } | null)?.image_url || '')
+        // Suppliers disagree on the field name: RateHawk sends a bare URL
+        // string, the newer content column sends {url}, and Hummingbird sends
+        // {file_name}. Missing the last one rendered an empty picker for every
+        // HB-sourced hotel.
+        .map((img: unknown) => {
+          if (typeof img === 'string') return img;
+          const o = img as { url?: string; image_url?: string; file_name?: string } | null;
+          return o?.url || o?.image_url || o?.file_name || '';
+        })
         .filter(Boolean);
       setGallery(urls);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load photos');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -1011,8 +1024,9 @@ function PhotoPicker({ hotelId, image, images, onChange }: {
           <button className="c-btn" onClick={() => onChange({ image: undefined, images: undefined })}>Reset to default</button>
         )}
       </div>
-      {open && error && <div style={{ color: 'var(--c-danger)', fontSize: 12 }}>{error}</div>}
-      {open && gallery && gallery.length === 0 && <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>No photos for this hotel.</div>}
+      {open && busy && <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>Loading photos…</div>}
+      {open && error && <div style={{ color: 'var(--c-danger)', fontSize: 12 }}>Could not load photos: {error}</div>}
+      {open && !busy && gallery && gallery.length === 0 && <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>No photos on this hotel record.</div>}
       {open && gallery && gallery.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 6 }}>
           {gallery.map((url) => (
