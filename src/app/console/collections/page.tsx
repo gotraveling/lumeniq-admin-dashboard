@@ -11,7 +11,7 @@
  * Hotels are pinned by the stable internal hotel_id (survives supplier re-sync),
  * with optional per-hotel editorial/offer overrides layered on top.
  */
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { FolderOpen, Plus, Trash2, ArrowUp, ArrowDown, Search, Save, X, RefreshCw } from 'lucide-react';
 
 const HOTEL_API = process.env.NEXT_PUBLIC_HOTEL_API_URL
@@ -218,6 +218,21 @@ export default function CollectionsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [q, setQ] = useState('');
 
+  // The editor is a mode of this page, not its own route, so the URL never
+  // moved off /console/collections -- you could not link anyone to the
+  // collection you were editing, and a refresh dumped you back on the list.
+  // Mirror the open collection into ?slug= and restore from it on load.
+  // history.replaceState rather than the router: this is a URL bookmark, not a
+  // navigation, and it keeps useSearchParams (and its Suspense requirement)
+  // out of a page that is already fully client-side.
+  const syncUrl = useCallback((slug: string | null) => {
+    if (typeof window === 'undefined') return;
+    const url = slug
+      ? `${window.location.pathname}?slug=${encodeURIComponent(slug)}`
+      : window.location.pathname;
+    window.history.replaceState(null, '', url);
+  }, []);
+
   const loadList = useCallback(async () => {
     setLoading(true); setError(null);
     try {
@@ -231,16 +246,31 @@ export default function CollectionsPage() {
 
   useEffect(() => { loadList(); }, [loadList]);
 
-  async function openEditor(slug: string) {
+  const openEditor = useCallback(async (slug: string) => {
     setBusy(true); setError(null);
     try {
       const r = await fetch(`${HOTEL_API}/api/collections/${encodeURIComponent(slug)}?includeHidden=true`, { cache: 'no-store' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setEditing({ ...BLANK, ...d, intro: d.intro || [], hotels: d.hotels || [] });
-    } catch (e) { setError((e as Error).message); }
+      syncUrl(slug);
+    } catch (e) {
+      setError((e as Error).message);
+      syncUrl(null);   // a bad ?slug= must not leave the URL claiming otherwise
+    }
     finally { setBusy(false); }
-  }
+  }, [syncUrl]);
+
+  // Open straight into the editor when the page is loaded with ?slug=.
+  const bootSlug = useRef(false);
+  useEffect(() => {
+    if (bootSlug.current || typeof window === 'undefined') return;
+    bootSlug.current = true;
+    const slug = new URLSearchParams(window.location.search).get('slug');
+    if (slug) void openEditor(slug);
+  }, [openEditor]);
+
+  const closeEditor = useCallback(() => { setEditing(null); syncUrl(null); }, [syncUrl]);
 
   async function saveAll() {
     if (!editing) return;
@@ -280,6 +310,7 @@ export default function CollectionsPage() {
       const hd = await hr.json(); if (!hr.ok) throw new Error(hd.error || `HTTP ${hr.status}`);
       setNotice(`Saved "${editing.title}" (${editing.hotels.length} hotels).`);
       setEditing(null);
+      syncUrl(null);
       await loadList();
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
@@ -313,7 +344,7 @@ export default function CollectionsPage() {
         </div>
         {!editing && (
           <button className="c-btn c-btn-primary" disabled={busy}
-            onClick={() => { setEditing({ ...BLANK }); setNotice(null); setError(null); }}>
+            onClick={() => { setEditing({ ...BLANK }); setNotice(null); setError(null); syncUrl(null); }}>
             <Plus size={15} /> New collection
           </button>
         )}
@@ -374,7 +405,7 @@ export default function CollectionsPage() {
 
       {editing && (
         <CollectionEditor
-          value={editing} onChange={setEditing} onSave={saveAll} onCancel={() => setEditing(null)} busy={busy}
+          value={editing} onChange={setEditing} onSave={saveAll} onCancel={closeEditor} busy={busy}
         />
       )}
     </>
@@ -637,21 +668,64 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
         {reportNotice && <div style={{ color: 'var(--c-success)', fontSize: 12, marginBottom: 8 }}>{reportNotice}</div>}
         {reportError && <div style={{ color: 'var(--c-danger)', fontSize: 12, marginBottom: 8 }}>Report error: {reportError}</div>}
         <HotelSearch onAdd={addHotel} />
-        <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+        {/* One card per hotel. Each card carries ~20 fields plus its packages,
+            so at 15 hotels the page is a single undifferentiated wall of
+            inputs — you cannot tell where one property ends and the next
+            begins. Hence: a generous gap between cards, an accent left edge,
+            and a numbered header bar that STICKS to the top of the viewport
+            while you scroll through that hotel's fields, so the name of the
+            hotel you are editing is always on screen. */}
+        <div style={{ display: 'grid', gap: 22, marginTop: 12 }}>
           {value.hotels.map((h, i) => (
             <div key={i} style={{ display: 'grid', gap: 8 }}>
             {h.hidden && (i === 0 || !value.hotels[i - 1]?.hidden) && (
               <div className="c-label" style={{ marginTop: 6 }}>Hidden / check rates later</div>
             )}
-            <div className="c-card" style={{ padding: 12, display: 'grid', gap: 8, opacity: h.hidden ? 0.78 : 1 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <strong>{h.name || '(unnamed)'} {h.hotelId ? <span className="c-mono" style={{ color: 'var(--c-fg-muted)' }}>#{h.hotelId}</span> : <span className="c-pill c-pill-warn">enquiry-only</span>} {h.hidden ? <span className="c-pill c-pill-warn">hidden</span> : null}</strong>
-                <div style={{ whiteSpace: 'nowrap' }}>
-                  <button className="c-btn" onClick={() => move(i, -1)} disabled={i === 0}><ArrowUp size={13} /></button>{' '}
-                  <button className="c-btn" onClick={() => move(i, 1)} disabled={i === value.hotels.length - 1}><ArrowDown size={13} /></button>{' '}
-                  <button className="c-btn c-btn-danger" onClick={() => removeHotel(i)}><Trash2 size={13} /></button>
+            <div className="c-card" style={{
+              padding: 0,
+              display: 'grid',
+              gap: 0,
+              opacity: h.hidden ? 0.78 : 1,
+              borderLeft: `4px solid ${h.hidden ? 'var(--c-line)' : 'var(--c-accent, #7a6a45)'}`,
+              // .c-card sets overflow:hidden, which makes it a scroll container
+              // and kills the sticky header below. The header carries its own
+              // top corner radius, so nothing needs clipping here.
+              overflow: 'visible',
+            }}>
+              <div style={{
+                position: 'sticky', top: 0, zIndex: 2,
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+                padding: '10px 12px',
+                background: 'var(--c-bg-soft, #f6f4ef)',
+                borderBottom: '1px solid var(--c-line)',
+                borderRadius: '6px 6px 0 0',
+              }}>
+                <strong style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <span style={{
+                    flex: 'none',
+                    width: 22, height: 22, borderRadius: 999,
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 11, fontWeight: 700,
+                    background: 'var(--c-accent, #7a6a45)', color: '#fff',
+                  }}>{i + 1}</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {h.name || '(unnamed)'}
+                  </span>
+                  {h.hotelId
+                    ? <span className="c-mono" style={{ flex: 'none', color: 'var(--c-fg-muted)', fontWeight: 400 }}>#{h.hotelId}</span>
+                    : <span className="c-pill c-pill-warn" style={{ flex: 'none' }}>enquiry-only</span>}
+                  {h.hidden ? <span className="c-pill c-pill-warn" style={{ flex: 'none' }}>hidden</span> : null}
+                  <span style={{ flex: 'none', fontSize: 11, fontWeight: 400, color: 'var(--c-fg-muted)' }}>
+                    {(h.packages?.length || 0)} package{(h.packages?.length || 0) === 1 ? '' : 's'}
+                  </span>
+                </strong>
+                <div style={{ whiteSpace: 'nowrap', flex: 'none' }}>
+                  <button className="c-btn" title="Move up" onClick={() => move(i, -1)} disabled={i === 0}><ArrowUp size={13} /></button>{' '}
+                  <button className="c-btn" title="Move down" onClick={() => move(i, 1)} disabled={i === value.hotels.length - 1}><ArrowDown size={13} /></button>{' '}
+                  <button className="c-btn c-btn-danger" title="Remove from collection" onClick={() => removeHotel(i)}><Trash2 size={13} /></button>
                 </div>
               </div>
+              <div style={{ padding: 12, display: 'grid', gap: 8 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <Field label="Display name"><input className="c-input" value={h.name} onChange={(e) => setHotel(i, { name: e.target.value })} /></Field>
                 <Field label="Atoll / location"><input className="c-input" value={h.atoll || ''} onChange={(e) => setHotel(i, { atoll: e.target.value })} /></Field>
@@ -747,6 +821,7 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
                   </div>
                 )}
               </div>
+            </div>
             </div>
             </div>
           ))}
