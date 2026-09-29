@@ -6399,23 +6399,34 @@ function BookingSidebar(props: {
                 display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
                 paddingBottom: 10, marginBottom: 10, borderBottom: '1px solid #E8DCC4'
               }}>
-                <span style={{ fontSize: 12.5, color: '#7A6635' }}>Previous total</span>
+                <span style={{ fontSize: 12.5, color: '#7A6635' }}>Previous net</span>
                 <span style={{
                   fontSize: 13.5, color: '#9C8B5D',
                   textDecoration: 'line-through', fontFamily: 'Georgia, serif'
                 }}>
-                  {fmtMoney(props.prebook.originalPrice ?? undefined)} {props.prebook.currency}
+                  {fmtMoney(netOfSell(props.prebook.originalPrice) ?? props.prebook.originalPrice ?? undefined)} {props.prebook.currency}
                 </span>
               </div>
               <div style={{
                 display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
                 marginBottom: 12
               }}>
-                <span style={{ fontSize: 13, color: '#3F2F0E', fontWeight: 600 }}>New total</span>
+                <span style={{ fontSize: 13, color: '#3F2F0E', fontWeight: 600 }}>New net</span>
                 <span style={{
                   fontSize: 22, color: '#3F2F0E', fontWeight: 600,
                   fontFamily: 'Georgia, serif', letterSpacing: '-0.01em'
                 }}>
+                  {fmtMoney(netOfSell(props.prebook.newPrice) ?? props.prebook.newPrice ?? undefined)} {props.prebook.currency}
+                </span>
+              </div>
+              {/* The client's price follows the new net, at the same markup.
+                  Here for information: the number being agreed is the net. */}
+              <div style={{
+                display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+                marginBottom: 12, fontSize: 12, color: '#7A6635'
+              }}>
+                <span>Client price becomes</span>
+                <span style={{ fontFamily: 'var(--c-mono)' }}>
                   {fmtMoney(props.prebook.newPrice ?? undefined)} {props.prebook.currency}
                 </span>
               </div>
@@ -6427,7 +6438,7 @@ function BookingSidebar(props: {
                   fontWeight: 600, fontSize: 13, cursor: 'pointer'
                 }}
               >
-                Accept new total of {fmtMoney(props.prebook.newPrice ?? undefined)} {props.prebook.currency}
+                Accept new net of {fmtMoney(netOfSell(props.prebook.newPrice) ?? props.prebook.newPrice ?? undefined)} {props.prebook.currency}
               </button>
             </div>
           )}
