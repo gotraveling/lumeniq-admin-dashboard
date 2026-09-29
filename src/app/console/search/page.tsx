@@ -6578,7 +6578,28 @@ function BookingSidebar(props: {
                 // nothing to the rate: excluded taxes are settled at the
                 // property and are itemised above.
                 const q = quotedTotal(r, props.prebook?.newPrice, props.prebook?.currency);
-                return `${r.onRequest ? 'Send request' : 'Confirm'} · ${fmtMoney(q.amount)} ${q.currency}`;
+                // Tina, 29 Sep: the supplier invoices us the net, so that is
+                // the number to confirm against. The client's total is already
+                // above, under "Total we charge the client" — repeating it here
+                // made the button read like the amount we pay.
+                //
+                // Derived from the quoted total rather than read off the rate,
+                // so a price change at prebook moves both together: markup is a
+                // percentage of net, so net is the quoted total less that
+                // percentage. A fixed markup subtracts instead.
+                const mk = r.pricing?.markup;
+                const net = (() => {
+                  if (typeof q.amount !== 'number') return null;
+                  if (mk?.type === 'percentage' && Number(mk.value) > 0) {
+                    return q.amount / (1 + Number(mk.value) / 100);
+                  }
+                  if (typeof mk?.amount === 'number') return q.amount - mk.amount;
+                  return null;
+                })();
+                const verb = r.onRequest ? 'Send request' : 'Confirm';
+                return net != null
+                  ? `${verb} · Net ${fmtMoney(net)} ${q.currency}`
+                  : `${verb} · ${fmtMoney(q.amount)} ${q.currency}`;
               })()}
             </button>
           )}
