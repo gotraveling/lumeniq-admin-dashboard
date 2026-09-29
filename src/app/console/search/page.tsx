@@ -6151,6 +6151,22 @@ function BookingSidebar(props: {
   onBookAnother: () => void;
 }) {
   const r = props.rate;
+  /**
+   * The supplier's side of a sell price.
+   *
+   * We are invoiced the net and we hold the net; the client's total is ours to
+   * charge. Both the held-rate line and the Confirm button read this one
+   * function so they can never state different money for the same booking.
+   * Markup is a percentage of net, so net is the total less that percentage; a
+   * fixed markup subtracts instead. Null when we cannot say.
+   */
+  const netOfSell = (amount?: number | null): number | null => {
+    if (typeof amount !== 'number' || !Number.isFinite(amount)) return null;
+    const mk = r.pricing?.markup;
+    if (mk?.type === 'percentage' && Number(mk.value) > 0) return amount / (1 + Number(mk.value) / 100);
+    if (typeof mk?.amount === 'number') return amount - mk.amount;
+    return null;
+  };
   const totalAdults = props.rooms.reduce((s, x) => s + x.adults, 0);
   const totalChildren = props.rooms.reduce((s, x) => s + x.childrenAges.length, 0);
   return (
@@ -6423,7 +6439,14 @@ function BookingSidebar(props: {
               fontSize: 12, color: '#5C4A1F'
             }}>
               <CheckCircle2 size={13} style={{ color: '#9B7B33' }} />
-              Rate held at <strong style={{ color: '#3F2F0E' }}>{fmtMoney((props.prebook.newPrice ?? props.prebook.originalPrice) ?? undefined)} {props.prebook.currency}</strong>
+              {(() => {
+                // What the supplier holds is their rate, not our sell price.
+                const held = (props.prebook.newPrice ?? props.prebook.originalPrice) ?? undefined;
+                const net = netOfSell(held);
+                return net != null
+                  ? <>Rate held at <strong style={{ color: '#3F2F0E' }}>net {fmtMoney(net)} {props.prebook.currency}</strong></>
+                  : <>Rate held at <strong style={{ color: '#3F2F0E' }}>{fmtMoney(held)} {props.prebook.currency}</strong></>;
+              })()}
             </div>
           )}
 
@@ -6587,15 +6610,7 @@ function BookingSidebar(props: {
                 // so a price change at prebook moves both together: markup is a
                 // percentage of net, so net is the quoted total less that
                 // percentage. A fixed markup subtracts instead.
-                const mk = r.pricing?.markup;
-                const net = (() => {
-                  if (typeof q.amount !== 'number') return null;
-                  if (mk?.type === 'percentage' && Number(mk.value) > 0) {
-                    return q.amount / (1 + Number(mk.value) / 100);
-                  }
-                  if (typeof mk?.amount === 'number') return q.amount - mk.amount;
-                  return null;
-                })();
+                const net = netOfSell(q.amount);
                 const verb = r.onRequest ? 'Send request' : 'Confirm';
                 return net != null
                   ? `${verb} · Net ${fmtMoney(net)} ${q.currency}`
