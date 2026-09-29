@@ -59,6 +59,12 @@ export default function RateSheetPage() {
   const [slug, setSlug] = useState('');
   const [hotels, setHotels] = useState<HotelHit[]>([]);
   const [nights, setNights] = useState('4,5,7');
+  // Empty = the next 60 days, which answers "how is this collection doing".
+  // A season ("what can we sell Megève this winter") has to name its dates, or
+  // the sheet prices the wrong months and reports a closed hotel as having
+  // nothing.
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -87,7 +93,9 @@ export default function RateSheetPage() {
   const run = async () => {
     setBusy(true); setError(''); setNotice(''); setSheet(null);
     try {
-      const qs = new URLSearchParams({ nights });
+      const qs = new URLSearchParams({ nights, warm: '1' });
+      if (from) qs.set('from', from);
+      if (to) qs.set('to', to);
       if (hotels.length) qs.set('hotelIds', hotels.map(h => h.hotelId).join(','));
       else if (slug) qs.set('slug', slug);
       else throw new Error('Pick a collection or add at least one hotel');
@@ -104,6 +112,8 @@ export default function RateSheetPage() {
     setBusy(true); setError('');
     try {
       const body: Record<string, unknown> = { nights: nights.split(',').map(Number).filter(Boolean) };
+      if (from) body.from = from;
+      if (to) body.to = to;
       if (hotels.length) body.hotelIds = hotels.map(h => h.hotelId);
       else body.slug = slug;
       if (mailTo.trim()) body.to = mailTo.trim();
@@ -154,7 +164,9 @@ export default function RateSheetPage() {
         <h1 style={{ margin: 0, fontSize: 20 }}>Rate sheet</h1>
         <div style={{ color: 'var(--c-fg-muted)', fontSize: 13, marginTop: 4 }}>
           What we can sell today, per property and stay length, with net and what the card advertises.
-          Rates are fetched live, so a run takes a minute or two.
+          Rates are fetched live, so a run takes a minute or two. Leave the dates empty for the next
+          60 days, or set them for a season — a winter question priced against autumn reports a hotel
+          as having nothing when it is simply not open yet.
         </div>
       </div>
 
@@ -174,6 +186,14 @@ export default function RateSheetPage() {
           <label style={{ display: 'grid', gap: 4 }}>
             <span className="c-label">Stay lengths</span>
             <input className="c-input" value={nights} onChange={e => setNights(e.target.value)} style={{ width: 120 }} />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span className="c-label">Arriving from</span>
+            <input className="c-input" type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ width: 150 }} />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span className="c-label">to</span>
+            <input className="c-input" type="date" value={to} onChange={e => setTo(e.target.value)} style={{ width: 150 }} />
           </label>
           <button className="c-btn c-btn-primary" onClick={run} disabled={busy}>
             <Activity size={14} /> {busy ? 'Fetching live rates…' : 'Run now'}
