@@ -55,6 +55,8 @@ interface OfferSelection {
 }
 interface CollectionHotel {
   hotelId?: number; name: string; atoll?: string; image?: string; images?: string[];
+  /** Which group this card sits in; null/absent = the main list. */
+  sectionId?: number | null;
   offer?: string; bookBy?: string; editorial?: string; whyThisHotel?: string; customisable?: boolean;
   hidden?: boolean;
   /** Already round-tripped through this editor untyped — the load assigns the
@@ -72,6 +74,14 @@ interface CollectionFull {
   campaignAdvertiseFrom?: string | null; campaignAdvertiseTo?: string | null;
   travelGuideLabel?: string; travelGuideUrl?: string;
   status: 'draft' | 'published'; hotels: CollectionHotel[];
+  sections?: CollectionSection[];
+}
+/** A named group on the page, e.g. "Turkish Airlines free stopover hotels". */
+interface CollectionSection {
+  /** Absent until saved — the API hands back the id it created. */
+  id?: number;
+  title: string;
+  intro?: string;
 }
 interface OfferReportMeta {
   id: number; name: string; region: string | null; rowCount: number; offerCount: number; createdAt: string;
@@ -368,6 +378,30 @@ export default function CollectionsPage() {
         if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
         id = d.id;
       }
+      // Sections before hotels: a hotel row carries its section's id, and a
+      // section created in this same save has no id until the API returns one.
+      // New sections are matched back by position so the hotels assigned to
+      // them land in the right group on the first save, not the second.
+      let sections = editing.sections || [];
+      if (sections.length || (editing.sections && editing.sections.length === 0)) {
+        const sr = await fetch(`/api/admin/collections/${id}/sections`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sections }),
+        });
+        const sd = await sr.json();
+        if (!sr.ok) throw new Error(sd.error || `HTTP ${sr.status}`);
+        const saved: CollectionSection[] = sd.sections || [];
+        const idByIndex = new Map<number, number>();
+        sections.forEach((sec, i) => { if (saved[i]?.id) idByIndex.set(i, saved[i].id!); });
+        // Re-point hotels that referenced a not-yet-saved section (negative
+        // placeholder ids, assigned by index when the section was added).
+        editing.hotels.forEach((h) => {
+          if (typeof h.sectionId === 'number' && h.sectionId < 0) {
+            h.sectionId = idByIndex.get(-h.sectionId - 1) ?? null;
+          }
+        });
+        sections = saved;
+      }
       const hr = await fetch(`/api/admin/collections/${id}/hotels`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hotels: editing.hotels }),
@@ -529,7 +563,10 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
   // collection; open on a new one, where they all still need filling in.
   const [metaOpen, setMetaOpen] = useState(!value.id);
 
-  const rowKey = (h: CollectionHotel, i: number) => (h.hotelId ? `id:${h.hotelId}` : `idx:${i}`);
+  // Section-aware: the same hotel can sit in two groups, and two rows sharing
+  // a key would open and collapse together.
+  const rowKey = (h: CollectionHotel, i: number) =>
+    (h.hotelId ? `id:${h.hotelId}:${h.sectionId ?? 'main'}` : `idx:${i}`);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleRow = (k: string) => setExpanded((prev) => {
     const next = new Set(prev);
@@ -770,6 +807,57 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
       </div>
       )}
 
+      {/* Named groups on the page. Most collections have none; Istanbul has
+          one for the hotels Turkish Airlines gives business class. A hotel
+          picks its group on its own row below. */}
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div>
+            <div className="c-label">Sections ({(value.sections || []).length})</div>
+            <div style={{ color: 'var(--c-fg-muted)', fontSize: 12, marginTop: 2 }}>
+              Extra headings below the main list. Hotels without a section stay in the main list.
+            </div>
+          </div>
+          <button className="c-btn" onClick={() => set({ sections: [...(value.sections || []), { title: '', intro: '' }] })}>
+            <Plus size={13} /> Add section
+          </button>
+        </div>
+        {(value.sections || []).map((sec, i) => (
+          <div key={sec.id ?? `new-${i}`} style={{ display: 'grid', gap: 6, padding: 10, border: '1px solid var(--c-line)', borderRadius: 6, marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input className="c-input" style={{ flex: 1 }} placeholder="Heading, e.g. Turkish Airlines free stopover hotels"
+                value={sec.title}
+                onChange={(e) => {
+                  const next = [...(value.sections || [])];
+                  next[i] = { ...next[i], title: e.target.value };
+                  set({ sections: next });
+                }} />
+              <button className="c-btn c-btn-danger" title="Remove section"
+                onClick={() => {
+                  const removed = value.sections?.[i];
+                  const next = (value.sections || []).filter((_, j) => j !== i);
+                  // Its hotels return to the main list rather than disappearing.
+                  const hotels = value.hotels.map((h) => (
+                    (removed?.id != null && h.sectionId === removed.id) || h.sectionId === -(i + 1)
+                      ? { ...h, sectionId: null } : h
+                  ));
+                  set({ sections: next, hotels });
+                }}>
+                <Trash2 size={13} />
+              </button>
+            </div>
+            <textarea className="c-input" rows={2}
+              placeholder="Line under the heading, e.g. Turkish Airlines offers these free stopover hotels for business class travellers for 2 nights. Book your additional nights here."
+              value={sec.intro || ''}
+              onChange={(e) => {
+                const next = [...(value.sections || [])];
+                next[i] = { ...next[i], intro: e.target.value };
+                set({ sections: next });
+              }} />
+          </div>
+        ))}
+      </div>
+
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <div>
@@ -905,6 +993,28 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
               <div style={{ padding: 12, display: 'grid', gap: 8 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <Field label="Display name"><input className="c-input" value={h.name} onChange={(e) => setHotel(i, { name: e.target.value })} /></Field>
+                {/* Which group this card appears under. A hotel can be added
+                    twice, once per group, when it belongs in both. */}
+                {!!(value.sections || []).length && (
+                  <Field label="Section">
+                    <select
+                      className="c-select"
+                      value={h.sectionId == null ? '' : String(h.sectionId)}
+                      onChange={(e) => setHotel(i, { sectionId: e.target.value === '' ? null : Number(e.target.value) })}
+                    >
+                      <option value="">Main list</option>
+                      {(value.sections || []).map((sec, si) => (
+                        // Unsaved sections have no id yet: a negative
+                        // placeholder by position, swapped for the real id on
+                        // save, so a hotel assigned before the first save is
+                        // not silently dropped back to the main list.
+                        <option key={sec.id ?? `new-${si}`} value={sec.id ?? -(si + 1)}>
+                          {sec.title || `Section ${si + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
                 <Field label="Atoll / location"><input className="c-input" value={h.atoll || ''} onChange={(e) => setHotel(i, { atoll: e.target.value })} /></Field>
                 <Field label="Image URL"><input className="c-input" value={h.image || ''} onChange={(e) => setHotel(i, { image: e.target.value })} /></Field>
                 <Field label="Offer text"><input className="c-input" value={h.offer || ''} onChange={(e) => setHotel(i, { offer: e.target.value })} /></Field>
