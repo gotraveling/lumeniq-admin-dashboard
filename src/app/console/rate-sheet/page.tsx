@@ -284,6 +284,18 @@ export default function RateSheetPage() {
           <button className="c-btn" onClick={mail} disabled={busy || (!slug && !hotels.length)}>
             <Mail size={14} /> Email this
           </button>
+          {/* Scheduling is a small ask made occasionally, so it is a button
+              rather than a panel explaining itself on every visit. */}
+          <button className="c-btn" disabled={busy || (!slug && !hotels.length)}
+            onClick={() => setDraft({
+              label: collectionTitle || 'Rate sheet',
+              slug: slug || null, hotel_ids: hotels.map(h => h.hotelId),
+              nights: nights.split(',').map(Number).filter(Boolean),
+              recipients: mailTo || '', frequency: 'weekly', day_of_week: 1, day_of_month: 1,
+              hour: 8, only_on_drop: true, active: true,
+            } as Partial<Schedule>)}>
+            <Clock size={14} /> Email on a schedule
+          </button>
         </div>
 
         {!fromCollection && (
@@ -301,22 +313,20 @@ export default function RateSheetPage() {
       )}
 
       {/* ---------- ask every week ---------- */}
+      {(!!shown.length || draft) && (
       <div className="c-card" style={{ padding: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <div>
-            <strong><Clock size={14} /> {fromCollection ? 'Scheduled emails for this collection' : 'Schedules'}</strong>
-            <div style={{ color: 'var(--c-fg-muted)', fontSize: 12, marginTop: 2 }}>
-              Sent automatically. By default only when a price has dropped since the last run.
-            </div>
-          </div>
-          <button className="c-btn" onClick={() => setDraft({
-            label: '', slug: slug || null, hotel_ids: hotels.map(h => h.hotelId),
-            nights: nights.split(',').map(Number).filter(Boolean),
-            recipients: mailTo || '', frequency: 'weekly', day_of_week: 1, day_of_month: 1,
-            hour: 8, only_on_drop: true, active: true,
-          } as Partial<Schedule>)}>
-            <Plus size={13} /> New schedule
-          </button>
+          <strong><Clock size={14} /> {draft && !shown.length ? 'New scheduled email' : 'Scheduled emails'}</strong>
+          {!!shown.length && !draft && (
+            <button className="c-btn" onClick={() => setDraft({
+              label: '', slug: slug || null, hotel_ids: hotels.map(h => h.hotelId),
+              nights: nights.split(',').map(Number).filter(Boolean),
+              recipients: mailTo || '', frequency: 'weekly', day_of_week: 1, day_of_month: 1,
+              hour: 8, only_on_drop: true, active: true,
+            } as Partial<Schedule>)}>
+              <Plus size={13} /> Add another
+            </button>
+          )}
         </div>
 
         {draft && (
@@ -363,11 +373,6 @@ export default function RateSheetPage() {
           </div>
         )}
 
-        {!shown.length && !draft && (
-          <div style={{ color: 'var(--c-fg-muted)', fontSize: 13 }}>
-            {fromCollection ? 'This collection is not scheduled.' : 'Nothing scheduled yet.'}
-          </div>
-        )}
         {!!shown.length && (
           <table className="c-table" style={{ width: '100%' }}>
             <thead>
@@ -403,6 +408,7 @@ export default function RateSheetPage() {
           </table>
         )}
       </div>
+      )}
     </div>
   );
 }
