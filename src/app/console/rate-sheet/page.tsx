@@ -527,17 +527,17 @@ function SheetTable({ data }: { data: Sheet }) {
                   <span style={{ color: 'var(--c-fg-muted)' }}>no manual price</span>
                 ) : (
                   <>
-                    <span style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>card says </span>
+                    {/* The column is headed "On the page now", so the cell
+                        finishes that sentence: what the page shows, then how
+                        it compares to what we can sell. */}
+                    <span style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>shows </span>
                     <span className="c-mono">{h.advertised.text || money(h.advertised.amount)}</span>
                     {h.advertised.nights ? <span style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}> for {h.advertised.nights} nights</span> : null}
-                    {/* Say what the comparison IS, not just which way it went.
-                        "still right" and "above our cheapest" both left the
-                        reader working out what was being compared. */}
                     <div style={{ color: h.drift && h.drift.diff > 0 ? 'var(--c-danger)' : 'var(--c-fg-muted)' }}>
                       {!h.drift ? 'we have no price for that stay length'
-                        : Math.abs(h.drift.pct) < 3 ? `matches our cheapest (${money(h.drift.live)})`
-                        : h.drift.diff > 0 ? `but our cheapest is ${money(h.drift.live)} — the card promises less than we can sell`
-                        : `our cheapest is ${money(h.drift.live)} — card is ${money(-h.drift.diff)} higher, check which villa it quotes`}
+                        : Math.abs(h.drift.pct) < 3 ? `same as our cheapest (${money(h.drift.live)})`
+                        : h.drift.diff > 0 ? `we cannot sell it that low — our cheapest is ${money(h.drift.live)}`
+                        : `${money(-h.drift.diff)} above our cheapest (${money(h.drift.live)})`}
                     </div>
                   </>
                 )}
