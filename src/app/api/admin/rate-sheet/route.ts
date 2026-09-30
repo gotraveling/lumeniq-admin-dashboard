@@ -25,11 +25,19 @@ export async function GET(request: NextRequest) {
   const auth = await requireConsoleUser(request);
   if ('response' in auth) return auth.response;
 
-  const slug = request.nextUrl.searchParams.get('slug') || '';
-  if (!slug) return NextResponse.json({ error: 'slug required' }, { status: 400 });
-  const nights = request.nextUrl.searchParams.get('nights') || '';
-
-  const qs = new URLSearchParams({ slug, warm: '1', ...(nights ? { nights } : {}) });
+  // Pass the question through as asked. Dropping hotelIds/from/to here meant a
+  // dated hotel-list search silently became "this collection, next 60 days".
+  const p = request.nextUrl.searchParams;
+  const slug = p.get('slug') || '';
+  const hotelIds = p.get('hotelIds') || '';
+  if (!slug && !hotelIds) {
+    return NextResponse.json({ error: 'slug or hotelIds required' }, { status: 400 });
+  }
+  const qs = new URLSearchParams({ warm: '1' });
+  for (const k of ['slug', 'hotelIds', 'nights', 'from', 'to', 'channel'] as const) {
+    const v = p.get(k);
+    if (v) qs.set(k, v);
+  }
   const res = await fetch(`${BOOKING_API_URL}/api/admin/rate-sheet?${qs}`, {
     headers: { 'X-API-Key': API_KEY },
     cache: 'no-store',

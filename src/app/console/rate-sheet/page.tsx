@@ -63,8 +63,11 @@ export default function RateSheetPage() {
   // A season ("what can we sell Megève this winter") has to name its dates, or
   // the sheet prices the wrong months and reports a closed hotel as having
   // nothing.
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  // Prefilled rather than blank: an empty range quietly means "the next 60
+  // days", which is not what anyone reads two empty date boxes as.
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const [from, setFrom] = useState(() => iso(new Date(Date.now() + 7 * 864e5)));
+  const [to, setTo] = useState(() => iso(new Date(Date.now() + 97 * 864e5)));
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -74,12 +77,20 @@ export default function RateSheetPage() {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [draft, setDraft] = useState<Partial<Schedule> | null>(null);
 
-  // Opened from a collection row: preselect it, but do NOT run. A live fetch
-  // is a minute of supplier calls, so it waits for the person to ask for it.
+  /**
+   * Opened from a collection row, or opened cold.
+   *
+   * From a collection the question is already settled — "what can we sell THIS
+   * at" — so the page shows that collection and nothing else asks you to
+   * choose one. Opened cold it is a blank question and the pickers appear.
+   * Nothing runs on arrival either way: a live fetch is a minute of supplier
+   * calls and waits to be asked for.
+   */
+  const [fromCollection, setFromCollection] = useState<string | null>(null);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const fromUrl = new URLSearchParams(window.location.search).get('slug');
-    if (fromUrl) setSlug(fromUrl);
+    const q = new URLSearchParams(window.location.search).get('slug');
+    if (q) { setSlug(q); setFromCollection(q); }
   }, []);
 
   useEffect(() => {
@@ -160,16 +171,25 @@ export default function RateSheetPage() {
     } finally { setBusy(false); }
   };
 
+  // On a collection page, only that collection's schedules are its business.
+  const shown = fromCollection ? schedules.filter(x => x.slug === fromCollection) : schedules;
+
   const removeSchedule = async (id: number) => {
     if (!confirm('Delete this schedule?')) return;
     await fetch(`/api/admin/rate-sheet/schedules/${id}`, { method: 'DELETE' });
     await loadSchedules();
   };
 
+  const collectionTitle = fromCollection
+    ? (collections.find(c => c.slug === fromCollection)?.title || fromCollection)
+    : '';
+
   return (
     <div style={{ display: 'grid', gap: 18 }}>
       <div>
-        <h1 style={{ margin: 0, fontSize: 20 }}>Rate sheet</h1>
+        <h1 style={{ margin: 0, fontSize: 20 }}>
+          Rate sheet{collectionTitle ? ` — ${collectionTitle}` : ''}
+        </h1>
         <div style={{ color: 'var(--c-fg-muted)', fontSize: 13, marginTop: 4 }}>
           What we can sell today, per property and stay length, with net and what the card advertises.
           Rates are fetched live, so a run takes a minute or two. Leave the dates empty for the next
@@ -184,13 +204,15 @@ export default function RateSheetPage() {
       {/* ---------- ask once ---------- */}
       <div className="c-card" style={{ padding: 14, display: 'grid', gap: 10 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <label style={{ display: 'grid', gap: 4 }}>
-            <span className="c-label">Collection</span>
-            <select className="c-select" value={slug} onChange={e => { setSlug(e.target.value); setHotels([]); }} style={{ minWidth: 260 }}>
-              <option value="">— or pick hotels below —</option>
-              {collections.map(c => <option key={c.slug} value={c.slug}>{c.title}</option>)}
-            </select>
-          </label>
+          {!fromCollection && (
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span className="c-label">Collection</span>
+              <select className="c-select" value={slug} onChange={e => { setSlug(e.target.value); setHotels([]); }} style={{ minWidth: 260 }}>
+                <option value="">— or pick hotels below —</option>
+                {collections.map(c => <option key={c.slug} value={c.slug}>{c.title}</option>)}
+              </select>
+            </label>
+          )}
           <label style={{ display: 'grid', gap: 4 }}>
             <span className="c-label">Stay lengths</span>
             <input className="c-input" value={nights} onChange={e => setNights(e.target.value)} style={{ width: 120 }} />
@@ -216,7 +238,9 @@ export default function RateSheetPage() {
           </button>
         </div>
 
-        <HotelPicker hotels={hotels} onChange={(h) => { setHotels(h); if (h.length) setSlug(''); }} />
+        {!fromCollection && (
+          <HotelPicker hotels={hotels} onChange={(h) => { setHotels(h); if (h.length) setSlug(''); }} />
+        )}
       </div>
 
       {sheet && <SheetTable data={sheet} />}
@@ -231,7 +255,7 @@ export default function RateSheetPage() {
       <div className="c-card" style={{ padding: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <div>
-            <strong><Clock size={14} /> Schedules</strong>
+            <strong><Clock size={14} /> {fromCollection ? 'Scheduled emails for this collection' : 'Schedules'}</strong>
             <div style={{ color: 'var(--c-fg-muted)', fontSize: 12, marginTop: 2 }}>
               Sent automatically. By default only when a price has dropped since the last run.
             </div>
@@ -290,17 +314,19 @@ export default function RateSheetPage() {
           </div>
         )}
 
-        {!schedules.length && !draft && (
-          <div style={{ color: 'var(--c-fg-muted)', fontSize: 13 }}>Nothing scheduled yet.</div>
+        {!shown.length && !draft && (
+          <div style={{ color: 'var(--c-fg-muted)', fontSize: 13 }}>
+            {fromCollection ? 'This collection is not scheduled.' : 'Nothing scheduled yet.'}
+          </div>
         )}
-        {!!schedules.length && (
+        {!!shown.length && (
           <table className="c-table" style={{ width: '100%' }}>
             <thead>
               <tr><th align="left">Name</th><th align="left">What</th><th align="left">When</th>
                 <th align="left">To</th><th align="left">Last run</th><th /></tr>
             </thead>
             <tbody>
-              {schedules.map(s => (
+              {shown.map(s => (
                 <tr key={s.id} style={{ opacity: s.active ? 1 : 0.5 }}>
                   <td>{s.label}</td>
                   <td style={{ fontSize: 12 }}>
