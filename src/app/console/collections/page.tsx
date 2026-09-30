@@ -12,7 +12,7 @@
  * with optional per-hotel editorial/offer overrides layered on top.
  */
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { FolderOpen, Plus, Trash2, ArrowUp, ArrowDown, Search, Save, X, RefreshCw, ChevronDown, ChevronUp, Activity, Mail } from 'lucide-react';
+import { FolderOpen, Plus, Trash2, ArrowUp, ArrowDown, Search, Save, X, RefreshCw, ChevronDown, ChevronUp, Activity } from 'lucide-react';
 
 const HOTEL_API = process.env.NEXT_PUBLIC_HOTEL_API_URL
   || 'https://hotel-api-91901273027.australia-southeast1.run.app';
@@ -219,24 +219,6 @@ async function fetchRatesRetry(hotelId: number, qs: string, maxTries = 4): Promi
   return { rates: [], throttled };
 }
 
-/** What the engine's rate sheet returns. Display-only — the engine decides. */
-interface RateSheetRate {
-  from_total: number; currency?: string; supplier?: string; board?: string | null;
-  transfer_type?: string | null; check_in: string; check_out: string;
-  free_cancellation?: boolean | null; from_total_was?: number | null;
-}
-interface RateSheetRow {
-  id: number; name: string; markup: number | null; blocked: string[];
-  byNights: Record<string, { best: RateSheetRate | null; cheapestAny: RateSheetRate | null }>;
-  advertised?: { amount?: number | null; text?: string | null; nights?: number | null } | null;
-  drift?: { live: number; diff: number; pct: number } | null;
-}
-interface RateSheet {
-  slug: string; title: string; nights: number[]; generatedAt: string;
-  warmed?: boolean; drops?: Array<{ hotel: string; nights: number; was: number; now: number; pct: number }>;
-  sheet: RateSheetRow[];
-}
-
 export default function CollectionsPage() {
   const [list, setList] = useState<CollectionListRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -246,52 +228,7 @@ export default function CollectionsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [q, setQ] = useState('');
 
-  /**
-   * Rate sheet, on demand.
-   *
-   * The weekly mail only goes out when a price drops. This is the other half:
-   * a consultant asking "what can we sell this collection at right now", with
-   * the rates fetched live rather than read out of the cache — which is why it
-   * takes a minute or two and says so.
-   */
-  const [sheet, setSheet] = useState<RateSheet | null>(null);
-  const [sheetFor, setSheetFor] = useState<string | null>(null);
-  const [sheetBusy, setSheetBusy] = useState<string | null>(null);
-  const [sheetError, setSheetError] = useState<string | null>(null);
-  const [mailing, setMailing] = useState(false);
 
-  const loadSheet = useCallback(async (slug: string) => {
-    setSheetBusy(slug); setSheetError(null); setSheet(null); setSheetFor(slug);
-    try {
-      const r = await fetch(`/api/admin/rate-sheet?slug=${encodeURIComponent(slug)}`, { cache: 'no-store' });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d?.message || d?.error || `HTTP ${r.status}`);
-      setSheet(d);
-    } catch (e) {
-      setSheetError(e instanceof Error ? e.message : 'Could not build the rate sheet');
-    } finally {
-      setSheetBusy(null);
-    }
-  }, []);
-
-  const mailSheet = useCallback(async (slug: string) => {
-    setMailing(true); setSheetError(null);
-    try {
-      const r = await fetch('/api/admin/rate-sheet', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slug }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d?.message || d?.error || `HTTP ${r.status}`);
-      const sent = d?.results?.[0]?.sent;
-      setNotice(Array.isArray(sent) && sent.length ? `Emailed to ${sent.join(', ')}` : 'Sent');
-    } catch (e) {
-      setSheetError(e instanceof Error ? e.message : 'Could not send it');
-    } finally {
-      setMailing(false);
-    }
-  }, []);
 
   // The editor is a mode of this page, not its own route, so the URL never
   // moved off /console/collections -- you could not link anyone to the
@@ -450,17 +387,6 @@ export default function CollectionsPage() {
       </div>
 
       {error && <div className="c-error">Error: {error}</div>}
-      {sheetError && <div className="c-error">Rate sheet: {sheetError}</div>}
-      {(sheetBusy || sheet) && (
-        <RateSheetPanel
-          slug={sheetFor || ''}
-          data={sheet}
-          busy={!!sheetBusy}
-          mailing={mailing}
-          onMail={() => sheetFor && mailSheet(sheetFor)}
-          onClose={() => { setSheet(null); setSheetFor(null); }}
-        />
-      )}
       {notice && <div className="c-card" style={{ borderColor: 'var(--c-success)', color: 'var(--c-success)', padding: 12 }}>{notice}</div>}
 
       {!editing && (
@@ -502,10 +428,10 @@ export default function CollectionsPage() {
                         {' '}
                         <a className="c-btn" href={`https://www.firstclass.com.au/luxury-hotels/collections/${c.slug}?access=firstclass2025`} target="_blank" rel="noreferrer">View</a>
                         {' '}
-                        <button className="c-btn" onClick={() => loadSheet(c.slug)} disabled={!!sheetBusy}
-                          title="Live rates for every property in this collection">
-                          <Activity size={13} /> {sheetBusy === c.slug ? 'Fetching live rates…' : 'Rate sheet'}
-                        </button>
+                        <a className="c-btn" href={`/console/rate-sheet?slug=${encodeURIComponent(c.slug)}`}
+                          title="Open the rate sheet for this collection">
+                          <Activity size={13} /> Rate sheet
+                        </a>
                         {' '}
                         <button className="c-btn c-btn-danger" onClick={() => remove(c)} disabled={busy}><Trash2 size={14} /></button>
                       </td>
@@ -1516,123 +1442,5 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="c-label">{label}</span>
       {children}
     </label>
-  );
-}
-
-/**
- * The rate sheet, on screen.
- *
- * Same numbers the weekly email carries, fetched live when the button is
- * pressed. Per property: the cheapest transfer-inclusive total at each stay
- * length, and what the card is advertising against it — a card promising less
- * than we can sell is the thing worth catching, so it is the thing in red.
- */
-function RateSheetPanel({ slug, data, busy, mailing, onMail, onClose }: {
-  slug: string;
-  data: RateSheet | null;
-  busy: boolean;
-  mailing: boolean;
-  onMail: () => void;
-  onClose: () => void;
-}) {
-  const money = (n?: number | null) =>
-    n == null || !isFinite(Number(n)) ? '—' : `US$${Math.round(Number(n)).toLocaleString('en-AU')}`;
-  const day = (d?: string) => {
-    if (!d) return '';
-    const t = new Date(`${String(d).slice(0, 10)}T00:00:00Z`);
-    return isNaN(t.getTime()) ? '' : t.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'UTC' });
-  };
-
-  return (
-    <div className="c-card" style={{ padding: 0, overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--c-line)' }}>
-        <Activity size={14} />
-        <strong style={{ flex: 1 }}>{data?.title || slug} — live rates</strong>
-        {data && (
-          <button className="c-btn" onClick={onMail} disabled={mailing}>
-            <Mail size={13} /> {mailing ? 'Sending…' : 'Email this'}
-          </button>
-        )}
-        <button className="c-btn" onClick={onClose}><X size={13} /></button>
-      </div>
-
-      {busy && (
-        <div style={{ padding: 16, fontSize: 13, color: 'var(--c-fg-soft)' }}>
-          Asking the suppliers for current rates. A minute or two — it prices every
-          property at each stay length rather than reading the cache.
-        </div>
-      )}
-
-      {data && !busy && (
-        <div style={{ overflowX: 'auto' }}>
-          {!!data.drops?.length && (
-            <div style={{ padding: '8px 14px', fontSize: 13, color: 'var(--c-success)' }}>
-              Dropped since last run: {data.drops.map(d => `${d.hotel} ${d.nights}n ${money(d.was)} → ${money(d.now)}`).join(' · ')}
-            </div>
-          )}
-          <table className="c-table" style={{ width: '100%' }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: 'left' }}>Property</th>
-                {data.nights.map(n => <th key={n} style={{ textAlign: 'left' }}>{n} nights</th>)}
-                <th style={{ textAlign: 'left' }}>On the page now</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.sheet.map(h => (
-                <tr key={h.id}>
-                  <td>
-                    <strong>{h.name}</strong>
-                    <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>
-                      markup {h.markup == null ? '—' : `${h.markup}%`}
-                      {h.blocked?.length ? ` · ${h.blocked.join(', ')} blocked` : ''}
-                    </div>
-                  </td>
-                  {data.nights.map(n => {
-                    const b = h.byNights?.[String(n)];
-                    const r = b?.best || b?.cheapestAny;
-                    if (!r) return <td key={n} style={{ color: 'var(--c-fg-muted)' }}>no rate</td>;
-                    const cheaperNoTransfer = b?.best && b?.cheapestAny
-                      && Number(b.cheapestAny.from_total) < Number(b.best.from_total)
-                      ? b.cheapestAny : null;
-                    return (
-                      <td key={n}>
-                        <span className="c-mono"><strong>{money(r.from_total)}</strong></span>
-                        <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>
-                          {day(r.check_in)}–{day(r.check_out)} · {r.supplier}
-                          {r.transfer_type ? ` · ${r.transfer_type}` : ' · no transfer'}
-                          {r.board ? ` · ${r.board}` : ''}
-                        </div>
-                        {cheaperNoTransfer && (
-                          <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>
-                            without transfer {money(cheaperNoTransfer.from_total)}
-                          </div>
-                        )}
-                      </td>
-                    );
-                  })}
-                  <td>
-                    {!h.advertised?.amount && !h.advertised?.text ? (
-                      <span style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>no manual price — card shows the live price</span>
-                    ) : (
-                      <>
-                        <span className="c-mono">{h.advertised.text || money(h.advertised.amount)}</span>
-                        {h.advertised.nights ? <span style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}> / {h.advertised.nights}n</span> : null}
-                        <div style={{ fontSize: 11.5, color: h.drift && h.drift.diff > 0 ? 'var(--c-danger)' : 'var(--c-fg-muted)' }}>
-                          {!h.drift ? 'no live price for that stay length'
-                            : Math.abs(h.drift.pct) < 3 ? 'still right'
-                            : h.drift.diff > 0 ? `cheapest we can sell is ${money(h.drift.live)}`
-                            : `above our cheapest (${money(h.drift.live)}) — check the villa`}
-                        </div>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
   );
 }

@@ -74,6 +74,14 @@ export default function RateSheetPage() {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [draft, setDraft] = useState<Partial<Schedule> | null>(null);
 
+  // Opened from a collection row: preselect it, but do NOT run. A live fetch
+  // is a minute of supplier calls, so it waits for the person to ask for it.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const fromUrl = new URLSearchParams(window.location.search).get('slug');
+    if (fromUrl) setSlug(fromUrl);
+  }, []);
+
   useEffect(() => {
     fetch('/api/admin/collections?status=all', { cache: 'no-store' })
       .then(r => r.json())
@@ -196,7 +204,7 @@ export default function RateSheetPage() {
             <input className="c-input" type="date" value={to} onChange={e => setTo(e.target.value)} style={{ width: 150 }} />
           </label>
           <button className="c-btn c-btn-primary" onClick={run} disabled={busy}>
-            <Activity size={14} /> {busy ? 'Fetching live rates…' : 'Run now'}
+            <Activity size={14} /> {busy ? 'Fetching live rates…' : sheet ? 'Refresh rates' : 'Run now'}
           </button>
           <label style={{ display: 'grid', gap: 4 }}>
             <span className="c-label">Email it to</span>
@@ -212,6 +220,12 @@ export default function RateSheetPage() {
       </div>
 
       {sheet && <SheetTable data={sheet} />}
+      {!sheet && !busy && (
+        <div className="c-card" style={{ padding: 14, color: 'var(--c-fg-muted)', fontSize: 13 }}>
+          Nothing fetched yet. Pick a collection or add hotels, then press Run now — it asks the
+          suppliers for current rates, which takes a minute or two.
+        </div>
+      )}
 
       {/* ---------- ask every week ---------- */}
       <div className="c-card" style={{ padding: 14 }}>
