@@ -32,6 +32,8 @@ interface Row {
 }
 interface Sheet {
   slug: string; title: string; nights: number[]; generatedAt: string; warmed?: boolean;
+  /** Set when the sheet came from storage rather than a fresh run. */
+  storedAt?: string | null;
   drops?: Array<{ hotel: string; nights: number; was: number; now: number; pct: number }>;
   sheet: Row[];
 }
@@ -70,6 +72,7 @@ export default function RateSheetPage() {
   const [to, setTo] = useState(() => iso(new Date(Date.now() + 97 * 864e5)));
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [mailTo, setMailTo] = useState('');
@@ -100,6 +103,28 @@ export default function RateSheetPage() {
       .catch(() => {});
   }, []);
 
+  /**
+   * Show the last run on arrival.
+   *
+   * A run costs a minute of supplier calls, so a reload — or opening the same
+   * collection in a second tab — should show what it said rather than charge
+   * for it again. Refresh rates is how you ask for new numbers.
+   */
+  useEffect(() => {
+    const target = fromCollection || (hotels.length ? hotels.map(h => h.hotelId).join(',') : '');
+    if (!target) return;
+    const qs = new URLSearchParams({ cached: '1' });
+    if (fromCollection) qs.set('slug', fromCollection);
+    else qs.set('hotelIds', target);
+    if (from) qs.set('from', from);
+    fetch(`/api/admin/rate-sheet?${qs}`, { cache: 'no-store' })
+      .then(r => r.json())
+      .then(d => { if (d && !d.empty && d.sheet) setSheet(d); })
+      .catch(() => {});
+    // Only on arrival: after that, Refresh rates is explicit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromCollection]);
+
   const loadSchedules = useCallback(async () => {
     try {
       const r = await fetch('/api/admin/rate-sheet/schedules', { cache: 'no-store' });
@@ -110,21 +135,42 @@ export default function RateSheetPage() {
   useEffect(() => { loadSchedules(); }, [loadSchedules]);
 
   const run = async () => {
-    setBusy(true); setError(''); setNotice(''); setSheet(null);
+    setBusy(true); setError(''); setNotice(''); setProgress(null);
     try {
-      const qs = new URLSearchParams({ nights, warm: '1' });
+      const qs = new URLSearchParams({ nights, stream: '1' });
       if (from) qs.set('from', from);
       if (to) qs.set('to', to);
       if (hotels.length) qs.set('hotelIds', hotels.map(h => h.hotelId).join(','));
       else if (slug) qs.set('slug', slug);
       else throw new Error('Pick a collection or add at least one hotel');
-      const r = await fetch(`/api/admin/rate-sheet?${qs}`, { cache: 'no-store' });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d?.message || d?.error || `HTTP ${r.status}`);
-      setSheet(d);
+
+      const res = await fetch(`/api/admin/rate-sheet?${qs}`, { cache: 'no-store' });
+      if (!res.ok || !res.body) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d?.message || d?.error || `HTTP ${res.status}`);
+      }
+      // Newline-delimited JSON: a line per supplier call, then the sheet. The
+      // last line can arrive split across chunks, so keep the remainder.
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let msg: { type?: string; done?: number; total?: number; data?: Sheet };
+          try { msg = JSON.parse(line); } catch { continue; }
+          if (msg.type === 'progress') setProgress({ done: msg.done || 0, total: msg.total || 0 });
+          if (msg.type === 'done' && msg.data) setSheet({ ...msg.data, storedAt: null });
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not build it');
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setProgress(null); }
   };
 
   const mail = async () => {
@@ -226,7 +272,9 @@ export default function RateSheetPage() {
             <input className="c-input" type="date" value={to} onChange={e => setTo(e.target.value)} style={{ width: 150 }} />
           </label>
           <button className="c-btn c-btn-primary" onClick={run} disabled={busy}>
-            <Activity size={14} /> {busy ? 'Fetching live rates…' : sheet ? 'Refresh rates' : 'Run now'}
+            <Activity size={14} /> {busy
+              ? (progress && progress.total ? `Pricing ${progress.done}/${progress.total}…` : 'Fetching live rates…')
+              : sheet ? 'Refresh rates' : 'Run now'}
           </button>
           <label style={{ display: 'grid', gap: 4 }}>
             <span className="c-label">Email it to</span>
@@ -419,7 +467,7 @@ function SheetTable({ data }: { data: Sheet }) {
       <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--c-line)' }}>
         <strong>{data.title}</strong>
         <span style={{ color: 'var(--c-fg-muted)', fontSize: 12, marginLeft: 8 }}>
-          {data.warmed ? 'rates fetched now' : 'from cache'} · {when(data.generatedAt)}
+          {data.storedAt ? 'last run' : data.warmed ? 'rates fetched now' : 'from cache'} · {when(data.storedAt || data.generatedAt)}
         </span>
         {!!data.drops?.length && (
           <div style={{ color: 'var(--c-success)', fontSize: 13, marginTop: 4 }}>

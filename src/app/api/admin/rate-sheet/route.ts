@@ -33,8 +33,10 @@ export async function GET(request: NextRequest) {
   if (!slug && !hotelIds) {
     return NextResponse.json({ error: 'slug or hotelIds required' }, { status: 400 });
   }
-  const qs = new URLSearchParams({ warm: '1' });
-  for (const k of ['slug', 'hotelIds', 'nights', 'from', 'to', 'channel'] as const) {
+  const qs = new URLSearchParams();
+  // warm only when actually fetching; ?cached=1 must never cost supplier calls.
+  if (p.get('cached') !== '1') qs.set('warm', '1');
+  for (const k of ['slug', 'hotelIds', 'nights', 'from', 'to', 'channel', 'cached', 'stream'] as const) {
     const v = p.get(k);
     if (v) qs.set(k, v);
   }
@@ -42,6 +44,18 @@ export async function GET(request: NextRequest) {
     headers: { 'X-API-Key': API_KEY },
     cache: 'no-store',
   });
+
+  // Streaming run: pass the body straight through, unbuffered, so the console
+  // can render rows as they price instead of after a blank minute.
+  if (p.get('stream') === '1' && res.body) {
+    return new NextResponse(res.body, {
+      status: res.status,
+      headers: {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+      },
+    });
+  }
   return NextResponse.json(await res.json().catch(() => ({})), { status: res.status });
 }
 
