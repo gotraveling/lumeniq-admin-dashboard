@@ -471,10 +471,12 @@ function SheetTable({ data }: { data: Sheet }) {
   return (
     <div className="c-card" style={{ padding: 0, overflowX: 'auto' }}>
       <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--c-line)' }}>
-        <strong>{data.title}</strong>
-        <span style={{ color: 'var(--c-fg-muted)', fontSize: 12, marginLeft: 8 }}>
-          {data.storedAt ? 'last run' : data.warmed ? 'rates fetched now' : 'from cache'} · {when(data.storedAt || data.generatedAt)}
-        </span>
+        {/* Two lines, not one: a margin is invisible to anyone copying the
+            text, which ran the title straight into the timestamp. */}
+        <div><strong>{data.title}</strong></div>
+        <div style={{ color: 'var(--c-fg-muted)', fontSize: 12, marginTop: 2 }}>
+          {data.storedAt ? 'Last run' : data.warmed ? 'Rates fetched now' : 'From cache'} · {when(data.storedAt || data.generatedAt)}
+        </div>
         {!!data.drops?.length && (
           <div style={{ color: 'var(--c-success)', fontSize: 13, marginTop: 4 }}>
             Dropped since last run: {data.drops.map(d => `${d.hotel} ${d.nights}n ${money(d.was)} → ${money(d.now)}`).join(' · ')}
