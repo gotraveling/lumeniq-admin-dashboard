@@ -534,9 +534,12 @@ function SheetTable({ data }: { data: Sheet }) {
                     <span className="c-mono">{h.advertised.text || money(h.advertised.amount)}</span>
                     {h.advertised.nights ? <span style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}> for {h.advertised.nights} nights</span> : null}
                     <div style={{ color: h.drift && h.drift.diff > 0 ? 'var(--c-danger)' : 'var(--c-fg-muted)' }}>
+                      {/* Always the actual gap. A tolerance that called
+                          US$6,887 "the same as" US$6,776 hid $111 behind my
+                          judgement of what counts as close. */}
                       {!h.drift ? 'we have no price for that stay length'
-                        : Math.abs(h.drift.pct) < 3 ? `same as our cheapest (${money(h.drift.live)})`
-                        : h.drift.diff > 0 ? `we cannot sell it that low — our cheapest is ${money(h.drift.live)}`
+                        : Math.round(h.drift.diff) === 0 ? `same as our cheapest (${money(h.drift.live)})`
+                        : h.drift.diff > 0 ? `we cannot sell it that low — our cheapest is ${money(h.drift.live)}, ${money(h.drift.diff)} more`
                         : `${money(-h.drift.diff)} above our cheapest (${money(h.drift.live)})`}
                     </div>
                   </>
