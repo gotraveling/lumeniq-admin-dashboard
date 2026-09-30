@@ -31,6 +31,11 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
 }
 
 export const metadata = {
-  title: 'FirstClass Console',
+  // Each screen sets its own title beside its page; this is the suffix they
+  // share and the fallback for anything that does not.
+  title: {
+    template: '%s · FirstClass Console',
+    default: 'FirstClass Console',
+  },
   robots: { index: false, follow: false },
 };
