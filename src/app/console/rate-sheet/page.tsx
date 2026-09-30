@@ -191,10 +191,10 @@ export default function RateSheetPage() {
           Rate sheet{collectionTitle ? ` — ${collectionTitle}` : ''}
         </h1>
         <div style={{ color: 'var(--c-fg-muted)', fontSize: 13, marginTop: 4 }}>
-          What we can sell today, per property and stay length, with net and what the card advertises.
-          Rates are fetched live, so a run takes a minute or two. Leave the dates empty for the next
-          60 days, or set them for a season — a winter question priced against autumn reports a hotel
-          as having nothing when it is simply not open yet.
+          What we can sell, per property and stay length, with net and what the card advertises.
+          Rates are fetched live for the dates below, so a run takes a minute or two. Widen the dates
+          for a season — a winter question priced against autumn reports a hotel as having nothing
+          when it is simply not open yet.
         </div>
       </div>
 
@@ -246,8 +246,9 @@ export default function RateSheetPage() {
       {sheet && <SheetTable data={sheet} />}
       {!sheet && !busy && (
         <div className="c-card" style={{ padding: 14, color: 'var(--c-fg-muted)', fontSize: 13 }}>
-          Nothing fetched yet. Pick a collection or add hotels, then press Run now — it asks the
-          suppliers for current rates, which takes a minute or two.
+          {fromCollection
+            ? 'Nothing fetched yet. Press Run now — it asks the suppliers for current rates for these dates, which takes a minute or two.'
+            : 'Nothing fetched yet. Pick a collection or add hotels, then press Run now — it asks the suppliers for current rates, which takes a minute or two.'}
         </div>
       )}
 
