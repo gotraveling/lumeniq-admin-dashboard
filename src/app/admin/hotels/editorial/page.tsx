@@ -16,6 +16,7 @@ import {
   Award,
   Sparkles
 } from 'lucide-react';
+import MainPhotoPicker from './MainPhotoPicker';
 
 const HOTEL_API_URL = process.env.NEXT_PUBLIC_HOTEL_API_URL || 'https://hotel-api-91901273027.australia-southeast1.run.app';
 
@@ -680,6 +681,11 @@ export default function HotelEditorialPage() {
               {/* Media Tab - Continued in next part due to length */}
               {activeTab === 'media' && (
                 <div>
+                  <MainPhotoPicker
+                    hotelId={selectedHotel.hotel_id}
+                    current={media.find(m => m.media_type === 'image' && m.is_featured)?.media_url || null}
+                    onChanged={() => loadEditorialContent(selectedHotel.hotel_id)}
+                  />
                   <div className="flex justify-between items-center mb-6">
                     <h3 className="font-semibold">Media Gallery</h3>
                     <button
@@ -701,7 +707,7 @@ export default function HotelEditorialPage() {
                           className="w-full px-4 py-2 border rounded-lg"
                         >
                           <option value="image">Image</option>
-                          <option value="youtube">YouTube Video</option>
+                          <option value="youtube">YouTube Video (shown first on the hotel page and collection cards)</option>
                           <option value="video">Video URL</option>
                         </select>
                       </div>
