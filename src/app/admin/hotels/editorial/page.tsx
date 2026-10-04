@@ -88,6 +88,8 @@ export default function HotelEditorialPage() {
   const [overrides, setOverrides] = useState<EditorialOverrides | null>(null);
   const [hotelTags, setHotelTags] = useState<EditorialTag[]>([]);
   const [availableTags, setAvailableTags] = useState<EditorialTag[]>([]);
+  const [specialCapacity, setSpecialCapacity] = useState('');
+  const [specialCapacitySaved, setSpecialCapacitySaved] = useState('');
 
   // Form states
   const [showMediaForm, setShowMediaForm] = useState(false);
@@ -172,6 +174,8 @@ export default function HotelEditorialPage() {
         setReviews(editorialData.data.reviews || []);
         setOverrides(editorialData.data.overrides);
         setHotelTags(editorialData.data.tags || []);
+        setSpecialCapacity(editorialData.data.special_capacity || '');
+        setSpecialCapacitySaved(editorialData.data.special_capacity || '');
       }
 
       if (tagsData.success) {
@@ -293,6 +297,31 @@ export default function HotelEditorialPage() {
       }
     } catch (error) {
       console.error('Error saving overrides:', error);
+    }
+  };
+
+  // Special capacity — short note shown on the hotel's cards and page,
+  // e.g. "Two bedrooms+" when the smallest unit sold is a multi-bedroom villa.
+  const handleSaveSpecialCapacity = async () => {
+    if (!selectedHotel) return;
+    try {
+      const response = await fetch(`${HOTEL_API_URL}/api/editorial/hotels/${selectedHotel.hotel_id}/special-capacity`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: specialCapacity, updated_by: 'admin@firstclass.com.au' }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (response.ok && json.success) {
+        const v = json.data?.special_capacity || '';
+        setSpecialCapacity(v);
+        setSpecialCapacitySaved(v);
+        alert(v ? `Special capacity saved: ${v}` : 'Special capacity cleared');
+      } else {
+        alert(json.error || 'Could not save special capacity');
+      }
+    } catch (error) {
+      console.error('Error saving special capacity:', error);
+      alert('Could not save special capacity');
     }
   };
 
@@ -486,6 +515,32 @@ export default function HotelEditorialPage() {
               {/* Overrides Tab */}
               {activeTab === 'overrides' && (
                 <div className="space-y-6">
+                  <div className="rounded-lg border p-4">
+                    <label className="block text-sm font-medium mb-1">Special capacity</label>
+                    <p className="text-xs text-gray-500 mb-2">
+                      Only for properties whose smallest unit is large, e.g. &quot;Two bedrooms+&quot;. Shows as a small tag on the
+                      search card, collection card and hotel page. Leave blank for normal hotels.
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={specialCapacity}
+                        maxLength={100}
+                        onChange={(e) => setSpecialCapacity(e.target.value)}
+                        placeholder="e.g. Two bedrooms+"
+                        className="flex-1 px-4 py-2 border rounded-lg"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSaveSpecialCapacity}
+                        disabled={specialCapacity.trim() === specialCapacitySaved}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+
                   <div>
                     <label className="block text-sm font-medium mb-2">Title Override</label>
                     <input
