@@ -20,6 +20,64 @@ const HOTEL_API = process.env.NEXT_PUBLIC_HOTEL_API_URL
 interface CollectionListRow {
   id: number; slug: string; title: string; subtitle?: string;
   status: 'draft' | 'published'; hotelCount: number; updatedAt?: string;
+  type?: string; searchDestination?: string | null; tags?: string[]; previousSlugs?: string[];
+  /** Pinned hotel names, and their cities/countries, so the search finds a
+   *  collection by what is in it ("ritz", "japan"), not only by its title. */
+  hotelNames?: string[]; places?: string[]; ruleText?: string | null;
+}
+/** One competitor price Tina checked for a hotel in this collection. */
+interface CompetitorRate {
+  name?: string | null; rate?: number | string | null; currency?: string | null;
+  includes?: string | null; checkedOn?: string | null;
+  audApprox?: number | null;   // worked out by the API, read-only
+}
+interface CompetitorCheck {
+  basis?: string | null;       // "7 nights · Beach Villa · Dec 2026"
+  competitors?: CompetitorRate[];
+  ourOffer?: { fromUsd?: number | string | null; inclusions?: string | null; audApprox?: number | null };
+  saving?: { aud: number; vs?: string | null } | null;
+  fx?: { usdAud?: number | null; asAt?: string | null };
+}
+/** Console-only facts per hotel, from GET /api/collections/:id/admin. */
+interface HotelInsight {
+  markup: { min: number; max: number; label: string; standard: boolean };
+  specials: { source: 'supplier' | 'hotel'; name: string | null; discountPct: number | null; bookBy?: string | null }[];
+  rank: number;
+}
+
+/** Tina's fixed rank steps. Higher comes first; applies wherever the hotel
+ *  appears publicly, not just this collection (it lives on the hotel). */
+const RANK_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: 'Automatic' },
+  { value: 1, label: '1 · Above automatic' },
+  { value: 3, label: '3 · Secondary' },
+  { value: 5, label: '5 · Featured first' },
+];
+
+/** Same rules the hotel-api applies, so what she sees is what gets saved. */
+function slugify(v: string) {
+  return v.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120);
+}
+
+/** Sister properties that should always sit next to each other in a list
+ *  (Tina: Joali and Joali Being). Each pattern pulls its later matches up to
+ *  sit directly under the first one, within the same section and visibility. */
+const SISTER_GROUPS: RegExp[] = [/\bjoali\b/i];
+function keepSistersTogether<T extends { name?: string; sectionId?: number | null; hidden?: boolean }>(hotels: T[]): T[] {
+  let out = [...hotels];
+  for (const re of SISTER_GROUPS) {
+    const first = out.findIndex((h) => re.test(h.name || ''));
+    if (first < 0) continue;
+    const anchor = out[first];
+    const same = (h: T) => re.test(h.name || '') && (h.sectionId ?? null) === (anchor.sectionId ?? null) && !!h.hidden === !!anchor.hidden;
+    const members = out.filter((h, i) => i > first && same(h));
+    if (!members.length) continue;
+    const rest = out.filter((h) => !members.includes(h));
+    const at = rest.indexOf(anchor) + 1;
+    out = [...rest.slice(0, at), ...members, ...rest.slice(at)];
+  }
+  return out;
 }
 /** One priced package on a hotel card. Every field is rendered by
  *  CollectionView's PackageBlock — nothing stored that the page ignores. */
@@ -66,6 +124,9 @@ interface CollectionHotel {
   packages?: CollectionPackage[];
   marketing?: CollectionMarketing | null;
   offerSelection?: OfferSelection | null;
+  competitor?: CompetitorCheck | null;
+  /** Set when the rank was changed here; saved to the hotel on Save. */
+  rankDirty?: boolean;
 }
 interface CollectionFull {
   id: number; slug: string; title: string; subtitle?: string; heroImage?: string;
@@ -75,6 +136,7 @@ interface CollectionFull {
   travelGuideLabel?: string; travelGuideUrl?: string;
   status: 'draft' | 'published'; hotels: CollectionHotel[];
   sections?: CollectionSection[];
+  tags?: string[];
 }
 /** A named group on the page, e.g. "Turkish Airlines free stopover hotels". */
 interface CollectionSection {
@@ -227,8 +289,8 @@ export default function CollectionsPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [q, setQ] = useState('');
-
-
+  // The slug as loaded, so a rename can be spotted and warned about.
+  const [originalSlug, setOriginalSlug] = useState<string | null>(null);
 
   // The editor is a mode of this page, not its own route, so the URL never
   // moved off /console/collections -- you could not link anyone to the
@@ -264,8 +326,9 @@ export default function CollectionsPage() {
       const r = await fetch(`${HOTEL_API}/api/collections/${encodeURIComponent(slug)}?includeHidden=true`, { cache: 'no-store' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      setEditing({ ...BLANK, ...d, intro: d.intro || [], hotels: d.hotels || [] });
-      syncUrl(slug);
+      setEditing({ ...BLANK, ...d, intro: d.intro || [], hotels: keepSistersTogether(d.hotels || []), tags: d.tags || [] });
+      setOriginalSlug(d.slug || slug);
+      syncUrl(d.slug || slug);
     } catch (e) {
       setError((e as Error).message);
       syncUrl(null);   // a bad ?slug= must not leave the URL claiming otherwise
@@ -300,7 +363,14 @@ export default function CollectionsPage() {
         campaignAdvertiseTo: editing.campaignAdvertiseTo || null,
         travelGuideLabel: editing.travelGuideLabel || null,
         travelGuideUrl: editing.travelGuideUrl || null,
+        tags: editing.tags || [],
       };
+      const renamed = !!editing.id && !!originalSlug && slugify(editing.slug) !== originalSlug;
+      if (renamed && !confirm(
+        `Change the web address from\n  /${originalSlug}\nto\n  /${slugify(editing.slug)} ?\n\n`
+        + 'The old address keeps working and sends people to the new one, but update any links you control.')) {
+        setBusy(false); return;
+      }
       let id = editing.id;
       if (id) {
         const r = await fetch(`/api/admin/collections/${id}`, {
@@ -344,7 +414,18 @@ export default function CollectionsPage() {
         body: JSON.stringify({ hotels: editing.hotels }),
       });
       const hd = await hr.json(); if (!hr.ok) throw new Error(hd.error || `HTTP ${hr.status}`);
-      setNotice(`Saved "${editing.title}" (${editing.hotels.length} hotels).`);
+      // Ranks live on the hotel (hotel_control), not the collection, so each
+      // changed one is saved to the hotel. Partial save: only recommend_rank.
+      const rankChanges = editing.hotels.filter((h) => h.rankDirty && h.hotelId);
+      for (const h of rankChanges) {
+        const r = await fetch(`/api/admin/control?hotelId=${h.hotelId}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ recommend_rank: Number(h.marketing?.recommend_rank || 0), updated_by: 'console:collections' }),
+        });
+        if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(`Rank for ${h.name}: ${d.error || `HTTP ${r.status}`}`); }
+      }
+      setNotice(`Saved "${editing.title}" (${editing.hotels.length} hotels${rankChanges.length ? `, ${rankChanges.length} rank change${rankChanges.length === 1 ? '' : 's'}` : ''}).`
+        + (renamed ? ` New address: /${slugify(editing.slug)} — the old one still works.` : ''));
       setEditing(null);
       syncUrl(null);
       await loadList();
@@ -363,13 +444,26 @@ export default function CollectionsPage() {
     finally { setBusy(false); }
   }
 
+  // Every word must match somewhere — title, slug (old ones too), tags,
+  // destination, the hotels in it, or where those hotels are. So "japan ski"
+  // or "ritz singapore" narrows down, and "ritz" finds every collection with
+  // a Ritz-Carlton in it.
   const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return list;
-    return list.filter(c =>
-      c.title.toLowerCase().includes(needle) || c.slug.toLowerCase().includes(needle)
-    );
+    const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return list;
+    return list.filter((c) => {
+      const hay = [
+        c.title, c.subtitle, c.slug, ...(c.previousSlugs || []), ...(c.tags || []),
+        c.searchDestination, ...(c.hotelNames || []), ...(c.places || []), c.ruleText,
+      ].filter(Boolean).join(' ').toLowerCase().replace(/-/g, ' ');
+      return words.every((w) => hay.includes(w));
+    });
   }, [list, q]);
+  const hotelHits = (c: CollectionListRow) => {
+    const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return [];
+    return (c.hotelNames || []).filter((n) => words.some((w) => n.toLowerCase().includes(w))).slice(0, 3);
+  };
 
   return (
     <>
@@ -400,8 +494,8 @@ export default function CollectionsPage() {
                 className="c-input"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Filter collections by name or slug…"
-                style={{ maxWidth: 340 }}
+                placeholder="Search by title, hotel, brand, destination or tag…"
+                style={{ maxWidth: 380 }}
               />
               <span style={{ fontSize: 12, color: 'var(--c-fg-soft)' }}>
                 {q.trim() ? `${filtered.length} of ${list.length}` : `${list.length} collection${list.length === 1 ? '' : 's'}`}
@@ -419,7 +513,19 @@ export default function CollectionsPage() {
                 <tbody>
                   {filtered.map((c) => (
                     <tr key={c.id}>
-                      <td>{c.title}</td>
+                      <td>
+                        {c.title}
+                        {!!(c.tags || []).length && (
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
+                            {(c.tags || []).map((t) => <span key={t} className="c-pill" style={{ fontSize: 10.5 }}>{t}</span>)}
+                          </div>
+                        )}
+                        {hotelHits(c).length > 0 && (
+                          <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', marginTop: 2 }}>
+                            Has: {hotelHits(c).join(' · ')}
+                          </div>
+                        )}
+                      </td>
                       <td className="c-mono">{c.slug}</td>
                       <td>{c.hotelCount}</td>
                       <td><span className={`c-pill ${c.status === 'published' ? 'c-pill-success' : 'c-pill-warn'}`}>{c.status}</span></td>
@@ -447,19 +553,39 @@ export default function CollectionsPage() {
       {editing && (
         <CollectionEditor
           value={editing} onChange={setEditing} onSave={saveAll} onCancel={closeEditor} busy={busy}
+          originalSlug={originalSlug}
         />
       )}
     </>
   );
 }
 
-function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
+function CollectionEditor({ value, onChange, onSave, onCancel, busy, originalSlug }: {
   value: CollectionFull;
   onChange: (v: CollectionFull) => void;
   onSave: () => void;
   onCancel: () => void;
   busy: boolean;
+  originalSlug: string | null;
 }) {
+  // Markup / specials / rank per hotel. Read-only facts from the API; the
+  // rank is editable on the row and saved to the hotel on Save.
+  const [insights, setInsights] = useState<Record<string, HotelInsight>>({});
+  useEffect(() => {
+    if (!value.id) return;
+    let alive = true;
+    fetch(`/api/admin/collections/${value.id}/admin`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((d) => { if (alive && d && d.hotels) setInsights(d.hotels); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [value.id]);
+  const rankOf = (h: CollectionHotel): number => {
+    if (h.rankDirty) return Number(h.marketing?.recommend_rank || 0);
+    const fromApi = h.hotelId ? insights[h.hotelId]?.rank : undefined;
+    return Number(fromApi ?? h.marketing?.recommend_rank ?? 0) || 0;
+  };
+  const [tagText, setTagText] = useState((value.tags || []).join(', '));
   const [reports, setReports] = useState<OfferReportMeta[]>([]);
   const [reportId, setReportId] = useState('');
   const [applyingReport, setApplyingReport] = useState(false);
@@ -683,14 +809,32 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
 
       {metaOpen && (
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Field label="Slug (URL)"><input className="c-input" value={value.slug}
-          onChange={(e) => set({ slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') })}
-          placeholder="maldives-finest-luxury-resorts" disabled={!!value.id} /></Field>
+        <Field label="Slug (web address) — type words, e.g. “luxury hotel collections in singapore”">
+          <input className="c-input" value={value.slug}
+            onChange={(e) => set({ slug: e.target.value.toLowerCase() })}
+            onBlur={() => set({ slug: slugify(value.slug) })}
+            placeholder="maldives-finest-luxury-resorts" />
+          {value.id && originalSlug && slugify(value.slug) !== originalSlug ? (
+            <span style={{ fontSize: 11.5, color: 'var(--c-warn)' }}>
+              New address on Save: /luxury-hotels/collections/{slugify(value.slug) || '…'}. The old address
+              (/{originalSlug}) keeps working, but update links you control.
+            </span>
+          ) : null}
+        </Field>
         <Field label="Status">
           <select className="c-select" value={value.status} onChange={(e) => set({ status: e.target.value as 'draft' | 'published' })}>
             <option value="draft">Draft (hidden)</option>
             <option value="published">Published (live)</option>
           </select>
+        </Field>
+        <Field label="Tags — comma separated: destination, brand, interest (e.g. japan, marriott, ski)">
+          <input className="c-input" value={tagText}
+            onChange={(e) => setTagText(e.target.value)}
+            onBlur={() => {
+              const tags = [...new Set(tagText.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean))];
+              setTagText(tags.join(', ')); set({ tags });
+            }}
+            placeholder="japan, ski, luxury" />
         </Field>
         <Field label="Title"><input className="c-input" value={value.title} onChange={(e) => set({ title: e.target.value })} placeholder="The Maldives, Reimagined" /></Field>
         <Field label="Subtitle"><input className="c-input" value={value.subtitle || ''} onChange={(e) => set({ subtitle: e.target.value })} /></Field>
@@ -789,7 +933,7 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
           <div>
             <div className="c-label">Hotels ({value.hotels.length})</div>
             <div style={{ color: 'var(--c-fg-muted)', fontSize: 12, marginTop: 2 }}>
-              {visibleCount} visible · {hiddenCount} hidden/check later. Run live offers to suggest an order, then override with ↑/↓ before saving.
+              {visibleCount} visible · {hiddenCount} hidden/check later. Page order: rank (5 → 3 → 1) first, then hotels with a current special, then highest markup, then your ↑/↓ order.
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -898,6 +1042,7 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
                       : <span className="c-pill c-pill-warn" style={{ flex: 'none' }}>enquiry-only</span>}
                     {h.hidden ? <span className="c-pill c-pill-warn" style={{ flex: 'none' }}>hidden</span> : null}
                   </div>
+                  <HotelFacts insight={h.hotelId ? insights[h.hotelId] : undefined} />
                   <div style={{ fontSize: 12, color: 'var(--c-fg-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {[h.atoll, h.offer].filter(Boolean).join(' · ') || 'No location or offer text yet'}
                   </div>
@@ -907,6 +1052,18 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
                   </div>
                 </div>
                 <div style={{ whiteSpace: 'nowrap', flex: 'none' }} onClick={(e) => e.stopPropagation()}>
+                  {h.hotelId ? (
+                    <select className="c-select" style={{ width: 'auto', marginRight: 6 }}
+                      title="Manual rank — higher comes first and overrides specials and markup. Applies wherever this hotel appears, not just here. Saved with Save."
+                      value={rankOf(h)}
+                      onChange={(e) => setHotel(i, {
+                        rankDirty: true,
+                        marketing: { ...(h.marketing || {}), recommend_rank: Number(e.target.value) },
+                      })}>
+                      {RANK_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      {![0, 1, 3, 5].includes(rankOf(h)) && <option value={rankOf(h)}>{rankOf(h)} (old value)</option>}
+                    </select>
+                  ) : null}
                   <button className="c-btn" title="Move up" onClick={() => move(i, -1)} disabled={i === 0}><ArrowUp size={13} /></button>{' '}
                   <button className="c-btn" title="Move down" onClick={() => move(i, 1)} disabled={i === value.hotels.length - 1}><ArrowDown size={13} /></button>{' '}
                   <button className="c-btn c-btn-danger" title="Remove from collection" onClick={() => removeHotel(i)}><Trash2 size={13} /></button>
@@ -976,6 +1133,8 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy }: {
                     onChange={(e) => setHotel(i, { images: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} />
                 </Field>
               </div>
+
+              <CompetitorEditor value={h.competitor || null} onChange={(c) => setHotel(i, { competitor: c })} />
 
               {/* Packages — the priced offers the card renders. Free text on
                   purpose: these are marketing lines ("Stay 7 nights, pay for 5",
@@ -1433,6 +1592,107 @@ function IntroEditor({ intro, onChange }: { intro: string[]; onChange: (v: strin
         onChange(next.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean));
       }}
     />
+  );
+}
+
+/** Markup (only when not the standard 10%) and current specials, one line
+ *  under the hotel name. Console-only — markup never reaches the public page. */
+function HotelFacts({ insight }: { insight?: HotelInsight }) {
+  if (!insight) return null;
+  const { markup, specials } = insight;
+  const bits: React.ReactNode[] = [];
+  if (!markup.standard) {
+    bits.push(<span key="m" className="c-pill" title="Markup from Pricing Rules. A range means rate plans carry different markups.">Markup {markup.label}</span>);
+  }
+  specials.slice(0, 3).forEach((s, k) => {
+    const label = [s.name, s.discountPct ? `−${s.discountPct}%` : null].filter(Boolean).join(' ') || 'Discounted rate';
+    bits.push(
+      <span key={`s${k}`} className="c-pill c-pill-success"
+        title={s.source === 'hotel' ? `Promotion on the hotel${s.bookBy ? `, book by ${s.bookBy}` : ''}` : 'Supplier offer on current rates'}>
+        Special: {label}
+      </span>
+    );
+  });
+  if (!bits.length) return null;
+  return <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>{bits}</div>;
+}
+
+const COMPETITOR_CURRENCIES = ['AUD', 'USD', 'EUR', 'GBP', 'SGD', 'NZD', 'JPY', 'AED', 'THB', 'HKD'];
+const audText = (n?: number | null) => (n == null ? '' : `approx AU$${Math.round(n).toLocaleString('en-AU')}`);
+
+/** Competitor rate check for one hotel in this collection. What Tina types is
+ *  stored; the AUD figures and the saving are worked out by the API when the
+ *  collection loads (at today's rate), so they show after Save. */
+function CompetitorEditor({ value, onChange }: { value: CompetitorCheck | null; onChange: (v: CompetitorCheck) => void }) {
+  const v: CompetitorCheck = value || {};
+  const list = v.competitors || [];
+  const setRow = (k: number, patch: Partial<CompetitorRate>) =>
+    onChange({ ...v, saving: null, competitors: list.map((c, j) => (j === k ? { ...c, ...patch, audApprox: null } : c)) });
+  const today = new Date().toISOString().slice(0, 10);
+  return (
+    <div style={{ borderTop: '1px solid var(--c-line)', paddingTop: 10, display: 'grid', gap: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span className="c-label">Competitor rates ({list.length})</span>
+        <button className="c-btn" onClick={() => onChange({ ...v, competitors: [...list, { currency: 'AUD', checkedOn: today }] })}>+ Add competitor</button>
+      </div>
+      <Field label="The stay every price below is for (same dates, nights, room)">
+        <input className="c-input" value={v.basis || ''} placeholder="7 nights · Beach Villa · Dec 2026"
+          onChange={(e) => onChange({ ...v, basis: e.target.value })} />
+      </Field>
+      {list.map((c, k) => (
+        <div key={k} style={{ display: 'grid', gridTemplateColumns: '1.3fr 0.9fr 0.7fr 1.6fr 0.9fr auto', gap: 6, alignItems: 'end' }}>
+          <Field label="Competitor">
+            <input className="c-input" list="competitor-names" value={c.name || ''} placeholder="Hotel direct"
+              onChange={(e) => setRow(k, { name: e.target.value })} />
+          </Field>
+          <Field label="Their rate">
+            <input className="c-input" inputMode="decimal" value={c.rate ?? ''} placeholder="9832"
+              onChange={(e) => setRow(k, { rate: e.target.value })} />
+          </Field>
+          <Field label="Currency">
+            <select className="c-select" value={c.currency || 'AUD'} onChange={(e) => setRow(k, { currency: e.target.value })}>
+              {COMPETITOR_CURRENCIES.map((x) => <option key={x} value={x}>{x}</option>)}
+            </select>
+          </Field>
+          <Field label="What it includes">
+            <input className="c-input" value={c.includes || ''} placeholder="Breakfast, no transfers"
+              onChange={(e) => setRow(k, { includes: e.target.value })} />
+          </Field>
+          <Field label="Checked on">
+            <input className="c-input" type="date" value={c.checkedOn || ''} onChange={(e) => setRow(k, { checkedOn: e.target.value })} />
+          </Field>
+          <button className="c-btn c-btn-danger" title="Remove"
+            onClick={() => onChange({ ...v, saving: null, competitors: list.filter((_, j) => j !== k) })}><Trash2 size={12} /></button>
+          {c.currency && c.currency !== 'AUD' && c.audApprox != null && (
+            <span style={{ gridColumn: '2 / 4', fontSize: 11, color: 'var(--c-fg-muted)' }}>{audText(c.audApprox)}</span>
+          )}
+        </div>
+      ))}
+      <datalist id="competitor-names">
+        <option value="Hotel direct" /><option value="Luxury Escapes" /><option value="Expedia" /><option value="Booking.com" />
+      </datalist>
+      <div style={{ display: 'grid', gridTemplateColumns: '0.8fr 2fr', gap: 6 }}>
+        <Field label="Our offer — from (USD)">
+          <input className="c-input" inputMode="decimal" value={v.ourOffer?.fromUsd ?? ''} placeholder="5500"
+            onChange={(e) => onChange({ ...v, saving: null, ourOffer: { ...(v.ourOffer || {}), fromUsd: e.target.value, audApprox: null } })} />
+          {v.ourOffer?.audApprox != null && <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>{audText(v.ourOffer.audApprox)}</span>}
+        </Field>
+        <Field label="Our inclusions">
+          <input className="c-input" value={v.ourOffer?.inclusions || ''} placeholder="Half board, seaplane transfers, US$100 spa credit"
+            onChange={(e) => onChange({ ...v, ourOffer: { ...(v.ourOffer || {}), inclusions: e.target.value } })} />
+        </Field>
+      </div>
+      {v.saving ? (
+        <div style={{ fontSize: 12, color: v.saving.aud >= 0 ? 'var(--c-success)' : 'var(--c-danger)' }}>
+          {v.saving.aud >= 0
+            ? `Saving approx AU$${v.saving.aud.toLocaleString('en-AU')} vs ${v.saving.vs || 'the cheapest competitor'}`
+            : `We are approx AU$${Math.abs(v.saving.aud).toLocaleString('en-AU')} dearer than ${v.saving.vs || 'the cheapest competitor'}`}
+          {v.fx?.usdAud ? ` · US$1 = AU$${v.fx.usdAud}` : ''}
+        </div>
+      ) : (list.length > 0 || v.ourOffer?.fromUsd) ? (
+        <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>The saving is worked out when you Save — reopen the collection to see it (needs our offer and at least one competitor rate).</div>
+      ) : null}
+    </div>
   );
 }
 
