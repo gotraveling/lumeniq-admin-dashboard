@@ -2520,7 +2520,7 @@ function cancellationCopy(r: CancellableRate) {
   const ourIso = r.cancellationDeadlineUtc || null;
   const buffered = !!(supplierIso && ourIso && supplierIso !== ourIso);
   const bufferNote = buffered
-    ? `our cut-off ${fmtCancelDate(ourIso)}${r.cancellationBufferDays ? ` (${r.cancellationBufferDays}d safety margin)` : ''}`
+    ? `our cut-off ${fmtCancelDate(ourIso)}${r.cancellationBufferDays ? ` (${r.cancellationBufferDays} working days before Hummingbird)` : ''}`
     : null;
 
   if (r.refundable == null) {
@@ -2637,6 +2637,13 @@ type ManageForm = {
   transfer_currency: string;
   transfer_duration: string;
   transfer_notes: string;
+  // Public-site rules, stored in hotel_control.attributes (the engine reads
+  // them for accountType b2c only; console searches are unaffected).
+  // One transfer type per line, Hummingbird name or code.
+  b2c_hidden_transfers: string;
+  b2c_show_ratehawk: boolean;
+  // The rest of attributes, carried so a save never drops other keys.
+  attributes_rest: Record<string, any>;
   airport_code: string;
   airport_terminal: string;
   proximity_tier: string;
@@ -2743,6 +2750,14 @@ function controlToForm(c: HotelControl | null): ManageForm {
     transfer_currency: str(c?.transfer_currency),
     transfer_duration: str(c?.transfer_duration),
     transfer_notes: str(c?.transfer_notes),
+    ...(() => {
+      const a: Record<string, any> = (c?.attributes && typeof c.attributes === 'object') ? { ...c.attributes } : {};
+      const hidden = Array.isArray(a.b2c_hidden_transfers) ? a.b2c_hidden_transfers.map((x: any) => String(x)).join('\n') : '';
+      const showRh = a.b2c_show_ratehawk === true;
+      delete a.b2c_hidden_transfers;
+      delete a.b2c_show_ratehawk;
+      return { b2c_hidden_transfers: hidden, b2c_show_ratehawk: showRh, attributes_rest: a };
+    })(),
     airport_code: str(c?.airport_code).toUpperCase(),
     airport_terminal: str(c?.airport_terminal),
     proximity_tier: str(c?.proximity_tier),
@@ -3167,6 +3182,14 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
       transfer_currency: txt(f.transfer_currency),
       transfer_duration: txt(f.transfer_duration),
       transfer_notes: txt(f.transfer_notes),
+      attributes: (() => {
+        const hidden = Array.from(new Set(f.b2c_hidden_transfers.split('\n').map(x => x.trim()).filter(Boolean)));
+        return {
+          ...f.attributes_rest,
+          ...(hidden.length ? { b2c_hidden_transfers: hidden } : {}),
+          ...(f.b2c_show_ratehawk ? { b2c_show_ratehawk: true } : {}),
+        };
+      })(),
       airport_code: f.airport_code.trim() ? f.airport_code.trim().toUpperCase() : null,
       airport_terminal: txt(f.airport_terminal),
       proximity_tier: txt(f.proximity_tier) as ProximityTier | null,
@@ -3492,6 +3515,19 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
                       Add the reason in <strong>Internal notes</strong> below (e.g. “RateHawk excludes Harbour meals — book via Expedia”). It shows on the result card and on the “No&nbsp;RateHawk” badge.
                     </div>
                   )}
+                  <label style={{ ...checkLabelStyle, marginTop: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={form.b2c_show_ratehawk}
+                      onChange={(e) => set('b2c_show_ratehawk', e.target.checked)}
+                    />
+                    Show RateHawk rates on the public site for this hotel
+                  </label>
+                  <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', marginTop: 4 }}>
+                    The public site normally hides RateHawk when Hummingbird has rates (Settings → Suppliers).
+                    Tick this when RateHawk is the better deal here; both then show and the cheaper one leads.
+                    The console always shows both.
+                  </div>
                 </div>
               </ManageGroup>
 
@@ -3604,6 +3640,15 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
                 </div>
                 <Field label="Transfer notes" style={{ marginTop: 10 }}>
                   <textarea className="c-input" rows={2} value={form.transfer_notes} onChange={(e) => set('transfer_notes', e.target.value)} style={{ resize: 'vertical' }} />
+                </Field>
+                <Field label="Hide these transfers on the public site" style={{ marginTop: 10 }}>
+                  <textarea className="c-input" rows={2} value={form.b2c_hidden_transfers}
+                    onChange={(e) => set('b2c_hidden_transfers', e.target.value)}
+                    placeholder="e.g. Domestic Flight + Speedboat" style={{ resize: 'vertical' }} />
+                  <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', marginTop: 4 }}>
+                    One per line, written as it shows on the rate (the word “Transfer(s)” at the end is optional).
+                    Those rates disappear from the public site; the console still shows them.
+                  </div>
                 </Field>
               </ManageGroup>
 
