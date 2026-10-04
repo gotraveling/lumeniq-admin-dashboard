@@ -151,6 +151,11 @@ type AdminRate = {
   // Frontend groups by this so view/bedding/floor variations become
   // separate cards instead of getting flattened.
   roomGroupName?: string | null;
+  /** RateHawk room code (12 fields). Same room → same code on both channels. */
+  rg_ext?: Record<string, number> | null;
+  /** Display-only room name: a member rate borrows its public twin's name when
+   *  both share one room code (alignMemberRoomNames). Never sent to booking. */
+  displayRoomName?: string | null;
   ratePlan: string;
   refundable: boolean | null;
   breakfastIncluded: boolean;
@@ -1187,11 +1192,17 @@ export default function ConsoleSearchPage() {
       const b2c: AdminRate[] = (json.data.rates || [])
         .map((r: AdminRate) => ({ ...r, _channel: 'b2c' as const }))
         .filter((r: AdminRate) => {
+          // Only RateHawk has a public channel. Hummingbird quotes one price,
+          // so its rows here are copies of the ones already listed.
+          if (!hasChannelSplit(r.supplier)) return false;
           if (b2cSeen.has(r.rateKey)) return false;
           b2cSeen.add(r.rateKey);
           return true;
         });
-      setRates(prev => [...prev.filter(r => r._channel !== 'b2c'), ...b2c]);
+      setRates(prev => {
+        const member = prev.filter(r => r._channel !== 'b2c');
+        return [...alignMemberRoomNames(member, b2c), ...b2c];
+      });
       setB2cLoaded(true);
       if (b2c.length === 0) setRatesErr('No public non-member rates returned for this hotel.');
     } catch (e: any) {
@@ -2324,8 +2335,53 @@ function normName(s: string | null | undefined): string {
  * and must keep the rooms apart.
  */
 const TRANSFER_QUALIFIER = /\s*\(([^()]*transfers?[^()]*)\)/gi;
-function roomIdentity(r: { roomGroupName?: string | null; roomTypeName?: string | null }): string {
-  return normName((r.roomGroupName || r.roomTypeName || '').replace(TRANSFER_QUALIFIER, ''));
+function roomIdentity(r: { displayRoomName?: string | null; roomGroupName?: string | null; roomTypeName?: string | null }): string {
+  return normName((r.displayRoomName || r.roomGroupName || r.roomTypeName || '').replace(TRANSFER_QUALIFIER, ''));
+}
+
+/**
+ * RateHawk's room code: all 12 rg_ext fields. The same physical room carries
+ * the same code on the member and public channels, so it is the firm way to
+ * pair the two. null when the rate has no rg_ext (Hummingbird).
+ */
+const RG_FIELDS = ['class', 'quality', 'sex', 'bathroom', 'bedding', 'family', 'capacity', 'club', 'bedrooms', 'balcony', 'view', 'floor'];
+function rgSigOf(r: AdminRate): string | null {
+  const g = r.rg_ext;
+  if (!g || typeof g !== 'object' || Object.keys(g).length === 0) return null;
+  return RG_FIELDS.map(f => Number(g[f]) || 0).join('_');
+}
+
+/**
+ * Tina: member options should read with the same room name as the public
+ * ones. When a room code maps to exactly ONE public name and exactly ONE
+ * member name and they differ, the member rows show the public name. Any
+ * ambiguity (a code shared by several names on either side) leaves the names
+ * alone — no guessing. Display only: roomGroupName/roomTypeName are what the
+ * booking records, so they are never touched.
+ */
+function alignMemberRoomNames(member: AdminRate[], pub: AdminRate[]): AdminRate[] {
+  const nameOf = (r: AdminRate) => r.roomGroupName || r.roomTypeName || '';
+  const namesByCode = (rs: AdminRate[]) => {
+    const m = new Map<string, Set<string>>();
+    for (const r of rs) {
+      if (!hasChannelSplit(r.supplier)) continue;
+      const code = rgSigOf(r);
+      if (!code) continue;
+      if (!m.has(code)) m.set(code, new Set());
+      m.get(code)!.add(nameOf(r));
+    }
+    return m;
+  };
+  const pubNames = namesByCode(pub);
+  const memNames = namesByCode(member);
+  return member.map(r => {
+    const code = hasChannelSplit(r.supplier) ? rgSigOf(r) : null;
+    const p = code ? pubNames.get(code) : undefined;
+    const mn = code ? memNames.get(code) : undefined;
+    const publicName = p && mn && p.size === 1 && mn.size === 1 ? [...p][0] : null;
+    const display = publicName && publicName !== nameOf(r) ? publicName : null;
+    return (r.displayRoomName || null) === display ? r : { ...r, displayRoomName: display };
+  });
 }
 
 /**
@@ -4932,15 +4988,15 @@ function RoomGroupedRates({
       // rates for the same physical room into one group), else fall back to
       // the existing per-variant grouping.
       const lk = roomMap?.get(`${(r.supplier || '').toLowerCase()}|${normName(r.roomTypeName)}`);
-      const k = lk?.key || r.roomGroupName || r.roomTypeName || r.rateKey || 'Room';
-      const label = lk?.label || r.roomGroupName || r.roomTypeName || r.rateKey || 'Room';
+      const k = lk?.key || r.displayRoomName || r.roomGroupName || r.roomTypeName || r.rateKey || 'Room';
+      const label = lk?.label || r.displayRoomName || r.roomGroupName || r.roomTypeName || r.rateKey || 'Room';
       if (!m.has(k)) m.set(k, { list: [], label });
       m.get(k)!.list.push(r);
     }
     return Array.from(m.entries()).map(([, { list, label: name }]) => {
       // sellBySig: for each plan, the Member + Non-Member sell totals so a row
       // can show "−$X vs non-member" inline. Built from the FULL list (both channels)
-      // BEFORE channel dominance drops the redundant row below.
+      // BEFORE the member/public check below hides the redundant rows.
       const sellBySig = new Map<string, { cug?: number; b2c?: number }>();
       for (const r of list) {
         const sig = channelCmpKey(r);
@@ -4951,29 +5007,31 @@ function RoomGroupedRates({
         sellBySig.set(sig, cur);
       }
 
-      // Channel dominance (Tina): per supplier+plan, when BOTH a Member (cug) and
-      // a Non-Member (b2c) rate exist, keep only the cheaper channel — never show
-      // a Member rate when the public/"All" price is equal or lower (tie → public,
-      // as the member then has no advantage). Same-channel rows are untouched, so
-      // the default (Member-only) view is unchanged.
-      const chanGroups = new Map<string, AdminRate[]>();
+      // Member vs public (Tina): "don't show members rate if it's more
+      // expensive than normal rates". A Member row is hidden when its public
+      // twin — same supplier, same room (room code AND the rate's own room
+      // name, transfer notes ignored), same meal, same refundable/non-
+      // refundable — costs the same or less. The room code alone is too coarse:
+      // at Sheraton JBR one code covers a Premium Suite, a club-lounge suite and
+      // a connecting family room, priced 2,984 to 6,110. When the Member
+      // rate is cheaper BOTH stay, so the saving is visible side by side.
+      // Public rows are never hidden here, and only RateHawk has two channels,
+      // so Hummingbird rows are untouched. Default (Member-only) view: no-op.
+      const twinKey = (r: AdminRate) => `${(r.supplier || '').toLowerCase()}|${rgSigOf(r) ?? 'norg'}|${normName((r.roomTypeName || '').replace(TRANSFER_QUALIFIER, ''))}|${planSigOf(r)}`;
+      const cheapestPublicTwin = new Map<string, number>();
       for (const r of list) {
-        const key = `${r.supplier || ''}|${planSigOf(r)}`;
-        if (!chanGroups.has(key)) chanGroups.set(key, []);
-        chanGroups.get(key)!.push(r);
+        if (r._channel !== 'b2c' || !hasChannelSplit(r.supplier)) continue;
+        const sell = admSellTotal(r);
+        if (!(sell > 0)) continue;
+        const k = twinKey(r);
+        const cur = cheapestPublicTwin.get(k);
+        if (cur === undefined || sell < cur) cheapestPublicTwin.set(k, sell);
       }
-      const displayList: AdminRate[] = [];
-      for (const rs of chanGroups.values()) {
-        const cug = rs.filter(r => r._channel !== 'b2c');
-        const b2c = rs.filter(r => r._channel === 'b2c');
-        if (cug.length && b2c.length) {
-          const minC = Math.min(...cug.map(admSellTotal));
-          const minB = Math.min(...b2c.map(admSellTotal));
-          displayList.push(...(minB <= minC ? b2c : cug)); // tie → public
-        } else {
-          displayList.push(...rs);
-        }
-      }
+      const displayList = list.filter(r => {
+        if (r._channel === 'b2c' || !hasChannelSplit(r.supplier)) return true;
+        const pub = cheapestPublicTwin.get(twinKey(r));
+        return !(pub !== undefined && admSellTotal(r) >= pub);
+      });
 
       // Dearer-rate suppression (Tina). Two rates the consultant should never
       // have to see, both scoped to THIS room group and THE SAME meal plan so a
@@ -4984,11 +5042,12 @@ function RoomGroupedRates({
       //     recommendation, and it made the Ritz-Carlton Singapore card show a
       //     non-refundable rate ~AUD 38 DEARER than the refundable one directly
       //     above it.
-      //  2. A Member rate at or above the cheapest non-member rate. Channel
-      //     dominance above already does this, but keys on refundability too
-      //     (planSigOf), so a MEMBER non-refundable was never compared against a
-      //     cheaper public refundable rate and slipped through. Here we ignore
-      //     refundability and compare on meal plan alone.
+      //  2. A Member NON-refundable rate at or above the cheapest public rate
+      //     (refundable or not) for the same supplier and meal. The twin check
+      //     above pairs like with like, so a member non-refundable was never
+      //     compared against a cheaper public refundable rate. A member
+      //     REFUNDABLE rate is never hidden behind a public non-refundable one —
+      //     free cancellation is worth paying for.
       //
       // Display-only: the API still returns every rate, and a rate is only ever
       // dropped when a strictly better same-room, same-board alternative is
@@ -5005,8 +5064,9 @@ function RoomGroupedRates({
           if (cur === undefined || sell < cur) cheapestRefundable.set(sig, sell);
         }
         if (r._channel === 'b2c') {
-          const cur = cheapestNonMember.get(sig);
-          if (cur === undefined || sell < cur) cheapestNonMember.set(sig, sell);
+          const pk = `${(r.supplier || '').toLowerCase()}|${sig}`;
+          const cur = cheapestNonMember.get(pk);
+          if (cur === undefined || sell < cur) cheapestNonMember.set(pk, sell);
         }
       }
       const kept = displayList.filter(r => {
@@ -5017,8 +5077,8 @@ function RoomGroupedRates({
           const bestRef = cheapestRefundable.get(sig);
           if (bestRef !== undefined && sell >= bestRef) return false;
         }
-        if (r._channel !== 'b2c') {
-          const bestPublic = cheapestNonMember.get(sig);
+        if (r._channel !== 'b2c' && !r.refundable && hasChannelSplit(r.supplier)) {
+          const bestPublic = cheapestNonMember.get(`${(r.supplier || '').toLowerCase()}|${sig}`);
           if (bestPublic !== undefined && sell >= bestPublic) return false;
         }
         return true;
@@ -5451,8 +5511,13 @@ function RoomGroupedRates({
                             // say anything about member advantage — badge stays
                             // "Member" rather than borrowing another room's price.
                             const b2cSell = pair?.b2c ?? b2cSellBySig?.get(sig);
-                            const isAll = r._channel === 'cug' && typeof memberSell === 'number'
-                              && typeof b2cSell === 'number' && Math.round(memberSell) === Math.round(b2cSell);
+                            // A public row whose member twin costs the same reads
+                            // "All" too: that member row is hidden as redundant,
+                            // and this is the price everyone gets.
+                            const cugSell = pair?.cug;
+                            const isAll = r._channel === 'cug'
+                              ? typeof memberSell === 'number' && typeof b2cSell === 'number' && Math.round(memberSell) === Math.round(b2cSell)
+                              : typeof memberSell === 'number' && typeof cugSell === 'number' && Math.round(memberSell) === Math.round(cugSell);
                             return (
                               <span
                                 style={channelBadgeStyle(isAll ? 'all' : r._channel!)}
@@ -5789,7 +5854,7 @@ function RoomGroupedRates({
                               // Compare hint: on a Member row, show how much
                               // cheaper (or dearer) it is than its Non-Member twin.
                               if (!comparing || r._channel !== 'cug') return null;
-                              const pair = g.sellBySig.get(planSigOf(r));
+                              const pair = g.sellBySig.get(channelCmpKey(r));
                               const mine = r.pricing.sell?.totalAmount;
                               if (!pair || pair.b2c === undefined || typeof mine !== 'number') return null;
                               const diff = pair.b2c - mine;
