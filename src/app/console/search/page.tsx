@@ -838,7 +838,22 @@ export default function ConsoleSearchPage() {
         ? results.filter(r => !r.available && transientReasons.has(r.reason)).map(r => Number(r.hotelId))
         : [];
       const retrySet = new Set(retryIds);
-      setHits(curr => curr.map(h => {
+      // Which suppliers carry each hotel, as the price check saw them. A hotel
+      // picked from the autocomplete (or opened from a link) starts with no
+      // sources, so without this the supplier filter hid it every time.
+      const suppliersById = new Map<number, string[]>();
+      for (const r of results) {
+        const s = [r.supplier, r.cheapestSupplier, ...(Array.isArray(r.quotes) ? r.quotes.map((q: any) => q?.supplier) : [])]
+          .map(x => String(x || '').trim().toLowerCase()).filter(Boolean);
+        suppliersById.set(Number(r.hotelId), s);
+      }
+      const withSources = (h: HotelHit): HotelHit => {
+        const extra = suppliersById.get(h.id) || [];
+        const have = Array.isArray(h.sources) ? h.sources.map(x => String(x).trim().toLowerCase()) : [];
+        const merged = Array.from(new Set([...have, ...extra]));
+        return merged.length === have.length ? h : { ...h, sources: merged };
+      };
+      setHits(curr => curr.map(withSources).map(h => {
         const r = byId.get(h.id);
         if (!r || !r.available) {
           // Distinguish "still resolving (will retry)" from genuinely sold out
@@ -1642,7 +1657,7 @@ export default function ConsoleSearchPage() {
     return hits.filter(h => {
       // Guard sources: a malformed/undefined sources array here would throw in
       // render and blank the whole page. Coerce to [] defensively.
-      if (filterSupplier !== 'all' && !(Array.isArray(h.sources) ? h.sources : []).includes(filterSupplier)) return false;
+      if (filterSupplier !== 'all' && !(Array.isArray(h.sources) ? h.sources : []).some(s => String(s).trim().toLowerCase() === filterSupplier)) return false;
       // Still loading prices on this hit — hide unless the user has
       // explicitly asked to see everything.
       if (!showUnavailable && h.priced === undefined) return false;
