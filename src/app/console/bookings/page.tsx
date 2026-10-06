@@ -575,6 +575,11 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
   };
 
   const handleResend = async () => {
+    // Tina clicked this thinking it mailed HER and it went to the client.
+    // The label now says who receives it, and it asks first, naming the
+    // guest address -- an email to a client cannot be taken back.
+    const to = b.guestInfo?.email || 'the guest';
+    if (!confirm(`Send the confirmation email to ${to}?\n\nThis goes to the GUEST, not to you.`)) return;
     setBusy('resend');
     try {
       const r = await fetch(`/api/bookings/${id}/resend-confirmation`, {
@@ -673,7 +678,7 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
             </button>
             {active && (
               <button className="c-btn" disabled={!!busy} onClick={handleResend} style={{ padding: '5px 11px', fontSize: 12 }}>
-                {busy === 'resend' ? 'Sending…' : 'Resend email'}
+                {busy === 'resend' ? 'Sending…' : 'Resend email to guest'}
               </button>
             )}
             {active && (
