@@ -574,6 +574,24 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
     finally { setBusy(null); }
   };
 
+  // The supplier's own voucher — the document the hotel recognises at
+  // check-in. RateHawk only; opens in a new tab so it can be printed or
+  // saved, which is what the agent portal offers.
+  const handleVoucher = async () => {
+    setBusy('voucher');
+    try {
+      const r = await fetch(`/api/bookings/${id}/voucher`);
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j?.data?.url) {
+        window.open(j.data.url, '_blank', 'noopener');
+        flash(true, 'Voucher opened in a new tab.');
+      } else {
+        flash(false, j?.message || j?.error || `Voucher unavailable (${r.status})`);
+      }
+    } catch { flash(false, 'Network error fetching the voucher'); }
+    finally { setBusy(null); }
+  };
+
   const handleResend = async () => {
     // Tina clicked this thinking it mailed HER and it went to the client.
     // The label now says who receives it, and it asks first, naming the
@@ -679,6 +697,15 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
             {active && (
               <button className="c-btn" disabled={!!busy} onClick={handleResend} style={{ padding: '5px 11px', fontSize: 12 }}>
                 {busy === 'resend' ? 'Sending…' : 'Resend email to guest'}
+              </button>
+            )}
+            {b.supplierId === 'ratehawk' && (
+              <button
+                className="c-btn" disabled={!!busy} onClick={handleVoucher}
+                title="Open RateHawk's voucher for this booking — the document the hotel recognises at check-in"
+                style={{ padding: '5px 11px', fontSize: 12 }}
+              >
+                {busy === 'voucher' ? 'Fetching…' : 'Voucher'}
               </button>
             )}
             {active && (
