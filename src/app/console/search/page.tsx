@@ -2173,6 +2173,54 @@ export default function ConsoleSearchPage() {
                 defaultNights={Number(controlMap[detailHotel.id]?.package_nights) || 5}
               />
             )}
+            {/* RateHawk inventory attributes.
+                ETG exposes "directly contracted" ONLY as an `inventory` filter
+                on the content dump endpoint — hotel/info is byte-identical for
+                a direct and a non-direct property, so this cannot be read off
+                a hotel, and absolutely cannot be read off a RATE (the rate
+                object carries no contract field at all). It is therefore a
+                HOTEL-level fact from a dated snapshot, which is why the feed
+                date is on the face of it and not buried in a tooltip. Shown
+                only when RateHawk actually carries the property — for a
+                Hummingbird-only hotel the question is meaningless and the API
+                omits the block rather than reporting false. */}
+            {(() => {
+              const inv = (detailContent as any)?.ratehawk_inventory;
+              if (!inv) return null;
+              const stamp = inv.feed_date ? String(inv.feed_date).slice(0, 10) : null;
+              const attrPill = (strong: boolean) => ({
+                fontSize: 11.5, fontWeight: 600, padding: '3px 12px', borderRadius: 999,
+                whiteSpace: 'nowrap' as const,
+                border: strong ? '1px solid var(--c-accent)' : '1px solid var(--c-line)',
+                background: strong ? 'rgba(155,123,51,0.08)' : 'var(--c-bg)',
+                color: strong ? 'var(--c-accent)' : 'var(--c-fg-soft)',
+              });
+              return (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', minWidth: 52 }}>RateHawk</span>
+                  <span
+                    style={attrPill(inv.direct)}
+                    title={inv.direct
+                      ? `In ETG's directly contracted inventory as at ${stamp || 'the last feed'}. This is a property-level flag from a dated snapshot — it does NOT mean any particular rate below is a direct-contract rate, which RateHawk's API never tells us.`
+                      : `Not in ETG's directly contracted inventory as at ${stamp || 'the last feed'}.`}
+                  >{inv.direct ? 'Direct contract' : 'Not direct'}</span>
+                  {inv.direct_fast && (
+                    <span
+                      style={attrPill(false)}
+                      title="Also in ETG's thinner direct_fast cut (chains and extranet only)"
+                    >Fast direct</span>
+                  )}
+                  {inv.chain && (
+                    <span style={attrPill(false)} title="Chain owner, per ETG's inventory feed">{inv.chain}</span>
+                  )}
+                  <span style={{ fontSize: 11, color: 'var(--c-fg-soft)' }}>
+                    {inv.etg_code}
+                    {inv.hid ? ` · hid ${inv.hid}` : ''}
+                    {stamp ? ` · feed ${stamp}` : ''}
+                  </span>
+                </div>
+              );
+            })()}
             {/* Supplier row. Always rendered, even for a single supplier —
                 a consultant quoting a Maldives villa needs to see WHOSE rates
                 these are, and that the other supplier came back empty rather
