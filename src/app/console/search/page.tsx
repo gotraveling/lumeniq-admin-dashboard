@@ -1353,7 +1353,12 @@ export default function ConsoleSearchPage() {
             expectedCurrency:    quotedTotal(chosenRate).currency,
             // Use the CHOSEN rate's own channel so prebook hits the same
             // credentials/pool the rate was quoted under (member vs b2c).
-            accountType: chosenRate._channel || 'cug'
+            accountType: chosenRate._channel || 'cug',
+            // A consultant is reading this, whichever key priced the rate.
+            // Without it the engine strips the supplier net from the response
+            // on public-channel rates, and the booking is then filed with no
+            // net and no margin.
+            audience: 'internal'
           })
         });
         const json = await r.json();
@@ -1426,6 +1431,7 @@ export default function ConsoleSearchPage() {
           expectedTotalAmount: quotedTotal(chosenRate, prebook?.newPrice, prebook?.currency).amount,
           expectedCurrency:    quotedTotal(chosenRate, prebook?.newPrice, prebook?.currency).currency,
           accountType: chosenRate._channel || 'cug',
+          audience: 'internal',
           searchParams: {
             checkIn, checkOut,
             adults: totalAdults,

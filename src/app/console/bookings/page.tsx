@@ -887,8 +887,19 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
             })()}
             {pb?.supplierNet == null && (
               <div style={{ fontSize: 11.5, color: '#92400e', background: 'rgba(245,158,11,0.10)', border: '1px solid #f59e0b', borderRadius: 6, padding: '6px 8px', marginBottom: 8 }}>
-                The supplier did not state their net on this booking, so the margin cannot be shown. Bookings made from now on record it.
+                We hold no supplier net for this booking, so the margin cannot be shown. Bookings made from now on record it.
               </div>
+            )}
+            {/* Where the net came from. Three places can supply it and each
+                one can be silent, so naming the source turns a blank margin
+                into something answerable. */}
+            {pb?.netSource && (
+              <KV k="Net taken from" v={
+                pb.netSource === 'supplier' ? 'the supplier\u2019s own booking response'
+                : pb.netSource === 'prebook' ? 'the supplier\u2019s prebook'
+                : pb.netSource === 'rate_snapshot' ? 'the rate as it was quoted'
+                : pb.netSource
+              } />
             )}
             {pb?.markupRule && <KV k="Markup rule" v={`${pb.markupRule.name}${pb.markupRule.type === 'percentage' ? ` · ${pb.markupRule.percentage}%` : pb.markupRule.fixedAmount != null ? ` · +${pb.markupRule.fixedAmount}` : ''}`} />}
             {/* Only a like-for-like comparison is a discrepancy. When the two
