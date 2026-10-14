@@ -581,11 +581,19 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
     setBusy('voucher');
     try {
       const r = await fetch(`/api/bookings/${id}/voucher`);
-      const j = await r.json().catch(() => ({}));
-      if (r.ok && j?.data?.url) {
-        window.open(j.data.url, '_blank', 'noopener');
+      // The voucher arrives as PDF bytes; a failure arrives as JSON. Read the
+      // content type rather than guessing, so a real error still reaches the
+      // consultant instead of opening a blank tab.
+      const isPdf = (r.headers.get('content-type') || '').includes('pdf');
+      if (r.ok && isPdf) {
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank', 'noopener');
+        // Give the new tab time to take the blob before revoking it.
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
         flash(true, 'Voucher opened in a new tab.');
       } else {
+        const j = await r.json().catch(() => ({}));
         flash(false, j?.message || j?.error || `Voucher unavailable (${r.status})`);
       }
     } catch { flash(false, 'Network error fetching the voucher'); }

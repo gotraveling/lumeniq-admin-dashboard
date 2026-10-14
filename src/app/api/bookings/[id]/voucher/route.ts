@@ -17,6 +17,23 @@ export async function GET(
       headers: { 'X-API-Key': API_KEY, 'X-Admin-Key': API_KEY },
       cache: 'no-store',
     });
+
+    // A voucher comes back as PDF bytes; only failures are JSON. Pass the
+    // document through untouched so the browser can preview or print it.
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      const pdf = await response.arrayBuffer();
+      return new NextResponse(pdf, {
+        status: response.status,
+        headers: {
+          'Content-Type': contentType || 'application/pdf',
+          'Content-Disposition':
+            response.headers.get('content-disposition') || `inline; filename="voucher-${bookingId}.pdf"`,
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
+
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (err) {
