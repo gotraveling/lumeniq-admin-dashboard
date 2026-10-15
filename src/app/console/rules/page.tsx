@@ -419,7 +419,17 @@ function RuleForm({
         </div>
         <div>
           <label className="c-label">Markup value {markupType === 'percentage' ? '(%)' : "(flat, in the rate's own currency)"}</label>
-          <input className="c-input" type="number" step="0.01" value={markupValue} onChange={(e) => setMarkupValue(e.target.value)} />
+          {/* Save sits beside the figure as well as at the foot of the form.
+              The markup is the one field that gets changed on its own, and
+              scrolling past the conditions to reach a button to confirm a
+              two-character edit is the slowest part of the job. */}
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input className="c-input" type="number" step="0.01" value={markupValue} onChange={(e) => setMarkupValue(e.target.value)} />
+            <button type="submit" className="c-btn c-btn-primary" disabled={saving} style={{ flexShrink: 0 }}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          {markupType === 'percentage' && <PercentFromPrices onUse={setMarkupValue} />}
         </div>
         <div>
           <label className="c-label">Priority <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>(higher wins)</span></label>
@@ -470,6 +480,62 @@ function RuleForm({
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+/* ------- Work the markup out from a price ------- */
+/**
+ * Tina sets a markup by deciding what the room should sell at, then works the
+ * percentage back out on a calculator every time. Same arithmetic, done here:
+ * type what the rate costs us and what it should sell at, and the percentage
+ * is the one to save.
+ *
+ * Both figures are typed rather than read from anywhere. The cheapest cached
+ * stay shown beside a hotel rule is already marked up, and backing a net out of
+ * it would mean assuming which rule priced it — a guess presented as a cost.
+ */
+function PercentFromPrices({ onUse }: { onUse: (pct: string) => void }) {
+  const [cost, setCost] = useState('');
+  const [sell, setSell] = useState('');
+
+  const c = Number(cost);
+  const s = Number(sell);
+  const ready = cost !== '' && sell !== '' && Number.isFinite(c) && Number.isFinite(s) && c > 0;
+  const pct = ready ? Math.round((s / c - 1) * 1000) / 10 : null;
+  const belowCost = pct != null && pct < 0;
+
+  return (
+    <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--c-bg-soft)', borderRadius: 6 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-soft)', marginBottom: 6 }}>
+        Work the % out from a price
+      </div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input className="c-input" type="number" step="0.01" placeholder="costs us"
+               value={cost} onChange={(e) => setCost(e.target.value)} style={{ width: 100 }} />
+        <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>sell at</span>
+        <input className="c-input" type="number" step="0.01" placeholder="sell for"
+               value={sell} onChange={(e) => setSell(e.target.value)} style={{ width: 100 }} />
+        {pct != null && (
+          <>
+            <span className="c-mono" style={{ fontSize: 13, fontWeight: 600, color: belowCost ? '#b91c1c' : 'var(--c-fg)' }}>
+              {belowCost ? '' : '+'}{pct}%
+            </span>
+            <button type="button" className="c-btn" style={{ padding: '4px 10px' }}
+                    onClick={() => onUse(String(pct))}>
+              Use
+            </button>
+          </>
+        )}
+      </div>
+      {belowCost && (
+        <div style={{ fontSize: 11.5, color: '#b91c1c', marginTop: 6 }}>
+          That sells below what it costs us.
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginTop: 6 }}>
+        Use the same basis for both — per night or whole stay, one currency.
+      </div>
     </div>
   );
 }
