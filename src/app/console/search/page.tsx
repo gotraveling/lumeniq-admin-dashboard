@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
@@ -1341,6 +1341,10 @@ export default function ConsoleSearchPage() {
             // it the engine falls back to the hotel-wide markup and the held
             // price can differ from the quote.
             ratePlan: chosenRate.ratePlan || undefined,
+            // Same reason for the room: a markup can be narrowed to one room,
+            // and the rateKey does not carry its name. The supplier's own name,
+            // which is the one the booking call carries too.
+            roomName: chosenRate.roomTypeName || undefined,
             searchParams: {
               checkIn, checkOut,
               adults: totalAdults,
@@ -1484,6 +1488,7 @@ export default function ConsoleSearchPage() {
         // rule was charged; without this it would record the hotel-wide rule
         // even when a meal-plan-scoped one set the price.
         ratePlan: chosenRate.ratePlan || undefined,
+        roomName: chosenRate.roomTypeName || undefined,
         partnerOrderIdOverride: prebook?.partnerOrderId,
         guestInfo:   { firstName: custFirst.trim(), lastName: custLast.trim(), email: custEmail.trim(), phone: custPhone.trim() || undefined },
         contactInfo: { firstName: custFirst.trim(), lastName: custLast.trim(), email: custEmail.trim(), phone: custPhone.trim() || undefined },
@@ -2313,6 +2318,14 @@ export default function ConsoleSearchPage() {
                 control={detailHotel ? controlMap[detailHotel.id] : undefined}
                 rooms={rooms}
                 roomMap={roomMap}
+                hotelId={detailHotel?.id}
+                hotelName={detailHotel?.name}
+                userEmail={user?.email || ''}
+                // Prices are marked up server-side and cached, so a markup
+                // typed on one rate only shows once the rates come back fresh.
+                onMarkupSaved={() => {
+                  if (detailHotel) void loadRatesFor(detailHotel, 'cug', undefined, { noCache: true });
+                }}
               />
             )}
 
@@ -2712,6 +2725,10 @@ type ScopedMarkup = {
   id: number;
   markup_percentage: number;
   rate_plans: string[];
+  // Set when the markup is narrowed to one room, written by the Edit beside a
+  // price in the rate list. Null on a markup that covers a board at the whole
+  // hotel.
+  room_name?: string | null;
   rule_name?: string;
 };
 
@@ -2988,7 +3005,8 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNet
       this rate, so it is the one a target price has to be worked back from. */
   cheapestNetAud?: number | null;
   cheapestSellAud?: number | null;
-  onSaved: (row: HotelControl, opts?: { pricingChanged?: boolean }) => void;
+  // row is null when only a pricing rule moved and the control row is untouched.
+  onSaved: (row: HotelControl | null, opts?: { pricingChanged?: boolean }) => void;
   // Fast-tag "Save & next": close the drawer so Tina opens the next hotel.
   onCloseDrawer: () => void;
 }) {
@@ -3058,6 +3076,23 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNet
       setScopedErr(e instanceof Error ? e.message : 'Could not save');
     } finally {
       setScopedSaving(false);
+    }
+  }
+
+  // Send a narrowed markup's rates back to the hotel-wide figure.
+  async function removeScopedMarkup(ruleId: number) {
+    setScopedErr(null);
+    try {
+      const r = await fetch(`/api/pricing/markup?hotelId=${hotelId}&ruleId=${ruleId}`, {
+        method: 'DELETE',
+        headers: { ...(userEmail ? { 'X-Consultant-Email': userEmail } : {}) },
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(j?.message || j?.error || `HTTP ${r.status}`);
+      loadMarkupHistory();
+      onSaved(null, { pricingChanged: true });
+    } catch (e: unknown) {
+      setScopedErr(e instanceof Error ? e.message : 'Could not remove');
     }
   }
 
@@ -3662,10 +3697,10 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNet
                       {saving ? 'Saving…' : 'Save'}
                     </button>
                   </div>
-                  <MarkupFromTargetPrice
+                  <PriceToMarkup
                     netAud={cheapestNetAud}
                     sellAud={cheapestSellAud}
-                    onUse={(pct) => set('markup_override_pct', pct)}
+                    onApply={(pct) => set('markup_override_pct', String(pct))}
                   />
                   {/* Meal-plan-scoped markups. A rate's board decides which
                       markup it gets, so a hotel whose room-only rate supports
@@ -3680,14 +3715,27 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNet
                           <div key={sm.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <span>
                               <strong>{fmtPct(sm.markup_percentage)}</strong>{' — '}
+                              {sm.room_name ? <>{sm.room_name}{sm.rate_plans.length ? ', ' : ''}</> : null}
                               {sm.rate_plans.map((pl) => MEAL_PLAN_CHOICES.find((c) => c.value === pl)?.label || pl).join(', ')}
                             </span>
-                            {/* Editing one loads it into the row below. Saving
-                                the same meal plans again replaces the figure,
-                                which is the same upsert the add button uses. */}
+                            {/* A board markup loads into the row below, where
+                                saving the same boards replaces the figure. One
+                                set on a single room is edited from the Edit
+                                beside that price, so here it only shows. */}
+                            {!sm.room_name && (
+                              <button type="button" className="c-btn" style={{ padding: '1px 7px', fontSize: 10.5 }}
+                                onClick={() => { setScopedPct(String(sm.markup_percentage)); setScopedPlans(sm.rate_plans); }}>
+                                Edit
+                              </button>
+                            )}
+                            {/* Removing sends the rates back to the markup
+                                above. Without it a figure typed on one rate
+                                could only be neutralised by copying the
+                                hotel-wide number into it, which then stopped
+                                following the hotel-wide number. */}
                             <button type="button" className="c-btn" style={{ padding: '1px 7px', fontSize: 10.5 }}
-                              onClick={() => { setScopedPct(String(sm.markup_percentage)); setScopedPlans(sm.rate_plans); }}>
-                              Edit
+                              onClick={() => removeScopedMarkup(sm.id)}>
+                              Remove
                             </button>
                           </div>
                         ))}
@@ -5004,11 +5052,18 @@ function adminMatrixFromPresentation(p: any, list: AdminRate[]): AdminMatrix | n
 }
 
 function RoomGroupedRates({
-  rates, onChoose, marginTop = 0, control, rooms = [], roomMap, presentation, b2cSellBySig, country
+  rates, onChoose, marginTop = 0, control, rooms = [], roomMap, presentation, b2cSellBySig, country,
+  hotelId, hotelName, userEmail, onMarkupSaved
 }: {
   rates: AdminRate[];
   onChoose: (r: AdminRate) => void;
   marginTop?: number;
+  // Repricing one rate from its own row (Tina, 2026-10-15) writes a markup
+  // narrowed to that room and board, so these are what the write needs.
+  hotelId?: number;
+  hotelName?: string;
+  userEmail?: string;
+  onMarkupSaved?: () => void;
   // API consolidation block (services/presentRates), looked up per room by name.
   presentation?: any;
   // Non-member cheapest sell per plan sig — drives the "All" vs "Member" tag.
@@ -5026,6 +5081,49 @@ function RoomGroupedRates({
 }) {
   const sp = useSearchParams();
   const showRgDebug = sp.get('debug') === 'rgmatch';
+  // Which rate's price is open for editing, by rateKey, plus the write state.
+  const [pricingKey, setPricingKey] = useState<string | null>(null);
+  const [pricingBusy, setPricingBusy] = useState(false);
+  const [pricingErr, setPricingErr] = useState<string | null>(null);
+  const [pricedKey, setPricedKey] = useState<string | null>(null);
+
+  // Set a markup on ONE rate: this room, this board. The percentage comes from
+  // the price she typed, worked back against the net on the same row, so the
+  // figure she wants is the figure that shows.
+  async function savePriceForRate(r: AdminRate, pct: number) {
+    if (!hotelId) return;
+    const roomName = (r.roomTypeName || '').trim();
+    if (!roomName) {
+      setPricingErr('This rate has no room name to price against.');
+      return;
+    }
+    setPricingBusy(true);
+    setPricingErr(null);
+    try {
+      const res = await fetch(`/api/pricing/markup?hotelId=${hotelId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(userEmail ? { 'X-Consultant-Email': userEmail } : {}),
+        },
+        body: JSON.stringify({
+          markup_percentage: pct,
+          hotel_name: hotelName || undefined,
+          room_name: roomName,
+          ...(r.ratePlan ? { rate_plans: [r.ratePlan] } : {}),
+        }),
+      });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(j?.message || j?.error || `HTTP ${res.status}`);
+      setPricingKey(null);
+      setPricedKey(r.rateKey);
+      onMarkupSaved?.();
+    } catch (e: unknown) {
+      setPricingErr(e instanceof Error ? e.message : 'Could not save');
+    } finally {
+      setPricingBusy(false);
+    }
+  }
   // Occupancy totals for the per-rate transfer surcharge (room-only rates).
   const totalAdults   = rooms.reduce((s, r) => s + (r.adults || 0), 0);
   const totalChildren = rooms.reduce((s, r) => s + (r.childrenAges?.length || 0), 0);
@@ -5570,7 +5668,8 @@ function RoomGroupedRates({
                         ? 'rgba(185,28,28,0.05)'
                         : isRecommended ? 'rgba(155,123,51,0.04)' : undefined;
                       return (
-                      <tr key={i} className="c-rate-row" style={{ borderTop: rowBorder, background: rowBg, opacity: rowBlocked ? 0.55 : 1 }}>
+                      <React.Fragment key={i}>
+                      <tr className="c-rate-row" style={{ borderTop: rowBorder, background: rowBg, opacity: rowBlocked ? 0.55 : 1 }}>
                         <td style={supplierTdStyle}>
                           {r.supplier && (
                             <span style={{ ...badgeStyle(r.supplier), textDecoration: rowBlocked ? 'line-through' : undefined }}>{r.supplier}</span>
@@ -5970,8 +6069,58 @@ function RoomGroupedRates({
                           >
                             {r.onRequest ? 'Request' : 'Choose'}
                           </button>
+                          {/* Reprice THIS rate. Tina sets markups per rate, and
+                              until now the only way in was the hotel's Manage
+                              panel, which prices every rate at once. */}
+                          {hotelId && (
+                            <button
+                              className="c-btn"
+                              style={{ padding: '4px 9px', fontSize: 11, marginLeft: 6 }}
+                              title="Set what this rate sells for"
+                              onClick={() => {
+                                setPricingErr(null);
+                                setPricingKey(pricingKey === r.rateKey ? null : r.rateKey);
+                              }}
+                            >
+                              {pricingKey === r.rateKey ? 'Close' : 'Price'}
+                            </button>
+                          )}
                         </td>
                       </tr>
+                      {pricingKey === r.rateKey && (
+                        <tr style={{ background: 'var(--c-bg-soft)' }}>
+                          <td colSpan={7} style={{ padding: '2px 10px 10px' }}>
+                            <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)' }}>
+                              {r.roomTypeName}
+                              {r.ratePlan ? ` · ${r.ratePlan}` : ''}
+                              {r.supplier ? ` · ${r.supplier}` : ''}
+                            </div>
+                            <PriceToMarkup
+                              netAud={r.pricing?.net?.aud?.totalAmount ?? null}
+                              sellAud={r.pricing?.aud?.totalAmount ?? null}
+                              actionLabel="Save"
+                              busy={pricingBusy}
+                              onApply={(pct) => void savePriceForRate(r, pct)}
+                            />
+                            <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginTop: 4 }}>
+                              Applies to {r.roomTypeName}
+                              {r.ratePlan ? ` on ${r.ratePlan}` : ''} at this hotel. Other rooms and
+                              boards keep the hotel markup.
+                            </div>
+                            {pricingErr && (
+                              <div style={{ fontSize: 11.5, color: '#b91c1c', marginTop: 4 }}>{pricingErr}</div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                      {pricedKey === r.rateKey && pricingKey !== r.rateKey && (
+                        <tr>
+                          <td colSpan={7} style={{ padding: '0 10px 8px', fontSize: 11.5, color: 'var(--c-success)' }}>
+                            Saved. Refreshing the rates.
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                       );
                     })}
                   </tbody>
@@ -6856,73 +7005,87 @@ function FactCell({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-/* ------- Work the markup % back from the price you want to show ------- */
+/* ------- Work the markup % back from the price you want to sell at ------- */
 /**
- * Setting a markup means deciding what the hotel should show "from", then
- * working the percentage back out on a calculator. This does that arithmetic.
+ * Setting a markup means deciding what a stay should sell for, then working the
+ * percentage back out on a calculator. This does that arithmetic, in the shape
+ * Tina asked for on 2026-10-15: "adjust price ___ to $___ based on net $___,
+ * the mark up is ___% (=(selling price - net)/net)".
  *
- * It reads the cheapest rate currently loaded for the hotel, which is the rate
- * the "from" price on the card comes from, so the target typed here is the
- * figure that will appear there. Both numbers are the total for the searched
- * stay in AUD, matching the card.
+ * Both figures are pre-filled and both can be changed. The price starts at
+ * what the stay sells for now and the net at what it costs us, which are the
+ * two numbers already on screen; typing over either is the point, because the
+ * rate she is pricing is not always the cheapest one loaded.
  *
- * With no rates loaded there is no cost to work back from, so it says so
- * rather than offering a percentage derived from nothing.
+ * A markup below zero is a real answer, not an error. She prices some rates
+ * under what they came in at, and an earlier version of this refused to hand
+ * that number over: "I'm selling at a lower rate, it should be negative".
+ *
+ * Totals for the searched stay, in AUD, matching the figures on the card.
  */
-function MarkupFromTargetPrice({ netAud, sellAud, onUse }: {
+function PriceToMarkup({ netAud, sellAud, actionLabel = 'Use', busy, onApply }: {
   netAud?: number | null;
   sellAud?: number | null;
-  onUse: (pct: string) => void;
+  actionLabel?: string;
+  busy?: boolean;
+  onApply: (pct: number) => void;
 }) {
-  const [target, setTarget] = useState('');
-  const net = Number(netAud);
-  const hasNet = Number.isFinite(net) && net > 0;
+  const asMoney = (v: unknown) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n.toFixed(2) : '';
+  };
+  const [price, setPrice] = useState(() => asMoney(sellAud));
+  const [net, setNet] = useState(() => asMoney(netAud));
+  // Re-prime when the drawer moves to another hotel or new dates land, but
+  // never over something half-typed.
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    if (touched) return;
+    setPrice(asMoney(sellAud));
+    setNet(asMoney(netAud));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sellAud, netAud, touched]);
 
-  const wanted = Number(target);
-  const ready = hasNet && target !== '' && Number.isFinite(wanted);
-  const pct = ready ? Math.round((wanted / net - 1) * 10) / 10 : null;
-  const belowCost = pct != null && pct < 0;
+  const netNum = Number(net);
+  const priceNum = Number(price);
+  const ready = Number.isFinite(netNum) && netNum > 0 && price !== '' && Number.isFinite(priceNum);
+  const pct = ready ? Math.round((priceNum / netNum - 1) * 1000) / 10 : null;
+
+  const money = (set: (v: string) => void, value: string, label: string) => (
+    <input
+      className="c-input" type="number" step="0.01" aria-label={label}
+      style={{ maxWidth: 104 }} placeholder="A$" value={value}
+      onChange={(e) => { setTouched(true); set(e.target.value); }}
+    />
+  );
 
   return (
     <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--c-line)' }}>
-      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--c-fg-muted)', marginBottom: 4 }}>
-        From a price
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+        <span>Adjust price to</span>
+        {money(setPrice, price, 'Price it should sell at, AUD')}
+        <span>based on net</span>
+        {money(setNet, net, 'What the stay costs us, AUD')}
       </div>
-      {!hasNet ? (
-        <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>
-          Search dates for this hotel first, then the % can be worked out from what the cheapest rate costs us.
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6, fontSize: 12 }}>
+        <span>The markup is</span>
+        <span className="c-mono" style={{ fontSize: 14, fontWeight: 700, color: pct != null && pct < 0 ? '#b45309' : 'var(--c-fg)' }}>
+          {pct == null ? '—' : `${pct}%`}
+        </span>
+        {pct != null && (
+          <button type="button" className="c-btn" style={{ padding: '3px 10px', fontSize: 11 }}
+            disabled={busy} onClick={() => onApply(pct)}>
+            {busy ? 'Saving…' : actionLabel}
+          </button>
+        )}
+        {pct != null && pct < 0 && (
+          <span style={{ fontSize: 11, color: '#b45309' }}>below net</span>
+        )}
+      </div>
+      {!(Number.isFinite(Number(netAud)) && Number(netAud) > 0) && (
+        <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginTop: 4 }}>
+          Nothing is loaded to start from. Search dates for this hotel, or type the net yourself.
         </div>
-      ) : (
-        <>
-          <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', marginBottom: 6 }}>
-            Cheapest stay costs us <strong>A${net.toFixed(2)}</strong>
-            {Number.isFinite(Number(sellAud)) && Number(sellAud) > 0 && (
-              <> and sells at <strong>A${Number(sellAud).toFixed(2)}</strong></>
-            )}
-            .
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12 }}>Make it sell for</span>
-            <input className="c-input" type="number" step="0.01" style={{ maxWidth: 110 }}
-              placeholder="A$" value={target} onChange={(e) => setTarget(e.target.value)} />
-            {pct != null && (
-              <>
-                <span className="c-mono" style={{ fontSize: 13, fontWeight: 600, color: belowCost ? '#b91c1c' : 'var(--c-fg)' }}>
-                  {belowCost ? '' : '+'}{pct}%
-                </span>
-                <button type="button" className="c-btn" style={{ padding: '3px 10px', fontSize: 11 }}
-                  onClick={() => onUse(String(pct))}>
-                  Use
-                </button>
-              </>
-            )}
-          </div>
-          {belowCost && (
-            <div style={{ fontSize: 11.5, color: '#b91c1c', marginTop: 6 }}>
-              That sells below what it costs us.
-            </div>
-          )}
-        </>
       )}
     </div>
   );

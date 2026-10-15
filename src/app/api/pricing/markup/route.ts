@@ -71,3 +71,31 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: 'proxy_failed' }, { status: 500 });
   }
 }
+
+/**
+ * DELETE /api/pricing/markup?hotelId=123&ruleId=456
+ *
+ * Drop a narrowed markup so the rates it named go back to the hotel-wide
+ * figure. Only a narrowed rule can go; the engine refuses the hotel-wide one.
+ */
+export async function DELETE(request: NextRequest) {
+  const auth = await requireConsoleUser(request);
+  if ('response' in auth) return auth.response;
+  const hotelId = request.nextUrl.searchParams.get('hotelId');
+  const ruleId = request.nextUrl.searchParams.get('ruleId');
+  if (!hotelId || !ruleId) return NextResponse.json({ error: 'hotelId and ruleId required' }, { status: 400 });
+  try {
+    const changedBy = request.headers.get('x-consultant-email') || '';
+    const r = await fetch(`${upstream(hotelId)}/scoped/${encodeURIComponent(ruleId)}`, {
+      method: 'DELETE',
+      headers: {
+        'X-API-Key': API_KEY,
+        ...(changedBy ? { 'X-Consultant-Email': changedBy } : {}),
+      },
+    });
+    return NextResponse.json(await r.json().catch(() => ({ error: `HTTP ${r.status}` })), { status: r.status });
+  } catch (e: any) {
+    console.error('[pricing/markup DELETE] proxy error:', e?.message);
+    return NextResponse.json({ error: 'proxy_failed' }, { status: 500 });
+  }
+}
