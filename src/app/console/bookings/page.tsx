@@ -887,7 +887,7 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
             })()}
             {pb?.supplierNet == null && (
               <div style={{ fontSize: 11.5, color: '#92400e', background: 'rgba(245,158,11,0.10)', border: '1px solid #f59e0b', borderRadius: 6, padding: '6px 8px', marginBottom: 8 }}>
-                We hold no supplier net for this booking, so the margin cannot be shown. Bookings made from now on record it.
+                We hold no supplier net for this booking, so the margin cannot be shown.
               </div>
             )}
             {/* Where the net came from. Three places can supply it and each
