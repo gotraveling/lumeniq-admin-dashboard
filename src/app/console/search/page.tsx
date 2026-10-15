@@ -2068,6 +2068,8 @@ export default function ConsoleSearchPage() {
               hotelName={detailHotel.name}
               supplierStars={detailHotel.starRating ?? null}
               userEmail={user?.email || ''}
+              cheapestNetAud={detailHotel.priced?.netTotalAud ?? null}
+              cheapestSellAud={detailHotel.priced?.sellTotalAud ?? null}
               onSaved={(row, opts) => {
                 refreshControl(detailHotel.id, row);
                 // Markup changed → re-fetch rates bypassing the backend cache so
@@ -2975,12 +2977,17 @@ function InlineNote({ hotelId, note, userEmail, onSaved }: {
   );
 }
 
-function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, onCloseDrawer }: {
+function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNetAud, cheapestSellAud, onSaved, onCloseDrawer }: {
   hotelId: number;
   hotelName: string;
   /** What the supplier says, so the star override can show what it overrules. */
   supplierStars?: number | null;
   userEmail: string;
+  /** Cheapest rate currently loaded for this hotel: what it costs us, and what
+      it sells for at today's markup. The "from" price on the card is driven by
+      this rate, so it is the one a target price has to be worked back from. */
+  cheapestNetAud?: number | null;
+  cheapestSellAud?: number | null;
   onSaved: (row: HotelControl, opts?: { pricingChanged?: boolean }) => void;
   // Fast-tag "Save & next": close the drawer so Tina opens the next hotel.
   onCloseDrawer: () => void;
@@ -3644,8 +3651,22 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
               {/* ── Pricing ── */}
               <ManageGroup title="Pricing">
                 <Field label="Markup override %">
-                  <input className="c-input" type="number" step="0.1" style={{ maxWidth: 200 }}
-                    value={form.markup_override_pct} onChange={(e) => set('markup_override_pct', e.target.value)} placeholder="e.g. 12.5" />
+                  {/* Save sits beside the figure as well as at the foot of the
+                      panel. The markup is the field changed on its own most
+                      often, and the panel is long. */}
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', maxWidth: 320 }}>
+                    <input className="c-input" type="number" step="0.1" style={{ maxWidth: 200 }}
+                      value={form.markup_override_pct} onChange={(e) => set('markup_override_pct', e.target.value)} placeholder="e.g. 12.5" />
+                    <button type="button" className="c-btn c-btn-primary" style={{ flexShrink: 0 }}
+                      onClick={save} disabled={saving || !dirty}>
+                      {saving ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                  <MarkupFromTargetPrice
+                    netAud={cheapestNetAud}
+                    sellAud={cheapestSellAud}
+                    onUse={(pct) => set('markup_override_pct', pct)}
+                  />
                   {/* Meal-plan-scoped markups. A rate's board decides which
                       markup it gets, so a hotel whose room-only rate supports
                       40% no longer has to price half board at the same number. */}
@@ -3656,9 +3677,18 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, onSaved, on
                     {scopedMarkups.length > 0 && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 6, fontSize: 12 }}>
                         {scopedMarkups.map((sm) => (
-                          <div key={sm.id}>
-                            <strong>{fmtPct(sm.markup_percentage)}</strong>{' — '}
-                            {sm.rate_plans.map((pl) => MEAL_PLAN_CHOICES.find((c) => c.value === pl)?.label || pl).join(', ')}
+                          <div key={sm.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span>
+                              <strong>{fmtPct(sm.markup_percentage)}</strong>{' — '}
+                              {sm.rate_plans.map((pl) => MEAL_PLAN_CHOICES.find((c) => c.value === pl)?.label || pl).join(', ')}
+                            </span>
+                            {/* Editing one loads it into the row below. Saving
+                                the same meal plans again replaces the figure,
+                                which is the same upsert the add button uses. */}
+                            <button type="button" className="c-btn" style={{ padding: '1px 7px', fontSize: 10.5 }}
+                              onClick={() => { setScopedPct(String(sm.markup_percentage)); setScopedPlans(sm.rate_plans); }}>
+                              Edit
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -3976,6 +4006,9 @@ const RATE_SOURCES: Array<{ key: string; label: string }> = [
   { key: 'expedia',      label: 'Expedia' },
   { key: 'hotel_direct', label: 'Hotel direct' },
   { key: 'hummingbird',  label: 'Hummingbird' },
+  // Signature is a benchmark, like Expedia: we can see their rate but cannot
+  // book it here, so it is worth recording when theirs is the better one.
+  { key: 'signature',    label: 'Signature' },
 ];
 
 type RateObservation = {
@@ -6819,6 +6852,78 @@ function FactCell({ label, value }: { label: string; value: React.ReactNode }) {
     <div style={{ background: 'var(--c-bg-soft)', border: '1px solid var(--c-line-soft)', borderRadius: 6, padding: '8px 10px' }}>
       <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 700, marginBottom: 2 }}>{label}</div>
       <div style={{ fontSize: 13, color: 'var(--c-fg)' }}>{value}</div>
+    </div>
+  );
+}
+
+/* ------- Work the markup % back from the price you want to show ------- */
+/**
+ * Setting a markup means deciding what the hotel should show "from", then
+ * working the percentage back out on a calculator. This does that arithmetic.
+ *
+ * It reads the cheapest rate currently loaded for the hotel, which is the rate
+ * the "from" price on the card comes from, so the target typed here is the
+ * figure that will appear there. Both numbers are the total for the searched
+ * stay in AUD, matching the card.
+ *
+ * With no rates loaded there is no cost to work back from, so it says so
+ * rather than offering a percentage derived from nothing.
+ */
+function MarkupFromTargetPrice({ netAud, sellAud, onUse }: {
+  netAud?: number | null;
+  sellAud?: number | null;
+  onUse: (pct: string) => void;
+}) {
+  const [target, setTarget] = useState('');
+  const net = Number(netAud);
+  const hasNet = Number.isFinite(net) && net > 0;
+
+  const wanted = Number(target);
+  const ready = hasNet && target !== '' && Number.isFinite(wanted);
+  const pct = ready ? Math.round((wanted / net - 1) * 10) / 10 : null;
+  const belowCost = pct != null && pct < 0;
+
+  return (
+    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--c-line)' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--c-fg-muted)', marginBottom: 4 }}>
+        From a price
+      </div>
+      {!hasNet ? (
+        <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>
+          Search dates for this hotel first, then the % can be worked out from what the cheapest rate costs us.
+        </div>
+      ) : (
+        <>
+          <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', marginBottom: 6 }}>
+            Cheapest stay costs us <strong>A${net.toFixed(2)}</strong>
+            {Number.isFinite(Number(sellAud)) && Number(sellAud) > 0 && (
+              <> and sells at <strong>A${Number(sellAud).toFixed(2)}</strong></>
+            )}
+            .
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12 }}>Make it sell for</span>
+            <input className="c-input" type="number" step="0.01" style={{ maxWidth: 110 }}
+              placeholder="A$" value={target} onChange={(e) => setTarget(e.target.value)} />
+            {pct != null && (
+              <>
+                <span className="c-mono" style={{ fontSize: 13, fontWeight: 600, color: belowCost ? '#b91c1c' : 'var(--c-fg)' }}>
+                  {belowCost ? '' : '+'}{pct}%
+                </span>
+                <button type="button" className="c-btn" style={{ padding: '3px 10px', fontSize: 11 }}
+                  onClick={() => onUse(String(pct))}>
+                  Use
+                </button>
+              </>
+            )}
+          </div>
+          {belowCost && (
+            <div style={{ fontSize: 11.5, color: '#b91c1c', marginTop: 6 }}>
+              That sells below what it costs us.
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
