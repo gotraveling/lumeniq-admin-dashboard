@@ -58,6 +58,18 @@ const fmtStayDate = (iso?: string) => {
     return new Intl.DateTimeFormat('en-AU', { timeZone: TZ, day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(iso));
   } catch { return iso.slice(0, 10); }
 };
+const amount = (n: number) =>
+  new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n));
+// Short form for the list, where the same currency repeats down the column and
+// spelling it out on every line is what pushed the table too wide to read.
+const fmtCreatedShort = (iso?: string) => {
+  if (!iso) return '';
+  try {
+    return new Intl.DateTimeFormat('en-AU', {
+      timeZone: TZ, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false
+    }).format(new Date(iso));
+  } catch { return iso.slice(0, 10); }
+};
 const fmtCreatedAt = (iso?: string) => {
   if (!iso) return '';
   try {
@@ -186,18 +198,17 @@ export default function ConsoleBookingsPage() {
         ) : (
           <table className="c-table">
             <thead>
+              {/* Six columns, not eleven. Each cell groups the things a
+                  consultant reads together, so the table stops fighting for
+                  width and the money stays legible instead of being squeezed
+                  into two narrow columns beside the supplier name. */}
               <tr>
-                <th>Reference</th>
+                <th>Booking</th>
                 <th>Guest</th>
                 <th>Hotel</th>
                 <th>Stay</th>
-                <th>Created (AEST)</th>
-                <th>Net</th>
-                <th>Client pays</th>
-                <th>Supplier</th>
-                <th>Paid</th>
+                <th style={{ textAlign: 'right' }}>Money</th>
                 <th>Status</th>
-                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -215,12 +226,24 @@ export default function ConsoleBookingsPage() {
                 })();
                 return (
                   <tr key={rowId} style={{ cursor: 'pointer' }} onClick={() => setOpenId(rowId)}>
-                    <td className="c-mono" style={{ whiteSpace: 'nowrap' }}>
-                      {rowId}
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {/* The Details button was a column of its own for one
+                          action the whole row already does. Colouring the
+                          reference keeps that discoverable without the column. */}
+                      <div className="c-mono" style={{ color: 'var(--c-accent)', fontWeight: 600 }}>{rowId}</div>
+                      {/* Supplier and when it was made were columns of their
+                          own. They belong to the reference, and nobody sorts
+                          or scans by them. */}
+                      <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', marginTop: 2 }}>
+                        {b.supplierId}
+                        {b.createdAt ? ` · ${fmtCreatedShort(b.createdAt)}` : ''}
+                      </div>
                     </td>
                     <td>
                       <div style={{ fontWeight: 500 }}>{guest.firstName} {guest.lastName}</div>
-                      {guest.email && <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>{guest.email}</div>}
+                      {guest.email && (
+                        <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', wordBreak: 'break-word' }}>{guest.email}</div>
+                      )}
                     </td>
                     <td>
                       <div style={{ fontWeight: 500 }}>
@@ -249,27 +272,41 @@ export default function ConsoleBookingsPage() {
                         </div>
                       )}
                     </td>
-                    <td style={{ fontSize: 12, color: 'var(--c-fg-soft)', whiteSpace: 'nowrap' }}>
-                      {fmtCreatedAt(b.createdAt)}
-                    </td>
-                    <td className="c-mono" style={{ whiteSpace: 'nowrap' }}>
-                      {/* What the supplier invoices us. A consultant scanning this
-                          list is working out margin, so the cost belongs beside
-                          the client's price rather than one click away. */}
+                    {/* One money column. What the client pays leads because it
+                        is the figure read aloud; the cost and the margin sit
+                        under it so the three are read as one sum rather than
+                        hunted across the row. */}
+                    <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+                      <div className="c-mono" style={{ fontWeight: 700 }}>
+                        {b.totalAmount != null ? `${amount(b.totalAmount)} ${b.currency || 'AUD'}` : '—'}
+                      </div>
                       {(() => {
                         const net = b.priceBreakdown?.supplierNet;
-                        const ccy = b.priceBreakdown?.supplierNetCurrency;
-                        if (net == null) return <span style={{ color: 'var(--c-fg-muted)' }}>—</span>;
-                        return `${new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(net))}${ccy ? ` ${ccy}` : ''}`;
+                        const margin = b.priceBreakdown?.commissionAmount;
+                        const pct = b.priceBreakdown?.commissionPercent;
+                        if (net == null) {
+                          return (
+                            <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', marginTop: 2 }}>
+                              cost not recorded
+                            </div>
+                          );
+                        }
+                        return (
+                          <>
+                            <div className="c-mono" style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', marginTop: 2 }}>
+                              cost {amount(net)}
+                            </div>
+                            {margin != null && (
+                              <div className="c-mono" style={{ fontSize: 11.5, color: '#166534', fontWeight: 600 }}>
+                                +{amount(margin)}{pct != null ? ` · ${pct}%` : ''}
+                              </div>
+                            )}
+                          </>
+                        );
                       })()}
                     </td>
-                    <td className="c-mono" style={{ whiteSpace: 'nowrap' }}>
-                      {b.totalAmount != null
-                        ? `${new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(b.totalAmount))} ${b.currency || 'AUD'}`
-                        : '—'}
-                    </td>
-                    <td style={{ fontSize: 12, color: 'var(--c-fg-soft)' }}>{b.supplierId}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
+                      <StatusPill status={b.status} />
                       {(() => {
                         const st = b.payment?.status || 'unpaid';
                         const map: Record<string, { text: string; fg: string }> = {
@@ -279,18 +316,10 @@ export default function ConsoleBookingsPage() {
                           refunded: { text: 'Refunded', fg: 'var(--c-fg-muted)' },
                         };
                         const m = map[st] || map.unpaid;
-                        return <span style={{ fontSize: 12, fontWeight: 600, color: m.fg }}>{m.text}</span>;
+                        return (
+                          <div style={{ fontSize: 11.5, fontWeight: 600, color: m.fg, marginTop: 3 }}>{m.text}</div>
+                        );
                       })()}
-                    </td>
-                    <td><StatusPill status={b.status} /></td>
-                    <td>
-                      <button
-                        className="c-btn"
-                        style={{ padding: '4px 10px', fontSize: 12 }}
-                        onClick={(e) => { e.stopPropagation(); setOpenId(rowId); }}
-                      >
-                        Details
-                      </button>
                     </td>
                   </tr>
                 );
@@ -682,7 +711,10 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 99 }} />
       <div ref={ref} style={{
         position: 'fixed', top: 0, right: 0, bottom: 0,
-        width: 'min(560px, 100vw)',
+        // 560px was set before the panel carried payment, cancellation terms,
+        // price watch and cost history. Those sections wrap at that width and
+        // the money lines are the first thing to break across two rows.
+        width: 'min(680px, 100vw)',
         background: 'var(--c-bg)', borderLeft: '1px solid var(--c-line)',
         boxShadow: '-12px 0 32px rgba(0,0,0,0.18)',
         zIndex: 100, overflowY: 'auto'
@@ -774,7 +806,9 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
           )}
         </div>
 
-        <div style={{ padding: '16px 18px', display: 'grid', gap: 16 }}>
+        {/* Sections need a clear gap between them now there are a dozen; at 16
+            they read as one continuous wall of key/value lines. */}
+        <div style={{ padding: '18px 20px 28px', display: 'grid', gap: 22 }}>
           {/* Inline edit form */}
           {showEdit && (
             <form onSubmit={handleEdit} style={{ border: '1px solid var(--c-line)', borderRadius: 8, padding: 14, display: 'grid', gap: 12, background: 'var(--c-bg-soft, transparent)' }}>
@@ -1152,16 +1186,19 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-fg-muted)', marginBottom: 6 }}>{label}</div>
-      <div style={{ display: 'grid', gap: 4 }}>{children}</div>
+      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-fg-muted)', marginBottom: 7 }}>{label}</div>
+      <div style={{ display: 'grid', gap: 6 }}>{children}</div>
     </div>
   );
 }
 function KV({ k, v }: { k: string; v: React.ReactNode }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 }}>
-      <span style={{ color: 'var(--c-fg-muted)' }}>{k}</span>
-      <span style={{ color: 'var(--c-fg)' }}>{v}</span>
+    // The label holds its width and the value wraps against the right edge.
+    // Without this a long value — "the supplier's prebook, read back from our
+    // stored call" — squeezes its own label down to one word per line.
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, fontSize: 13, lineHeight: 1.45 }}>
+      <span style={{ color: 'var(--c-fg-muted)', flexShrink: 0 }}>{k}</span>
+      <span style={{ color: 'var(--c-fg)', textAlign: 'right', minWidth: 0 }}>{v}</span>
     </div>
   );
 }
