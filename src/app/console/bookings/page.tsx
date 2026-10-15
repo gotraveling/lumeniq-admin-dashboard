@@ -296,9 +296,13 @@ export default function ConsoleBookingsPage() {
                             <div className="c-mono" style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', marginTop: 2 }}>
                               cost {amount(net)}
                             </div>
+                            {/* Green and a plus sign are a claim that we made
+                                money. Selling under cost is rare and it is
+                                exactly the row that must not read as profit. */}
                             {margin != null && (
-                              <div className="c-mono" style={{ fontSize: 11.5, color: '#166534', fontWeight: 600 }}>
-                                +{amount(margin)}{pct != null ? ` · ${pct}%` : ''}
+                              <div className="c-mono" style={{ fontSize: 11.5, fontWeight: 600, color: Number(margin) < 0 ? '#b91c1c' : '#166534' }}>
+                                {Number(margin) < 0 ? '' : '+'}{amount(margin)}{pct != null ? ` · ${pct}%` : ''}
+                                {Number(margin) < 0 ? ' under cost' : ''}
                               </div>
                             )}
                           </>
@@ -990,7 +994,8 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
               consultant sees two unrelated rows and nothing saying one became
               the other. */}
           {money && (money.quotes?.some((q: any) => q.net != null)
-            || money.rebook?.replaces?.length || money.rebook?.replacedBy?.length) && (
+            || money.rebook?.replaces?.length || money.rebook?.replacedBy?.length
+            || money.rebook?.open?.length || money.rebook?.closed?.length) && (
             <Section label="Cost history">
               {money.rebook?.replaces?.map((r: any) => (
                 <div key={`in-${r.oldBookingId}`} style={{ fontSize: 12, padding: '7px 9px', borderRadius: 6, border: '1px solid #16a34a', background: 'rgba(22,101,52,0.08)', marginBottom: 6 }}>
@@ -1059,10 +1064,26 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
                   </div>
                 ))}
               </div>
-              {money.rebook?.open?.length > 0 && (
-                <div style={{ fontSize: 11.5, color: '#166534', marginTop: 6 }}>
+              {/* Green only where there is a saving that can still be taken. */}
+              {money.rebook?.open?.length > 0 && Number(money.rebook.open[0].saving) > 0 && (
+                <div style={{ fontSize: 11.5, color: '#166534', fontWeight: 600, marginTop: 6 }}>
                   A cheaper rate is on the table right now, saving{' '}
                   {fmtMoney(money.rebook.open[0].saving, money.rebook.open[0].currency)}. Nobody has decided yet.
+                </div>
+              )}
+              {/* Savings we are not taking, stated plainly so the same one is
+                  not chased again. Never green: there is nothing to act on. */}
+              {money.rebook?.closed?.length > 0 && (
+                <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', marginTop: 6 }}>
+                  {money.rebook.closed.slice(0, 3).map((r: any, i: number) => (
+                    <div key={i}>
+                      {r.status === 'lapsed'
+                        ? <>A saving of {fmtMoney(r.saving, r.currency)} was found but the free cancellation window closed before anyone acted.</>
+                        : r.status === 'dismissed'
+                          ? <>A saving of {fmtMoney(r.saving, r.currency)} was looked at and left alone{r.decidedBy ? ` by ${r.decidedBy}` : ''}.</>
+                          : <>A saving of {fmtMoney(r.saving, r.currency)} was found and the rate went before it could be booked.</>}
+                    </div>
+                  ))}
                 </div>
               )}
             </Section>
@@ -1105,12 +1126,22 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
                       {new Date(c.checked_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                       {c.source !== 'scan' ? ` · ${c.source}` : ''}
                     </span>
+                    {/* Green means act on it. A rate can be cheaper and still
+                        not worth moving: under $15 or 2% it is inside the noise,
+                        and some will not hold at prebook. Colouring every
+                        saving green told a consultant to rebook for $6. */}
                     <span className="c-mono" style={{ textAlign: 'right' }}>
                       {c.best_net != null ? (
                         <>
                           {fmtMoney(c.best_net, c.currency)}
                           {c.saving != null && Number(c.saving) > 0 && (
-                            <span style={{ color: '#166534' }}> · {fmtMoney(c.saving, c.currency)} less</span>
+                            c.actionable ? (
+                              <span style={{ color: '#166534', fontWeight: 600 }}> · {fmtMoney(c.saving, c.currency)} less</span>
+                            ) : (
+                              <span style={{ color: 'var(--c-fg-muted)' }}>
+                                {' '}· {fmtMoney(c.saving, c.currency)} less, too small to move
+                              </span>
+                            )
                           )}
                         </>
                       ) : (
