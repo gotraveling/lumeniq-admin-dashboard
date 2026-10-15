@@ -360,6 +360,10 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
   // Every price check ever made against this booking — including the ones that
   // found nothing, which is most of them and is the point.
   const [priceHistory, setPriceHistory] = useState<any | null>(null);
+  // What the supplier quoted us for THIS booking, and whether it replaced or was
+  // replaced by another one. Separate from priceHistory above: that watches for
+  // a cheaper rate from now on, this is the record of what already happened.
+  const [money, setMoney] = useState<any | null>(null);
 
   const id = booking ? (booking.internalBookingId || booking.bookingId) : null;
 
@@ -385,6 +389,7 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
       } catch { /* fall back to the list row */ }
     })();
     void loadHistory();
+    void loadMoney();
     return () => { abort = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -543,6 +548,25 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
       } else flash(false, j.message || j.error || `Could not check with the supplier (${r.status})`);
     } catch { flash(false, 'Network error checking with the supplier'); }
     finally { setBusy(null); }
+  };
+
+  // The booking's own cost history. The endpoint also fills a missing net from
+  // the stored supplier calls, so opening a booking that shows a dash is enough
+  // to make the figure appear; reload the detail when it does.
+  const loadMoney = async () => {
+    if (!id) return;
+    setMoney(null);
+    try {
+      const r = await fetch(`/api/bookings/${id}/history`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j?.success) {
+        setMoney(j.data);
+        if (j.data?.recovered) {
+          const d = await fetch(`/api/bookings/${id}`).then(x => x.json()).catch(() => null);
+          if (d?.success) setDetail(d.data);
+        }
+      }
+    } catch { /* the rest of the panel still works */ }
   };
 
   const loadHistory = async () => {
@@ -887,18 +911,31 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
             })()}
             {pb?.supplierNet == null && (
               <div style={{ fontSize: 11.5, color: '#92400e', background: 'rgba(245,158,11,0.10)', border: '1px solid #f59e0b', borderRadius: 6, padding: '6px 8px', marginBottom: 8 }}>
-                We hold no supplier net for this booking, so the margin cannot be shown.
+                {money
+                  ? 'We checked everything we stored for this booking and none of it states the supplier net, so the margin cannot be shown.'
+                  : 'Looking for the supplier net…'}
               </div>
             )}
             {/* Where the net came from. Three places can supply it and each
                 one can be silent, so naming the source turns a blank margin
                 into something answerable. */}
-            {pb?.netSource && (
+            {pb?.supplierNet != null && (
               <KV k="Net taken from" v={
-                pb.netSource === 'supplier' ? 'the supplier\u2019s own booking response'
-                : pb.netSource === 'prebook' ? 'the supplier\u2019s prebook'
-                : pb.netSource === 'rate_snapshot' ? 'the rate as it was quoted'
-                : pb.netSource
+                <>
+                  {pb.netSource === 'supplier' ? 'the supplier\u2019s own booking response'
+                    : pb.netSource === 'prebook' ? 'the supplier\u2019s prebook'
+                    : pb.netSource === 'supplier_audit' ? 'the supplier\u2019s prebook, read back from our stored call'
+                    : pb.netSource === 'rate_decisions' ? 'the rate menu we scored at search time'
+                    : pb.netSource === 'rate_snapshot' ? 'the rate as it was quoted'
+                    : pb.netSource === 'derived_from_markup' ? 'our own markup rule, worked backwards'
+                    : pb.netSource || 'recorded when the booking was made'}
+                  {/* A figure we calculated is not a figure the supplier gave
+                      us. Saying so here is what stops it being quoted back to
+                      them as their own number. */}
+                  {pb.netDerived && (
+                    <span style={{ color: '#92400e', fontWeight: 600 }}> \u00b7 our calculation, not their figure</span>
+                  )}
+                </>
               } />
             )}
             {pb?.markupRule && <KV k="Markup rule" v={`${pb.markupRule.name}${pb.markupRule.type === 'percentage' ? ` · ${pb.markupRule.percentage}%` : pb.markupRule.fixedAmount != null ? ` · +${pb.markupRule.fixedAmount}` : ''}`} />}
@@ -913,6 +950,89 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
               </div>
             )}
           </Section>
+
+          {/* Where the cost came from and whether it moved. A rebooked stay is
+              two separate bookings, one cancelled, so without the chain below a
+              consultant sees two unrelated rows and nothing saying one became
+              the other. */}
+          {money && (money.quotes?.some((q: any) => q.net != null)
+            || money.rebook?.replaces?.length || money.rebook?.replacedBy?.length) && (
+            <Section label="Cost history">
+              {money.rebook?.replaces?.map((r: any) => (
+                <div key={`in-${r.oldBookingId}`} style={{ fontSize: 12, padding: '7px 9px', borderRadius: 6, border: '1px solid #16a34a', background: 'rgba(22,101,52,0.08)', marginBottom: 6 }}>
+                  <div style={{ fontWeight: 700, color: '#166534' }}>
+                    This booking replaced {r.oldBookingId}
+                  </div>
+                  <div style={{ color: 'var(--c-fg-soft)', marginTop: 2 }}>
+                    Cost went from {fmtMoney(r.oldNet, r.currency)} to {fmtMoney(r.newNet, r.currency)}
+                    {r.saving != null && <>, saving {fmtMoney(r.saving, r.currency)}{r.savingPct != null ? ` (${r.savingPct}%)` : ''}</>}.
+                    {r.decidedBy ? ` ${r.decidedBy} approved it` : ''}
+                    {r.decidedAt ? ` on ${new Date(r.decidedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}.
+                  </div>
+                </div>
+              ))}
+              {money.rebook?.replacedBy?.map((r: any) => (
+                <div key={`out-${r.newBookingId}`} style={{ fontSize: 12, padding: '7px 9px', borderRadius: 6, border: '1px solid var(--c-line)', background: 'var(--c-bg-soft)', marginBottom: 6 }}>
+                  <div style={{ fontWeight: 700 }}>
+                    Replaced by {r.newBookingId}
+                  </div>
+                  <div style={{ color: 'var(--c-fg-soft)', marginTop: 2 }}>
+                    The guest is held on that booking now. It cost {fmtMoney(r.newNet, r.currency)} against {fmtMoney(r.oldNet, r.currency)} here
+                    {r.saving != null && <>, saving {fmtMoney(r.saving, r.currency)}</>}.
+                  </div>
+                </div>
+              ))}
+              {money.movement && money.movement.delta !== 0 && (
+                <div style={{ fontSize: 11.5, color: '#92400e', background: 'rgba(245,158,11,0.10)', border: '1px solid #f59e0b', borderRadius: 6, padding: '6px 8px', marginBottom: 6 }}>
+                  The supplier&rsquo;s price moved while we were booking: first quoted{' '}
+                  {fmtMoney(money.movement.firstNet, money.movement.currency)}, confirmed at{' '}
+                  {fmtMoney(money.movement.lastNet, money.movement.currency)}.
+                </div>
+              )}
+              <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', marginBottom: 5 }}>
+                Every call we made to the supplier for this booking, from our own stored record of them.
+              </div>
+              <div style={{ display: 'grid', gap: 3, maxHeight: 220, overflowY: 'auto' }}>
+                {money.quotes?.map((q: any, i: number) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}>
+                    <span style={{ color: 'var(--c-fg-muted)', whiteSpace: 'nowrap' }}>
+                      {new Date(q.at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      {' · '}
+                      {q.kind === 'prebook' ? 'price check'
+                        : q.kind === 'booking_form' ? 'guest details'
+                        : q.kind === 'booking' ? 'booked'
+                        : q.kind === 'confirmation' ? 'waiting for confirmation'
+                        : q.kind === 'cancellation' ? 'cancelled'
+                        : q.kind === 'rate_check' ? 'rate look-up'
+                        : q.kind}
+                      {q.repeated ? ` (${q.repeated} checks)` : ''}
+                      {!q.ok && <span style={{ color: '#b91c1c' }}> · failed</span>}
+                    </span>
+                    <span className="c-mono" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {q.net != null ? (
+                        <>
+                          {fmtMoney(q.net, q.netCurrency)}
+                          {/* The same cost in the rate's own currency. Shown in
+                              brackets so it is never read as a second charge. */}
+                          {q.netInRateCurrency != null && q.rateCurrency && q.rateCurrency !== q.netCurrency && (
+                            <span style={{ color: 'var(--c-fg-muted)' }}> ({fmtMoney(q.netInRateCurrency, q.rateCurrency)})</span>
+                          )}
+                        </>
+                      ) : (
+                        <span style={{ color: 'var(--c-fg-muted)' }}>no price</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {money.rebook?.open?.length > 0 && (
+                <div style={{ fontSize: 11.5, color: '#166534', marginTop: 6 }}>
+                  A cheaper rate is on the table right now, saving{' '}
+                  {fmtMoney(money.rebook.open[0].saving, money.rebook.open[0].currency)}. Nobody has decided yet.
+                </div>
+              )}
+            </Section>
+          )}
 
           {penaltyNow && (
             <Section label="Cancelling">
