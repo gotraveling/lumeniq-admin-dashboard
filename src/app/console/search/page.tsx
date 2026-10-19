@@ -556,7 +556,10 @@ export default function ConsoleSearchPage() {
     const clauses: string[] = [];
     if (pf.trim()) clauses.push(`(${pf.trim()})`);
     // 4★/5★ filter the real star_rating; 5★+/5★++ filter the curation tier.
-    if (tc === '3' || tc === '4' || tc === '5') clauses.push(`star_rating = ${tc}`);
+    // Ranges, not equality: a 4.5 override files under 4★, and a supplier 6★
+    // still counts as a five.
+    if (tc === '3' || tc === '4') clauses.push(`star_rating >= ${tc} AND star_rating < ${Number(tc) + 1}`);
+    else if (tc === '5') clauses.push('star_rating >= 5');
     else if (tc) clauses.push(`luxury_tier = "${tc}"`);
     return clauses.length ? clauses.join(' AND ') : undefined;
   }
@@ -3565,14 +3568,11 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNet
                       on 150 of the 223 we hold twice. Neither of those has a
                       data answer, so a person decides and it is recorded here.
                       Never touched by a content sync, unlike the supplier
-                      value. WHOLE numbers only: this is a classification, and
-                      nobody is certified 4.5 — RateHawk ships star_rating
-                      alongside a star_certificate to prove it, and 0 of 291,692
-                      supplier ratings are fractional. The 4.5 on their page is
-                      TripAdvisor's review average, not a classification, and we
-                      do not use review ratings — the star rating is the
-                      rating. */}
-                  <Field label="Star rating — official classification (overrides supplier)">
+                      value. Half steps allowed (migration 046): Tina marks a lighter
+                      five-star as 4.5. No supplier is certified 4.5, so it is
+                      our judgement — put the reason in Internal notes. Filters
+                      count 4.5 as a four. */}
+                  <Field label="Star rating (overrides supplier)">
                     <select
                       className="c-select"
                       style={{ maxWidth: 240 }}
@@ -3582,7 +3582,7 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNet
                       <option value="">
                         Use supplier{supplierStars != null ? ` (${supplierStars}★)` : ''}
                       </option>
-                      {['5','4','3','2','1'].map((v) => (
+                      {['5','4.5','4','3.5','3','2.5','2','1.5','1'].map((v) => (
                         <option key={v} value={v}>{v} ★</option>
                       ))}
                     </select>
