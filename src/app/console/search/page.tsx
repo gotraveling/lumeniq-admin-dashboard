@@ -165,6 +165,9 @@ type AdminRate = {
   /** Facilities of the matched room, as supplier slugs ('private-bathroom',
    *  'air-conditioning', 'tv', …). Empty when the rate matched no static room. */
   roomAmenities?: string[] | null;
+  /** Room size read from the supplier's room description, e.g. "125 m²".
+   *  Null when the description gives none (all RateHawk rooms today). */
+  roomSize?: { sqmMin: number; sqmMax: number; label: string } | null;
   /** The property's OWN rate name, when the supplier exposes it — RateHawk's
    *  room_name_info.original_rate_name, which is permissioned and currently
    *  null for us. roomTypeName stays the primary name; this is extra detail
@@ -5396,6 +5399,8 @@ function RoomGroupedRates({
         const groupAmenities = Array.from(new Set(
           g.rates.flatMap(r => r.roomAmenities || [])
         ));
+        // Same room across the group, so the first rate that has a size speaks for all.
+        const groupSize = g.rates.find(r => r.roomSize)?.roomSize?.label || null;
         // Valentin (2026-05-28): show 3–5 rate options per room with
         // different conditions, not just the cheapest. We surface the
         // top 3 by composite score and collapse the rest behind a
@@ -5479,6 +5484,11 @@ function RoomGroupedRates({
                         {(presByName.get(g.name)?.sleeps ?? 0) > 0 && (
                           <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--c-fg-muted)' }}>
                             Sleeps {presByName.get(g.name)!.sleeps}
+                          </span>
+                        )}
+                        {groupSize && (
+                          <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--c-fg-muted)' }}>
+                            {groupSize}
                           </span>
                         )}
                         {g.supplierCount > 1 && (
