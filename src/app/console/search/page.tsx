@@ -168,6 +168,9 @@ type AdminRate = {
   /** Room size read from the supplier's room description, e.g. "125 m²".
    *  Null when the description gives none (all RateHawk rooms today). */
   roomSize?: { sqmMin: number; sqmMax: number; label: string } | null;
+  /** Rooms left at this rate when the supplier gives a real count (RateHawk
+   *  2-98). Null otherwise: RateHawk's 1 means "no count", not a last room. */
+  roomsLeft?: number | null;
   /** The property's OWN rate name, when the supplier exposes it — RateHawk's
    *  room_name_info.original_rate_name, which is permissioned and currently
    *  null for us. roomTypeName stays the primary name; this is extra detail
@@ -5842,6 +5845,12 @@ function RoomGroupedRates({
                               title="Supplier must confirm this rate before it's booked — it is NOT instant, and must not be charged until confirmed."
                               style={{ display: 'inline-flex', alignItems: 'center', gap: 3, marginBottom: 4, padding: '1px 7px', borderRadius: 999, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#92600a', background: 'rgba(245,177,66,0.18)', border: '1px solid rgba(245,177,66,0.5)', cursor: 'help' }}
                             ><AlertTriangle size={10} /> On request</div>
+                          )}
+                          {r.roomsLeft != null && r.roomsLeft <= 5 && (
+                            <div
+                              title="Rooms the supplier says are left at this price."
+                              style={{ marginBottom: 4, fontSize: 10.5, fontWeight: 700, color: 'var(--c-danger, #b4232a)' }}
+                            >Only {r.roomsLeft} left</div>
                           )}
                           {(() => {
                             const c = cancellationCopy(r);
