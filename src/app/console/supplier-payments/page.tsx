@@ -62,6 +62,17 @@ export default function SupplierPaymentsPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // The reminder email links to #supplier-period; scroll there and open the form
+  // once the periods have loaded.
+  useEffect(() => {
+    const id = typeof window !== 'undefined' ? window.location.hash.slice(1) : '';
+    if (!id || !periods.length) return;
+    const p = periods.find(x => `${x.supplier}-${x.periodStart}` === id);
+    if (!p) return;
+    document.getElementById(id)?.scrollIntoView({ block: 'start' });
+    if (p.dueDate && p.invoice?.status !== 'paid') setEditing(`${p.supplier}|${p.periodStart}`);
+  }, [periods]);
+
   return (
     <div style={{ padding: 24, maxWidth: 1100 }}>
       <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Supplier payments</h1>
@@ -83,7 +94,7 @@ export default function SupplierPaymentsPage() {
         const mismatch = inv?.status === 'paid' && inv.amount != null && inv.currency
           && p.expected[inv.currency] != null && Math.abs(p.expected[inv.currency] - inv.amount) >= 0.01;
         return (
-          <section key={key} className="c-card" style={{ marginTop: 16, padding: 16, border: '1px solid var(--c-border)', borderRadius: 8 }}>
+          <section key={key} id={`${p.supplier}-${p.periodStart}`} className="c-card" style={{ marginTop: 16, padding: 16, border: '1px solid var(--c-border)', borderRadius: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 15 }}>
