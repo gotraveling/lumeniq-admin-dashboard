@@ -14,7 +14,7 @@ import { useCallback, useEffect, useState } from 'react';
 type Net = { amount: number | null; currency: string | null };
 type Line = {
   internalBookingId: string; supplierBookingId: string; supplierOrderId: string | null;
-  status: string; counted: boolean; createdAt: string; checkIn: string | null;
+  status: string; counted: boolean; createdAt: string; checkIn: string | null; checkOut: string | null;
   hotelId: string | number | null; hotelName: string | null; guest: string | null; net: Net;
 };
 type Period = {
@@ -103,7 +103,7 @@ export default function SupplierPaymentsPage() {
                 <div style={{ fontSize: 12.5, color: 'var(--c-fg-muted)', marginTop: 2 }}>
                   {p.dueDate ? <>Invoice date {fmtDate(p.dueDate)}</> : p.terms}
                   {' · '}{p.bookingCount} booking{p.bookingCount === 1 ? '' : 's'}
-                  {' · '}expected <b style={{ color: 'var(--c-fg)' }}>{totals(p.expected)}</b>
+                  {' · '}expected net <b style={{ color: 'var(--c-fg)' }}>{totals(p.expected)}</b>
                   {p.missingNet > 0 && <> · {p.missingNet} with no net recorded</>}
                 </div>
               </div>
@@ -135,7 +135,7 @@ export default function SupplierPaymentsPage() {
 
             <table className="c-table" style={{ marginTop: 12 }}>
               <thead>
-                <tr><th>Supplier order</th><th>Hotel</th><th>Guest</th><th>Booked</th><th>Check-in</th><th>Net</th><th>Status</th></tr>
+                <tr><th>Supplier order</th><th>Hotel</th><th>Guest</th><th>Booked</th><th>Stay</th><th>Net (what we pay)</th><th>Status</th></tr>
               </thead>
               <tbody>
                 {p.bookings.map(b => (
@@ -147,7 +147,7 @@ export default function SupplierPaymentsPage() {
                     <td>{b.hotelName || (b.hotelId ? `Hotel #${b.hotelId}` : '—')}</td>
                     <td>{b.guest || '—'}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(b.createdAt)}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(b.checkIn)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(b.checkIn)} – {fmtDate(b.checkOut)}</td>
                     <td className="c-mono" style={{ whiteSpace: 'nowrap' }}>{money(b.net.amount, b.net.currency)}</td>
                     <td style={{ fontSize: 12 }}>
                       {b.status}{!b.counted && <div>not counted, check invoice for a penalty</div>}
