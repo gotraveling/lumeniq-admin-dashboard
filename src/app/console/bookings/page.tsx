@@ -12,8 +12,11 @@ interface Booking {
   supplierId: string;
   // The number on the supplier's invoice (RateHawk's order id), for reconciling.
   supplierReference?: string | null;
-  // The hotel's own confirmation: what the guest quotes at the front desk.
+  // The hotel's own confirmation number (HCN): what the guest quotes at the
+  // front desk. Often arrives a day or two after booking.
   hotelConfirmation?: string | null;
+  // The confirmation from whoever RateHawk booked through. Not the hotel's.
+  supplierConfirmation?: string | null;
   guestInfo: any;
   contactInfo?: any;
   bookingDetails: any;
@@ -347,6 +350,7 @@ export default function ConsoleBookingsPage() {
             </tbody>
           </table>
         )}
+        <ReferenceKey />
       </div>
 
       <BookingDetailSidebar
@@ -876,8 +880,13 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
                 Hotel confirmation:{' '}
                 {b.hotelConfirmation
                   ? <span className="c-mono" style={{ color: 'var(--c-fg)' }}>{b.hotelConfirmation}</span>
-                  : <span>not given yet</span>}
+                  : <span>not sent by the hotel yet (give the guest the supplier ref)</span>}
               </span>
+              {b.supplierConfirmation && (
+                <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
+                  Supplier confirmation: <span className="c-mono" style={{ color: 'var(--c-fg)' }}>{b.supplierConfirmation}</span>
+                </span>
+              )}
             </div>
           </Section>
 
@@ -1271,4 +1280,29 @@ function StatusPill({ status }: { status: string }) {
     default:
       return <span className="c-pill c-pill-muted"><AlertTriangle size={11} /> {status}</span>;
   }
+}
+
+// What each number on a booking is, and who uses it. Which one to give a
+// client should not live in someone's head.
+function ReferenceKey() {
+  const rows: [string, string, string][] = [
+    ['Booking ref (BK-…)', 'Our own number.', 'Us and the client.'],
+    ['Supplier ref', "The supplier's reservation number. RateHawk prints it on their invoice and on the voucher.", 'Reconciling invoices, talking to RateHawk support. The hotel can find the booking by it.'],
+    ['Hotel conf', "The hotel's own confirmation number. The hotel sends it to the supplier, usually within 48 hours of booking, sometimes later or never.", 'Give this to the client to quote at the hotel. Until it arrives, give them the supplier ref.'],
+    ['Supplier confirmation', 'The confirmation from the company RateHawk booked through. Not the hotel\'s.', 'Only if RateHawk support asks for it.'],
+    ['Supplier booking #', "The supplier's internal number for the room.", 'Nobody day to day; still searchable.'],
+  ];
+  return (
+    <div style={{ marginTop: 20, fontSize: 12.5 }}>
+      <div style={{ fontWeight: 700, marginBottom: 6 }}>What the numbers mean</div>
+      <table className="c-table">
+        <thead><tr><th>Number</th><th>What it is</th><th>Use it for</th></tr></thead>
+        <tbody>
+          {rows.map(([n, what, use]) => (
+            <tr key={n}><td style={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{n}</td><td>{what}</td><td>{use}</td></tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
