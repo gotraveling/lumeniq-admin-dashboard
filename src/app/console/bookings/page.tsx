@@ -10,6 +10,10 @@ interface Booking {
   bookingId: string;
   status: string;
   supplierId: string;
+  // The number on the supplier's invoice (RateHawk's order id), for reconciling.
+  supplierReference?: string | null;
+  // The hotel's own confirmation: what the guest quotes at the front desk.
+  hotelConfirmation?: string | null;
   guestInfo: any;
   contactInfo?: any;
   bookingDetails: any;
@@ -128,7 +132,7 @@ export default function ConsoleBookingsPage() {
       if (supplierFilter !== 'all' && b.supplierId !== supplierFilter) return false;
       if (!s) return true;
       const haystack = [
-        b.bookingId, b.internalBookingId, b.confirmationNumber,
+        b.bookingId, b.internalBookingId, b.confirmationNumber, b.supplierReference, b.hotelConfirmation,
         b.guestInfo?.firstName, b.guestInfo?.lastName, b.guestInfo?.email,
         b.bookingDetails?.hotelId, b.hotelName, b.hotelCity
       ].filter(Boolean).join(' ').toLowerCase();
@@ -163,7 +167,7 @@ export default function ConsoleBookingsPage() {
           />
           <input
             className="c-input"
-            placeholder="Search booking ref, email, hotel name or id…"
+            placeholder="Search booking ref, supplier ref, email, hotel name or id…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ paddingLeft: 30 }}
@@ -238,6 +242,18 @@ export default function ConsoleBookingsPage() {
                         {b.supplierId}
                         {b.createdAt ? ` · ${fmtCreatedShort(b.createdAt)}` : ''}
                       </div>
+                      {b.supplierReference && (
+                        <div className="c-mono" style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}
+                          title="The number on the supplier's invoice">
+                          Supplier ref {b.supplierReference}
+                        </div>
+                      )}
+                      {b.hotelConfirmation && (
+                        <div className="c-mono" style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}
+                          title="The hotel's confirmation number: what the guest quotes at the hotel">
+                          Hotel conf {b.hotelConfirmation}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <div style={{ fontWeight: 500 }}>{guest.firstName} {guest.lastName}</div>
@@ -849,11 +865,19 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
           <Section label="Status">
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <StatusPill status={b.status} />
-              {b.confirmationNumber && (
+              {/* Supplier ref is the number on their invoice (RateHawk's order
+                  id). The hotel confirmation is what the guest uses. */}
+              {b.supplierReference && (
                 <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
-                  Supplier ref: <span className="c-mono" style={{ color: 'var(--c-fg)' }}>{b.confirmationNumber}</span>
+                  Supplier ref: <span className="c-mono" style={{ color: 'var(--c-fg)' }}>{b.supplierReference}</span>
                 </span>
               )}
+              <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }} title="What the guest quotes at the hotel">
+                Hotel confirmation:{' '}
+                {b.hotelConfirmation
+                  ? <span className="c-mono" style={{ color: 'var(--c-fg)' }}>{b.hotelConfirmation}</span>
+                  : <span>not given yet</span>}
+              </span>
             </div>
           </Section>
 
@@ -1164,7 +1188,7 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
           <Section label="References">
             <KV k="Internal ref" v={<span className="c-mono">{b.internalBookingId}</span>} />
             <KV k="Supplier ref" v={<span className="c-mono">{b.bookingId}</span>} />
-            {b.confirmationNumber && <KV k="Confirmation #" v={<span className="c-mono">{b.confirmationNumber}</span>} />}
+            {b.confirmationNumber && <KV k="Supplier booking #" v={<span className="c-mono">{b.confirmationNumber}</span>} />}
           </Section>
 
           {b.specialRequests && (
