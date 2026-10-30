@@ -5309,9 +5309,24 @@ function RoomGroupedRates({
       const supplierCount = new Set(
         list.map(r => (r.supplier || '').toLowerCase()).filter(Boolean)
       ).size;
-      return { name, rates: ordered, recommendedKey, sellBySig, supplierCount };
+      // Size in m² for the room-size filter: the first rate that states one
+      // (same room across the group). Null when the supplier gives none.
+      const sqm = list.find(r => r.roomSize)?.roomSize?.sqmMin ?? null;
+      return { name, rates: ordered, recommendedKey, sellBySig, supplierCount, sqm };
     });
   }, [rates, comparing, roomMap]);
+  // Room-size filter (Tina books by size when room names are ambiguous).
+  // Rooms with no stated size are hidden while a minimum is set, and counted
+  // so it is clear they were not ruled out by size.
+  const [minSqm, setMinSqm] = useState(0);
+  const [largestFirst, setLargestFirst] = useState(false);
+  const anySized = groups.some(g => g.sqm != null);
+  const unsizedHidden = minSqm > 0 ? groups.filter(g => g.sqm == null).length : 0;
+  const shownGroups = useMemo(() => {
+    let out = minSqm > 0 ? groups.filter(g => g.sqm != null && g.sqm >= minSqm) : groups;
+    if (largestFirst) out = [...out].sort((a, b) => (b.sqm ?? -1) - (a.sqm ?? -1));
+    return out;
+  }, [groups, minSqm, largestFirst]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Per-room "Matrix" view: pivot this room's rates by meal (rows) × transfer (cols).
   const [matrixView, setMatrixView] = useState<Set<string>>(new Set());
@@ -5372,7 +5387,7 @@ function RoomGroupedRates({
     <div style={{ marginTop, display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg)' }}>
-          Available rooms ({groups.length})
+          Available rooms ({shownGroups.length}{shownGroups.length !== groups.length ? ` of ${groups.length}` : ''})
         </span>
         {nightsLabel && (
           <span
@@ -5386,7 +5401,27 @@ function RoomGroupedRates({
           </span>
         )}
       </div>
-      {groups.map((g) => {
+      {anySized && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            Room size
+            <select className="c-select" value={minSqm} onChange={e => setMinSqm(Number(e.target.value))}>
+              <option value={0}>Any size</option>
+              {[30, 50, 75, 100, 150, 200, 300, 500].map(n => <option key={n} value={n}>{n} m² or more</option>)}
+            </select>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input type="checkbox" checked={largestFirst} onChange={e => setLargestFirst(e.target.checked)} />
+            Largest first
+          </label>
+          {unsizedHidden > 0 && (
+            <span style={{ color: 'var(--c-fg-muted)' }}>
+              {unsizedHidden} room{unsizedHidden === 1 ? '' : 's'} with no size from the supplier hidden
+            </span>
+          )}
+        </div>
+      )}
+      {shownGroups.map((g) => {
         // Every photo we hold for this room. roomImages carries the full set;
         // roomImage is just the first, which is why a room with 8 photos used
         // to read "1 photo". Deduped because the rates in a group share a room.
