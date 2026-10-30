@@ -19,6 +19,7 @@ type Net = { amount: number | null; currency: string | null };
 type Line = {
   internalBookingId: string; supplierBookingId: string; supplierOrderId: string | null;
   status: string; counted: boolean; createdAt: string; checkIn: string | null; checkOut: string | null;
+  freeCancelUntil: string | null;
   hotelId: string | number | null; hotelName: string | null; guest: string | null; net: Net;
 };
 type Period = {
@@ -149,7 +150,7 @@ export default function SupplierPaymentsPage() {
 
             <table className="c-table" style={{ marginTop: 12 }}>
               <thead>
-                <tr><th>Supplier order</th><th>Hotel</th><th>Guest</th><th>Booked</th><th>Stay</th><th>Net (what we pay)</th><th>Status</th></tr>
+                <tr><th>Supplier order</th><th>Hotel</th><th>Guest</th><th>Booked</th><th>Stay</th><th>Free cancel until</th><th>Net (what we pay)</th><th>Status</th></tr>
               </thead>
               <tbody>
                 {p.bookings.map(b => (
@@ -162,6 +163,9 @@ export default function SupplierPaymentsPage() {
                     <td>{b.guest || '—'}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(b.createdAt)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(b.checkIn)} – {fmtDate(b.checkOut)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {!b.counted ? '—' : b.freeCancelUntil ? fmtDate(b.freeCancelUntil.slice(0, 10)) : 'Non-refundable'}
+                    </td>
                     <td className="c-mono" style={{ whiteSpace: 'nowrap' }}>{money(b.net.amount, b.net.currency)}</td>
                     <td style={{ fontSize: 12 }}>
                       {b.status}{!b.counted && <div>not counted, check invoice for a penalty</div>}
