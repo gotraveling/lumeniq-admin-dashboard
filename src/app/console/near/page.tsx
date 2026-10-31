@@ -34,19 +34,37 @@ type Hotel = {
 };
 
 const API = '/api/admin/places';
-const TAGS: Array<{ value: string; label: string }> = [
-  { value: '', label: '—' },
-  { value: 'inside', label: 'Inside' },
-  { value: 'connected', label: 'Connected' },
-  { value: 'walkable', label: 'Walkable' },
-  { value: 'short-ride', label: 'Short ride' },
-  { value: 'not-close', label: 'Not close' },
+const TAGS: Array<{ value: string; label: string; meaning: string; colour: string }> = [
+  { value: '', label: 'Not tagged yet', meaning: '', colour: 'var(--c-fg-muted)' },
+  { value: 'inside', label: 'Inside', meaning: 'in the same building, e.g. a hotel in the terminal', colour: 'var(--c-success)' },
+  { value: 'connected', label: 'Connected', meaning: 'linked by a covered walkway or skybridge, no need to go outside', colour: 'var(--c-success)' },
+  { value: 'walkable', label: 'Walkable', meaning: 'a comfortable walk outside', colour: 'var(--c-accent)' },
+  { value: 'short-ride', label: 'Short ride', meaning: 'a quick taxi or shuttle', colour: 'var(--c-warn)' },
+  { value: 'not-close', label: 'Not close', meaning: 'looks near on the map, but getting there takes real travel', colour: 'var(--c-danger)' },
 ];
+const tagColour = (p: string | null | undefined) => (TAGS.find((t) => t.value === (p || '')) || TAGS[0]).colour;
+
+// Plain-English versions of the messages hotel-api sends back.
+const SETUP_PLAIN = 'This page is not switched on yet, so search shows nothing and notes can\'t be saved. Ask Murali to finish the setup.';
+const REAL_OFF_PLAIN = 'Real Google times are not switched on yet, so only the estimates show for now.';
+function plain(m: string | null | undefined): string {
+  const t = m || '';
+  if (/not set up yet/i.test(t) && /migration|049/i.test(t)) return SETUP_PLAIN;
+  if (/routes key|real travel times are not set up/i.test(t)) return REAL_OFF_PLAIN;
+  if (/unauthori[sz]ed|HTTP 401|HTTP 403/i.test(t)) return 'You are not allowed to save here. Ask Murali for access.';
+  if (/HTTP 5\d\d|failed to fetch|network/i.test(t)) return 'Something went wrong on our side. Please try again in a minute.';
+  return t || 'Something went wrong. Please try again.';
+}
 const ATTR_SUGGESTIONS = [
   'quiet-at-night', 'good-for-families', 'business-friendly', 'great-views', 'rooftop-bar',
   'near-public-transport', 'not-walkable-at-night', 'airport-shuttle', 'day-use-rooms', 'accessible',
 ];
 const RADII = [1, 2, 3, 5, 10, 20];
+const STARS: Array<{ value: number; label: string }> = [
+  { value: 0, label: 'Any stars' }, { value: 3, label: '3★ and up' }, { value: 4, label: '4★ and up' },
+  { value: 4.5, label: '4.5★ and up' }, { value: 5, label: '5★ only' },
+];
+const muted: React.CSSProperties = { fontSize: 12, color: 'var(--c-fg-muted)' };
 const KIND_LABEL: Record<string, string> = { airport: 'Airport', venue: 'Venue', landmark: 'Landmark' };
 
 const fmtMin = (m: number | null | undefined) =>
@@ -88,7 +106,7 @@ export default function NearPlacePage() {
 
   useEffect(() => {
     call('config').then((j) => { setRealOn(!!j.real_times); setRealMsg(j.real_times_message || null); })
-      .catch(() => setRealMsg('Could not reach hotel-api.'));
+      .catch(() => setRealMsg('Could not check whether real Google times are on. Refresh the page to try again.'));
   }, []);
 
   // Search as you type (debounced). Empty box lists the events.
@@ -100,8 +118,8 @@ export default function NearPlacePage() {
         if (kind) params.set('kind', kind);
         const j = await call(`search?${params}`);
         setPlaces(j.places || []); setEvents(j.events || []);
-        setSetupMsg(j.setup === false ? j.message : null);
-      } catch (e: any) { setErr(e.message); }
+        setSetupMsg(j.setup === false ? plain(j.message) : null);
+      } catch (e: any) { setErr(plain(e.message)); }
       finally { setSearching(false); }
     }, 250);
     return () => clearTimeout(t);
@@ -114,7 +132,8 @@ export default function NearPlacePage() {
       setPlace(j.place || p); setPlaceEvents(j.events || []); setHotels(j.hotels || []);
       setBasis(j.estimate_basis || '');
       setRealOn(!!j.real_times); setRealMsg(j.real_times_message || null);
-    } catch (e: any) { setErr(e.message); }
+      if (j.setup === false) setSetupMsg(plain(j.message));
+    } catch (e: any) { setErr(plain(e.message)); }
     finally { setLoading(false); }
   }, [radius, minStars]);
 
@@ -127,11 +146,15 @@ export default function NearPlacePage() {
       const ids = hotels.slice(0, 20).map((h) => h.hotel_id);
       const j = await send(`${place.id}/travel-times`, 'POST', { hotel_ids: ids });
       if (j.configured === false) { setRealOn(false); setRealMsg(j.error); return; }
+      const n = (j.fetched || 0) + (j.cached || 0);
       setRealNote(
-        `${j.fetched} asked from Google, ${j.cached} already saved` +
-        (j.errors?.length ? ` · ${j.errors.join('; ')}` : ''));
+        `Real times ready for ${n} hotel${n === 1 ? '' : 's'} (${j.fetched || 0} new from Google, ${j.cached || 0} already saved).` +
+        (j.errors?.length ? ` Some could not be fetched: ${j.errors.join('; ')}` : ''));
       await load(place);
-    } catch (e: any) { setErr(e.message); }
+    } catch (e: any) {
+      const m = plain(e.message);
+      if (m === REAL_OFF_PLAIN) { setRealOn(false); setRealMsg(m); } else setErr(m);
+    }
     finally { setRealBusy(false); }
   };
 
@@ -139,23 +162,30 @@ export default function NearPlacePage() {
     setHotels((hs) => hs.map((h) => (h.hotel_id === id ? fn(h) : h)));
 
   return (
-    <div style={{ padding: 24, maxWidth: 1400 }}>
-      <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Near a place</h1>
-      <div style={{ fontSize: 13, color: 'var(--c-fg-muted)', marginTop: 4 }}>
-        Test page for the &ldquo;near a place&rdquo; idea (walk to the hotel). Preview only, nothing here shows on the website yet.
+    <div className="near-page">
+      <style>{NEAR_CSS}</style>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Near a place</h1>
+        <span className="c-pill c-pill-warn">Test page</span>
       </div>
+      <p style={{ fontSize: 13, color: 'var(--c-fg-soft)', margin: '6px 0 0', maxWidth: '75ch', lineHeight: 1.5 }}>
+        Find our hotels close to an airport, venue, landmark or event, and record what you know about each one.
+        Nothing here shows on the website yet. Your tags and notes are saved for good and stay put when suppliers update their hotel lists.
+      </p>
 
-      {setupMsg && <div className="c-error" style={{ marginTop: 12 }}>{setupMsg}</div>}
-      {err && <div className="c-error" style={{ marginTop: 12 }}>{err}</div>}
+      {setupMsg && <div className="c-error" role="alert" style={{ marginTop: 12 }}>{setupMsg}</div>}
+      {err && <div className="c-error" role="alert" style={{ marginTop: 12 }}>{err}</div>}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 340px) 1fr', gap: 16, marginTop: 16, alignItems: 'start' }}>
+      <div className="near-layout">
         {/* ---- search */}
         <div className="c-card">
           <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <label className="c-label" htmlFor="near-q">Airport, venue, landmark or event</label>
+            <label className="c-label" htmlFor="near-q">Find a place</label>
             <input id="near-q" className="c-input" placeholder="e.g. SYD, Melbourne Park, Wimbledon, Paris"
-              value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
-            <select className="c-input" value={kind} onChange={(e) => setKind(e.target.value)}>
+              value={q} onChange={(e) => setQ(e.target.value)} autoFocus aria-describedby="near-q-help" />
+            <div id="near-q-help" style={muted}>Type a name, a city or a 3-letter airport code, then pick it from the list.</div>
+            <label className="c-label" htmlFor="near-kind" style={{ marginTop: 4, marginBottom: 0 }}>Show</label>
+            <select id="near-kind" className="c-input" value={kind} onChange={(e) => setKind(e.target.value)}>
               <option value="">Everything</option>
               <option value="airport">Airports</option>
               <option value="venue">Venues</option>
@@ -168,7 +198,7 @@ export default function NearPlacePage() {
               <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>Searching…</div>
             )}
             {places.map((p) => (
-              <button key={`p${p.id}`} onClick={() => pick(p)} style={rowBtn(place?.id === p.id)}>
+              <button key={`p${p.id}`} onClick={() => pick(p)} style={rowBtn(place?.id === p.id)} aria-pressed={place?.id === p.id}>
                 <div style={{ fontWeight: 600 }}>
                   {p.kind === 'airport' && <span className="c-mono" style={{ marginRight: 6 }}>{p.code}</span>}
                   {p.name}
@@ -179,20 +209,28 @@ export default function NearPlacePage() {
               </button>
             ))}
             {events.length > 0 && (
-              <div style={{ padding: '8px 12px 4px', fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', textTransform: 'uppercase' }}>Events</div>
+              <div style={{ padding: '8px 12px 4px', fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', textTransform: 'uppercase' }}>
+                {q.trim() ? 'Events' : 'Events (or type above to search)'}
+              </div>
             )}
             {events.map((ev) => (
-              <button key={`e${ev.id}`} onClick={() => ev.place && pick(ev.place)} style={rowBtn(place?.id === ev.place?.id)}>
+              <button key={`e${ev.id}`} onClick={() => ev.place && pick(ev.place)} disabled={!ev.place}
+                style={rowBtn(!!ev.place && place?.id === ev.place?.id)} aria-pressed={!!ev.place && place?.id === ev.place?.id}>
                 <div style={{ fontWeight: 600 }}>
-                  {ev.name} {ev.is_test && <span className="c-pill c-pill-warn" style={{ marginLeft: 4 }}>test</span>}
+                  {ev.name} {ev.is_test && <span className="c-pill c-pill-warn" style={{ marginLeft: 4 }} title="Made-up example event for testing">example</span>}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
-                  @ {ev.place?.name} · {fmtDate(ev.starts_on)}{ev.ends_on && ev.ends_on !== ev.starts_on ? ` – ${fmtDate(ev.ends_on)}` : ''}
+                  at {ev.place?.name} · {fmtDate(ev.starts_on)}{ev.ends_on && ev.ends_on !== ev.starts_on ? ` – ${fmtDate(ev.ends_on)}` : ''}
                 </div>
               </button>
             ))}
             {!searching && q.trim() && places.length === 0 && events.length === 0 && !setupMsg && (
-              <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>Nothing matches. Try the city name or the IATA code.</div>
+              <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>
+                Nothing matches &ldquo;{q.trim()}&rdquo;. Try the city name or the 3-letter airport code instead.
+              </div>
+            )}
+            {!searching && !q.trim() && places.length === 0 && events.length === 0 && !setupMsg && (
+              <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>Start typing above to see places.</div>
             )}
           </div>
         </div>
@@ -200,8 +238,14 @@ export default function NearPlacePage() {
         {/* ---- place + hotels */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
           {!place ? (
-            <div className="c-card" style={{ padding: 24, fontSize: 13, color: 'var(--c-fg-muted)' }}>
-              Pick a place on the left to see our hotels around it.
+            <div className="c-card" style={{ padding: 24, fontSize: 13, color: 'var(--c-fg-soft)', lineHeight: 1.6 }}>
+              <div className="c-empty-title">How this works</div>
+              <ol style={{ margin: '8px 0 0', paddingLeft: 20 }}>
+                <li><strong>Find a place</strong> on the left: an airport, stadium, landmark or event.</li>
+                <li>See <strong>our hotels around it</strong>, nearest first, with a rough walk and drive time for each.</li>
+                <li>Click <strong>Get real times</strong> to ask Google for actual walk, drive and public transport times.</li>
+                <li><strong>Tag each hotel</strong> (Inside, Connected, Walkable, Short ride, Not close) and add a note. These are saved for good.</li>
+              </ol>
             </div>
           ) : (
             <>
@@ -215,8 +259,12 @@ export default function NearPlacePage() {
                     <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginTop: 2 }}>
                       {KIND_LABEL[place.kind]}{place.category && place.kind !== 'airport' ? ` · ${place.category}` : ''} · {[place.city, place.country].filter(Boolean).join(', ')}
                       {' · '}
-                      <a href={`https://www.google.com/maps?q=${place.latitude},${place.longitude}`} target="_blank" rel="noreferrer">map</a>
-                      {!place.coords_verified && <span className="c-pill c-pill-warn" style={{ marginLeft: 6 }}>location to check</span>}
+                      <a href={`https://www.google.com/maps?q=${place.latitude},${place.longitude}`} target="_blank" rel="noreferrer">open in Google Maps</a>
+                      {!place.coords_verified && (
+                        <span className="c-pill c-pill-warn" style={{ marginLeft: 6 }} title="The pin for this place has not been checked by hand yet, so distances could be slightly off.">
+                          pin not checked yet
+                        </span>
+                      )}
                     </div>
                     {placeEvents.length > 0 && (
                       <div style={{ fontSize: 12, marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -229,59 +277,92 @@ export default function NearPlacePage() {
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <label className="c-label" style={{ margin: 0 }}>Within</label>
-                    <select className="c-input" value={radius} onChange={(e) => { const r = Number(e.target.value); setRadius(r); void load(place, r, minStars); }}>
+                    <label className="c-label" htmlFor="near-radius" style={{ margin: 0 }}>Within</label>
+                    <select id="near-radius" className="c-input" value={radius} onChange={(e) => { const r = Number(e.target.value); setRadius(r); void load(place, r, minStars); }}>
                       {RADII.map((r) => <option key={r} value={r}>{r} km</option>)}
                     </select>
-                    <select className="c-input" value={minStars} onChange={(e) => { const s = Number(e.target.value); setMinStars(s); void load(place, radius, s); }}>
-                      <option value={0}>Any stars</option>
-                      <option value={3}>3★ and up</option>
-                      <option value={4}>4★ and up</option>
-                      <option value={4.5}>4.5★ and up</option>
-                      <option value={5}>5★</option>
+                    <label className="c-label" htmlFor="near-stars" style={{ margin: 0 }}>Stars</label>
+                    <select id="near-stars" className="c-input" value={minStars} onChange={(e) => { const s = Number(e.target.value); setMinStars(s); void load(place, radius, s); }}>
+                      {STARS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                     </select>
                     <button className="c-btn c-btn-primary" onClick={getRealTimes}
                       disabled={!realOn || realBusy || hotels.length === 0}
-                      title={realOn ? 'Ask Google for walk, drive and public transport times for the nearest 20. Saved, so asking again is free.' : (realMsg || '')}>
+                      aria-describedby="near-real-help">
                       {realBusy ? 'Asking Google…' : 'Get real times'}
                     </button>
                   </div>
                 </div>
-                {(!realOn && realMsg) && <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--c-fg-muted)' }}>{realMsg}</div>}
-                {realNote && <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--c-fg-soft)' }}>{realNote}</div>}
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 0, borderTop: '1px solid var(--c-line-soft)' }}>
+                <div id="near-real-help" style={{ padding: '8px 16px', ...muted }}>
+                  {realOn
+                    ? 'Get real times asks Google for walk, drive and public transport times for the nearest 20 hotels. Answers are saved, so asking again costs nothing.'
+                    : (realMsg ? plain(realMsg) : REAL_OFF_PLAIN)}
+                </div>
+                {realNote && <div role="status" style={{ padding: '0 16px 8px', fontSize: 12, color: 'var(--c-success)' }}>{realNote}</div>}
+                <div className="near-maps">
                   <OsmMap place={place} radiusKm={radius} />
                   <Plot place={place} hotels={hotels} radiusKm={radius} focus={focus} onFocus={setFocus} />
+                </div>
+                <div style={{ padding: '8px 16px', display: 'flex', gap: 12, flexWrap: 'wrap', ...muted }}>
+                  <span><Dot colour="var(--c-fg)" /> the place</span>
+                  {TAGS.map((t) => <span key={t.value}><Dot colour={t.colour} /> {t.label}</span>)}
+                  <span>· Click a dot to find that hotel in the list.</span>
                 </div>
               </div>
 
               <div className="c-card">
                 <div className="c-card-head">
                   <h2 className="c-card-title">
-                    {loading ? 'Loading…' : `${hotels.length} hotel${hotels.length === 1 ? '' : 's'} within ${radius} km`}
+                    {loading ? 'Finding hotels…' : `${hotels.length} hotel${hotels.length === 1 ? '' : 's'} within ${radius} km, nearest first`}
                   </h2>
-                  <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }} title={basis}>
-                    Est. = straight line × 1.3, walking 5 km/h. Real = Google.
-                  </span>
+                </div>
+                <div style={{ padding: '10px 16px', fontSize: 12, color: 'var(--c-fg-soft)', lineHeight: 1.6, borderBottom: '1px solid var(--c-line-soft)' }}>
+                  <div title={basis}>
+                    <strong>Rough estimate</strong> columns are worked out from the distance on the map, so treat them as a guide.{' '}
+                    <strong>Google</strong> columns are real times and stay blank until you click Get real times.
+                  </div>
+                  <div style={{ marginTop: 4 }}>
+                    <strong>Your tag:</strong>{' '}
+                    {TAGS.filter((t) => t.value).map((t, i) => (
+                      <span key={t.value}>{i > 0 && ' · '}<strong>{t.label}</strong> = {t.meaning}</span>
+                    ))}.
+                  </div>
+                  <div style={{ marginTop: 4 }}>
+                    Tags and notes are for this hotel and this place. Facts like &ldquo;quiet at night&rdquo; belong to the hotel and show for every place.
+                  </div>
                 </div>
                 {hotels.length === 0 && !loading ? (
                   <div className="c-empty" style={{ padding: 24, fontSize: 13 }}>
-                    No hotels in range. Try a bigger radius or fewer stars.
+                    <div className="c-empty-title">No hotels found</div>
+                    <div>Nothing within {radius} km{minStars ? ` at ${STARS.find((s) => s.value === minStars)?.label || `${minStars}★ and up`}` : ''}. Try a bigger distance or fewer stars.</div>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 12 }}>
+                      {RADII.find((r) => r > radius) && (
+                        <button className="c-btn" onClick={() => { const r = RADII.find((x) => x > radius)!; setRadius(r); void load(place, r, minStars); }}>
+                          Widen to {RADII.find((r) => r > radius)} km
+                        </button>
+                      )}
+                      {minStars > 0 && (
+                        <button className="c-btn" onClick={() => { setMinStars(0); void load(place, radius, 0); }}>Show any stars</button>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div style={{ overflowX: 'auto' }}>
                     <table className="c-table">
                       <thead>
                         <tr>
-                          <th>#</th>
-                          <th>Hotel</th>
-                          <th>Distance</th>
-                          <th>Est. walk</th>
-                          <th>Est. drive</th>
+                          <th rowSpan={2}>#</th>
+                          <th rowSpan={2}>Hotel</th>
+                          <th rowSpan={2}>Distance</th>
+                          <th colSpan={2} scope="colgroup">Rough estimate</th>
+                          <th colSpan={3} scope="colgroup">Google (real)</th>
+                          <th rowSpan={2} style={{ minWidth: 340 }}>Your tag, note and hotel facts</th>
+                        </tr>
+                        <tr>
                           <th>Walk</th>
                           <th>Drive</th>
-                          <th>Transit</th>
-                          <th style={{ minWidth: 340 }}>What we know</th>
+                          <th>Walk</th>
+                          <th>Drive</th>
+                          <th>Public transport</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -319,6 +400,7 @@ function HotelRow({ index, hotel: h, place, focused, onFocus, onChange, onError 
 }) {
   const [note, setNote] = useState(h.note?.note || '');
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [newAttr, setNewAttr] = useState('');
   const rowRef = useRef<HTMLTableRowElement>(null);
   useEffect(() => { setNote(h.note?.note || ''); }, [h.note?.note]);
@@ -329,7 +411,8 @@ function HotelRow({ index, hotel: h, place, focused, onFocus, onChange, onError 
     try {
       const j = await send(`${place.id}/hotels/${h.hotel_id}/note`, 'PUT', body);
       onChange((x) => ({ ...x, note: j.note ? { proximity: j.note.proximity, note: j.note.note, updated_by: j.note.updated_by, updated_at: j.note.updated_at } : null }));
-    } catch (e: any) { onError(e.message); }
+      setSaved(true); setTimeout(() => setSaved(false), 3000);
+    } catch (e: any) { onError(`Could not save for ${h.name}: ${plain(e.message)}`); }
     finally { setSaving(false); }
   };
 
@@ -341,14 +424,14 @@ function HotelRow({ index, hotel: h, place, focused, onFocus, onChange, onError 
       const j = await send(`hotels/${h.hotel_id}/attributes/${attr}`, 'PUT', {});
       onChange((x) => ({ ...x, attributes: [...x.attributes.filter((a) => a.attr !== attr), { attr: j.attribute.attr, note: j.attribute.note }] }));
       setNewAttr('');
-    } catch (e: any) { onError(e.message); }
+    } catch (e: any) { onError(`Could not add that fact to ${h.name}: ${plain(e.message)}`); }
   };
   const removeAttr = async (attr: string) => {
     onError(null);
     try {
       await send(`hotels/${h.hotel_id}/attributes/${attr}`, 'DELETE');
       onChange((x) => ({ ...x, attributes: x.attributes.filter((a) => a.attr !== attr) }));
-    } catch (e: any) { onError(e.message); }
+    } catch (e: any) { onError(`Could not remove that fact from ${h.name}: ${plain(e.message)}`); }
   };
 
   const dir = (mode: string) =>
@@ -365,8 +448,8 @@ function HotelRow({ index, hotel: h, place, focused, onFocus, onChange, onError 
             <div style={{ fontWeight: 600 }}>{h.name}</div>
             <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
               {h.star_rating != null ? `${h.star_rating}★ · ` : ''}{h.city || ''}
-              {' · '}<span className="c-mono">{h.hotel_id}</span>
-              {h.also.length > 0 && <span title={h.also.map((a) => `${a.hotel_id} (${a.source})`).join(', ')}> · +{h.also.length} supplier copy</span>}
+              {' · '}<span title="Our hotel ID">ID <span className="c-mono">{h.hotel_id}</span></span>
+              {h.also.length > 0 && <span title={h.also.map((a) => `${a.hotel_id} (${a.source})`).join(', ')}> · also listed by {h.also.length} more supplier{h.also.length === 1 ? '' : 's'}</span>}
             </div>
           </div>
         </div>
@@ -379,38 +462,44 @@ function HotelRow({ index, hotel: h, place, focused, onFocus, onChange, onError 
         const gm = m === 'WALK' ? 'walking' : m === 'DRIVE' ? 'driving' : 'transit';
         return (
           <td key={m} style={{ whiteSpace: 'nowrap' }}>
-            {t ? (t.minutes == null ? <span style={{ color: 'var(--c-fg-muted)' }}>no route</span> : <strong>{fmtMin(t.minutes)}</strong>) : <span style={{ color: 'var(--c-fg-muted)' }}>—</span>}
-            <div><a href={dir(gm)} target="_blank" rel="noreferrer" style={{ fontSize: 11 }} onClick={(e) => e.stopPropagation()}>route</a></div>
+            {t ? (t.minutes == null ? <span style={{ color: 'var(--c-fg-muted)' }}>no route found</span> : <strong>{fmtMin(t.minutes)}</strong>) : <span style={{ color: 'var(--c-fg-muted)' }} title="Not asked yet">—</span>}
+            <div><a href={dir(gm)} target="_blank" rel="noreferrer" style={{ fontSize: 11 }} onClick={(e) => e.stopPropagation()}
+              aria-label={`${gm} directions from ${h.name} in Google Maps`}>directions</a></div>
           </td>
         );
       })}
       <td onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <select className="c-input" value={h.note?.proximity || ''} disabled={saving}
-            onChange={(e) => saveNote({ proximity: e.target.value || null })} style={{ fontSize: 12, width: 120 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select className="c-input" value={h.note?.proximity || ''} disabled={saving} aria-label={`How close is ${h.name}`}
+            title="Saves as soon as you pick"
+            onChange={(e) => saveNote({ proximity: e.target.value || null })} style={{ fontSize: 12, width: 130 }}>
             {TAGS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
           </select>
           <input className="c-input" style={{ fontSize: 12, flex: 1, minWidth: 140 }} placeholder="Note, e.g. skybridge to the venue"
+            aria-label={`Note about ${h.name} and ${place.name}`}
             value={note} onChange={(e) => setNote(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && dirty) void saveNote({ note }); }} />
-          {dirty && <button className="c-btn" disabled={saving} onClick={() => saveNote({ note })} style={{ fontSize: 12 }}>Save</button>}
+          {dirty && <button className="c-btn c-btn-primary" disabled={saving} onClick={() => saveNote({ note })} style={{ fontSize: 12 }}>{saving ? 'Saving…' : 'Save note'}</button>}
         </div>
-        {h.note?.updated_by && (
-          <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginTop: 2 }}>
-            {h.note.updated_by} · {new Date(h.note.updated_at).toLocaleDateString('en-AU')}
-          </div>
-        )}
+        <div role="status" style={{ fontSize: 11, marginTop: 3, minHeight: 14 }}>
+          {saved ? <span style={{ color: 'var(--c-success)', fontWeight: 600 }}>Saved. This stays even when suppliers update the hotel.</span>
+            : dirty ? <span style={{ color: 'var(--c-warn)' }}>Not saved yet: press Enter or Save note.</span>
+            : h.note?.updated_by ? <span style={{ color: 'var(--c-fg-muted)' }}>Last saved by {h.note.updated_by} on {new Date(h.note.updated_at).toLocaleDateString('en-AU')}</span>
+            : null}
+        </div>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
           {h.attributes.map((a) => (
             <span key={a.attr} className="c-pill c-pill-muted" title={a.note || ''}>
               {a.attr.replace(/-/g, ' ')}
-              <button onClick={() => removeAttr(a.attr)} aria-label={`Remove ${a.attr}`}
-                style={{ border: 0, background: 'none', cursor: 'pointer', padding: 0, marginLeft: 2, color: 'inherit' }}>×</button>
+              <button onClick={() => removeAttr(a.attr)} aria-label={`Remove "${a.attr.replace(/-/g, ' ')}" from ${h.name}`} title="Remove"
+                style={{ border: 0, background: 'none', cursor: 'pointer', padding: '0 2px', marginLeft: 2, color: 'inherit', fontSize: 13, lineHeight: 1 }}>×</button>
             </span>
           ))}
-          <input className="c-input" list="near-attr-suggest" placeholder="+ about this hotel" value={newAttr}
+          <input className="c-input" list="near-attr-suggest" placeholder="Add a hotel fact + Enter"
+            title="Facts about the hotel itself, e.g. quiet at night. They show for every place."
+            aria-label={`Add a fact about ${h.name}, e.g. quiet at night, then press Enter`} value={newAttr}
             onChange={(e) => setNewAttr(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void addAttr(); }}
-            style={{ fontSize: 11, width: 150, padding: '2px 6px' }} />
+            style={{ fontSize: 11, width: 170, padding: '2px 6px' }} />
           <datalist id="near-attr-suggest">
             {ATTR_SUGGESTIONS.map((s) => <option key={s} value={s} />)}
           </datalist>
@@ -429,7 +518,7 @@ function OsmMap({ place, radiusKm }: { place: Place; radiusKm: number }) {
   const bbox = [place.longitude - dLng, place.latitude - dLat, place.longitude + dLng, place.latitude + dLat].map((n) => n.toFixed(5)).join(',');
   const src = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${place.latitude},${place.longitude}`;
   return (
-    <iframe title="Map" src={src} style={{ width: '100%', height: 320, border: 0, borderRight: '1px solid var(--c-line-soft)' }} loading="lazy" />
+    <iframe title={`Street map around ${place.name}`} src={src} style={{ width: '100%', height: 320, border: 0 }} loading="lazy" />
   );
 }
 
@@ -444,16 +533,9 @@ function Plot({ place, hotels, radiusKm, focus, onFocus }: {
     const steps = radiusKm <= 2 ? [0.5, 1, 2] : radiusKm <= 5 ? [1, 2, 3, 5] : [2, 5, 10, 20];
     return steps.filter((r) => r <= radiusKm);
   }, [radiusKm]);
-  const colour = (h: Hotel) => {
-    const p = h.note?.proximity;
-    if (p === 'inside' || p === 'connected') return 'var(--c-success)';
-    if (p === 'walkable') return 'var(--c-accent)';
-    if (p === 'short-ride') return 'var(--c-warn)';
-    if (p === 'not-close') return 'var(--c-danger)';
-    return 'var(--c-fg-muted)';
-  };
+  const colour = (h: Hotel) => tagColour(h.note?.proximity);
   return (
-    <svg viewBox={`0 0 ${size} ${size}`} style={{ width: '100%', height: 320, background: 'var(--c-bg-soft)' }} role="img" aria-label="Hotels around the place">
+    <svg viewBox={`0 0 ${size} ${size}`} style={{ width: '100%', height: 320, background: 'var(--c-bg-soft)' }} role="img" aria-label={`${hotels.length} hotels plotted around ${place.name}, coloured by your tag`}>
       {rings.map((r) => (
         <g key={r}>
           <circle cx={c} cy={c} r={r * scale} fill="none" stroke="var(--c-line)" strokeDasharray="3 3" />
@@ -472,7 +554,27 @@ function Plot({ place, hotels, radiusKm, focus, onFocus }: {
         );
       })}
       <circle cx={c} cy={c} r={6} fill="var(--c-fg)" />
-      <text x={8} y={size - 8} fontSize={9} fill="var(--c-fg-muted)">● place · dot colour = your tag (green inside/connected, blue walkable, amber short ride, red not close)</text>
     </svg>
   );
 }
+
+function Dot({ colour }: { colour: string }) {
+  return <span aria-hidden style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: colour, verticalAlign: 'middle', marginRight: 3 }} />;
+}
+
+// Page-only layout: two columns on wide screens, stacked on narrow ones.
+const NEAR_CSS = `
+.near-page { padding: 24px; max-width: 1400px; }
+.near-layout { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 16px; margin-top: 16px; align-items: start; }
+.near-maps { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border-top: 1px solid var(--c-line-soft); }
+.near-maps > iframe { border-right: 1px solid var(--c-line-soft) !important; }
+.near-page button:focus-visible, .near-page a:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+@media (max-width: 900px) {
+  .near-page { padding: 16px; }
+  .near-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .near-maps { grid-template-columns: minmax(0, 1fr); }
+  .near-maps > iframe { border-right: 0 !important; border-bottom: 1px solid var(--c-line-soft); }
+}
+`;
