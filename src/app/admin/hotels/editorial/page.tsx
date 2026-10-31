@@ -684,6 +684,7 @@ export default function HotelEditorialPage() {
                   <MainPhotoPicker
                     hotelId={selectedHotel.hotel_id}
                     current={media.find(m => m.media_type === 'image' && m.is_featured)?.media_url || null}
+                    uploaded={media.filter(m => m.media_type === 'image' && m.title === 'Uploaded photo').map(m => m.media_url)}
                     onChanged={() => loadEditorialContent(selectedHotel.hotel_id)}
                   />
                   <div className="flex justify-between items-center mb-6">

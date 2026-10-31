@@ -7,7 +7,7 @@ import { requireConsoleUser } from '@/lib/apiAuth';
  * console user can change, hide or upload a hotel's photos.
  *
  * PUT    ?hotelId=1&kind=main|hidden   body { media_url }
- * DELETE ?hotelId=1&kind=main|hidden&media_url=…
+ * DELETE ?hotelId=1&kind=main|hidden|uploaded&media_url=…
  * POST   ?hotelId=1                    body = image bytes (upload)
  */
 const HOTEL_API_URL = process.env.HOTEL_API_URL
@@ -15,7 +15,7 @@ const HOTEL_API_URL = process.env.HOTEL_API_URL
   || 'https://hotel-api-91901273027.australia-southeast1.run.app';
 const ADMIN_KEY = process.env.COLLECTIONS_ADMIN_KEY || '';
 
-const PATHS: Record<string, string> = { main: 'featured-photo', hidden: 'hidden-images' };
+const PATHS: Record<string, string> = { main: 'featured-photo', hidden: 'hidden-images', uploaded: 'photos' };
 
 function target(request: NextRequest, kind?: string): string | NextResponse {
   const hotelId = Number(request.nextUrl.searchParams.get('hotelId'));
@@ -25,7 +25,7 @@ function target(request: NextRequest, kind?: string): string | NextResponse {
   const base = `${HOTEL_API_URL}/api/editorial/hotels/${hotelId}`;
   if (kind === undefined) return `${base}/photos`;
   const path = PATHS[kind];
-  if (!path) return NextResponse.json({ success: false, error: 'kind must be main or hidden' }, { status: 400 });
+  if (!path) return NextResponse.json({ success: false, error: 'kind must be main, hidden or uploaded' }, { status: 400 });
   return `${base}/${path}`;
 }
 
@@ -64,7 +64,11 @@ export async function POST(request: NextRequest) {
   if (typeof url !== 'string') return url;
   return pass(await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': request.headers.get('content-type') || '', 'x-admin-key': ADMIN_KEY },
+    headers: {
+      'Content-Type': request.headers.get('content-type') || '',
+      'x-admin-key': ADMIN_KEY,
+      'x-updated-by': auth.user.email || auth.user.uid,
+    },
     body: await request.arrayBuffer(),
   }));
 }

@@ -7,7 +7,8 @@
  *
  * Shows the hotel's own photos (the same gallery the hotel page uses); clicking
  * one makes it the main photo. A photo from elsewhere can be pasted as a link or
- * uploaded. The eye button hides a photo everywhere; hidden photos stay here,
+ * uploaded; uploads join the hotel's gallery (several at a time) and any of them
+ * can then be picked as main. The eye button hides a supplier photo everywhere; hidden photos stay here,
  * greyed out, so they can be shown again.
  *
  * Only a signed-in console user can change photos (see /api/admin/editorial/photos).
@@ -15,7 +16,7 @@
  * re-sync never undoes it: a hidden photo that comes back in a sync stays hidden.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Eye, EyeOff, Upload } from 'lucide-react';
+import { Eye, EyeOff, Trash2, Upload } from 'lucide-react';
 import { viaResizer } from '@/lib/imageUrl';
 
 const HOTEL_API_URL = process.env.NEXT_PUBLIC_HOTEL_API_URL || 'https://hotel-api-91901273027.australia-southeast1.run.app';
@@ -43,11 +44,14 @@ function imageKey(url: string): string {
 export default function MainPhotoPicker({
   hotelId,
   current,
+  uploaded,
   onChanged,
 }: {
   hotelId: number;
   /** URL of the current main photo, if one is set. */
   current: string | null;
+  /** Photos uploaded in the console, in gallery order. */
+  uploaded: string[];
   onChanged: () => void;
 }) {
   const [photos, setPhotos] = useState<string[]>([]);
@@ -145,26 +149,42 @@ export default function MainPhotoPicker({
     finally { setBusy(false); }
   }
 
-  async function upload(file: File) {
+  /** Uploads each file in turn; they join the gallery, none becomes main. */
+  async function upload(files: File[]) {
     setError(null);
-    if (!UPLOAD_TYPES.includes(file.type)) { setError('Use a JPEG, PNG or WebP photo'); return; }
-    if (file.size > UPLOAD_MAX_MB * 1024 * 1024) { setError(`Photo is over ${UPLOAD_MAX_MB} MB`); return; }
+    const skipped: string[] = [];
     setBusy(true);
     try {
-      const r = await fetch(`${PHOTOS_API}?hotelId=${hotelId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': file.type },
-        body: file,
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || !d?.data?.url) throw new Error(d.error || `HTTP ${r.status}`);
-      await saveMain(d.data.url);
+      for (const file of files) {
+        if (!UPLOAD_TYPES.includes(file.type)) { skipped.push(`${file.name} (not JPEG, PNG or WebP)`); continue; }
+        if (file.size > UPLOAD_MAX_MB * 1024 * 1024) { skipped.push(`${file.name} (over ${UPLOAD_MAX_MB} MB)`); continue; }
+        const r = await fetch(`${PHOTOS_API}?hotelId=${hotelId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': file.type },
+          body: file,
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d?.data?.url) skipped.push(`${file.name} (${d.error || `HTTP ${r.status}`})`);
+      }
+      if (skipped.length) setError(`not uploaded: ${skipped.join(', ')}`);
       onChanged();
     } catch (e) { setError((e as Error).message); }
     finally {
       setBusy(false);
       if (fileInput.current) fileInput.current.value = '';
     }
+  }
+
+  async function removeUploaded(url: string) {
+    if (!confirm('Delete this uploaded photo?')) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch(`${PHOTOS_API}?hotelId=${hotelId}&kind=uploaded&media_url=${encodeURIComponent(url)}`, { method: 'DELETE' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) throw new Error(d.error || `HTTP ${r.status}`);
+      onChanged();
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
   }
 
   const hiddenCount = photos.filter((p) => hidden.has(imageKey(p))).length;
@@ -176,7 +196,7 @@ export default function MainPhotoPicker({
           <h3 className="font-semibold">Main photo</h3>
           <p className="text-sm text-gray-600">
             Shown first on the hotel page, search results and collection pages. Click a photo to use it.
-            The eye hides a photo everywhere; click it again to show it.
+            Uploaded photos lead the hotel page gallery. The eye hides a supplier photo everywhere; click it again to show it.
             Changes show on the website within a few minutes.
           </p>
         </div>
@@ -197,7 +217,7 @@ export default function MainPhotoPicker({
 
       {loading ? (
         <p className="text-sm text-gray-500">Loading the hotel&apos;s photos…</p>
-      ) : photos.length === 0 ? (
+      ) : photos.length === 0 && uploaded.length === 0 ? (
         <p className="text-sm text-gray-500">This hotel has no photos of its own. Upload one or paste a link below.</p>
       ) : (
         <>
@@ -205,6 +225,36 @@ export default function MainPhotoPicker({
             <p className="mb-2 text-xs text-gray-500">{hiddenCount} of {photos.length} photos hidden.</p>
           )}
           <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-6 gap-2 max-h-[420px] overflow-y-auto">
+            {uploaded.map((url, i) => {
+              const isCurrent = url === current;
+              return (
+                <div key={url} className="relative">
+                  <button
+                    type="button"
+                    disabled={busy || isCurrent}
+                    onClick={() => choose(url)}
+                    title={isCurrent ? 'Current main photo' : 'Use as main photo'}
+                    className={`relative block w-full aspect-[4/3] overflow-hidden rounded bg-gray-100 ${isCurrent ? 'ring-2 ring-amber-500' : 'hover:ring-2 hover:ring-blue-500'} disabled:cursor-default`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={viaResizer(url, 400) || url} alt={`Uploaded photo ${i + 1}`} loading="lazy" className="h-full w-full object-cover" />
+                    <span className={`absolute left-1 top-1 rounded px-1.5 py-0.5 text-[10px] font-semibold text-white ${isCurrent ? 'bg-amber-500' : 'bg-blue-600'}`}>
+                      {isCurrent ? 'MAIN' : 'UPLOADED'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => removeUploaded(url)}
+                    title="Delete this uploaded photo"
+                    aria-label="Delete photo"
+                    className="absolute right-1 top-1 rounded-full bg-white/90 p-1 text-red-600 shadow hover:bg-white disabled:opacity-50"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              );
+            })}
             {photos.map((url, i) => {
               const isCurrent = url === current;
               const isHidden = hidden.has(imageKey(url));
@@ -244,8 +294,9 @@ export default function MainPhotoPicker({
           ref={fileInput}
           type="file"
           accept={UPLOAD_TYPES.join(',')}
+          multiple
           className="hidden"
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }}
+          onChange={(e) => { const f = Array.from(e.target.files || []); if (f.length) upload(f); }}
         />
         <button
           type="button"
@@ -253,7 +304,7 @@ export default function MainPhotoPicker({
           onClick={() => fileInput.current?.click()}
           className="inline-flex items-center gap-1.5 px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"
         >
-          <Upload size={14} /> Upload a photo
+          <Upload size={14} /> Upload photos
         </button>
         <input
           type="url"
