@@ -14,11 +14,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+/** id is null for a place found on Google that is not on our list yet. */
 type Place = {
-  id: number; kind: 'airport' | 'venue' | 'landmark'; code: string; name: string;
+  id: number | null; kind: 'airport' | 'venue' | 'landmark' | null; code: string | null; name: string;
   category: string | null; city: string | null; country: string | null;
   latitude: number; longitude: number; coords_verified: boolean;
+  google_id?: string | null; address?: string | null;
 };
+type GoogleResult = {
+  google_id: string; name: string; address: string | null; type: string | null;
+  city: string | null; country: string | null; latitude: number; longitude: number; place_id: number | null;
+};
+type SearchedTerm = { q: string; searches: number; last_at: string; category: string | null; google: { google_id: string; name: string } | null };
 type PlaceEvent = {
   id: number; name: string; category: string | null; starts_on: string | null; ends_on: string | null;
   source: string; is_test: boolean; place?: Place;
@@ -66,6 +73,26 @@ const STARS: Array<{ value: number; label: string }> = [
 ];
 const muted: React.CSSProperties = { fontSize: 12, color: 'var(--c-fg-muted)' };
 const KIND_LABEL: Record<string, string> = { airport: 'Airport', venue: 'Venue', landmark: 'Landmark' };
+const CATEGORY_LABEL: Record<string, string> = {
+  convention: 'Conference centre', stadium: 'Stadium', arena: 'Arena', circuit: 'Race track', racecourse: 'Racecourse',
+  'concert-hall': 'Concert hall', 'opera-house': 'Opera house', theatre: 'Theatre', 'theatre-district': 'Theatre district',
+  'festival-ground': 'Festival site', museum: 'Museum', park: 'Park', station: 'Station', beach: 'Beach', landmark: 'Landmark',
+};
+const placeLabel = (p: Place) =>
+  p.kind === 'airport' ? 'Airport' : (p.category && CATEGORY_LABEL[p.category]) || KIND_LABEL[p.kind || ''] || 'Place';
+
+// "Find me hotels near ..." choices. Keys match hotel-api lib/placeCategories.js.
+type CatKey = 'airport' | 'conference' | 'sport' | 'festival' | 'theatre' | 'other';
+const CATS: Array<{ key: CatKey; label: string; placeholder: string; help: string }> = [
+  { key: 'airport', label: 'An airport', placeholder: 'Airport name, city or code like MEL', help: 'Leave it empty to see the busiest airports.' },
+  { key: 'conference', label: 'A conference centre', placeholder: 'Venue or city, e.g. ExCeL London', help: 'Leave it empty to see the popular conference centres.' },
+  { key: 'sport', label: 'A sporting event', placeholder: 'Event, stadium or city, e.g. Wimbledon', help: 'Leave it empty to see upcoming events and stadiums.' },
+  { key: 'festival', label: 'A festival', placeholder: 'Festival or city, e.g. Glastonbury', help: 'Leave it empty to see upcoming festivals.' },
+  { key: 'theatre', label: 'A concert or theatre', placeholder: 'Theatre, concert hall or city, e.g. Royal Albert Hall', help: 'Leave it empty to see popular theatres and concert halls.' },
+  { key: 'other', label: 'Something else', placeholder: 'Any place, e.g. Tower Bridge or a street name', help: 'If it is not on our list, we look it up on Google Maps. Press Enter to search.' },
+];
+const CAT_KEYS = CATS.map((c) => c.key);
+const sectionHead: React.CSSProperties = { padding: '8px 12px 4px', fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', textTransform: 'uppercase' };
 
 const fmtMin = (m: number | null | undefined) =>
   m == null ? '—' : m < 60 ? `${Math.round(m)} min` : `${Math.floor(m / 60)} h ${Math.round(m % 60)} min`;
@@ -82,12 +109,18 @@ const send = (path: string, method: string, body?: unknown) =>
   call(path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
 
 export default function NearPlacePage() {
+  const [cat, setCat] = useState<CatKey>('airport');
   const [q, setQ] = useState('');
-  const [kind, setKind] = useState('');
   const [places, setPlaces] = useState<Place[]>([]);
   const [events, setEvents] = useState<PlaceEvent[]>([]);
+  const [google, setGoogle] = useState<GoogleResult[]>([]);
+  const [googleAsked, setGoogleAsked] = useState(false);
+  const [googleMsg, setGoogleMsg] = useState<string | null>(null);
+  const [searchId, setSearchId] = useState<number | null>(null);
   const [setupMsg, setSetupMsg] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
+  const [searchNow, setSearchNow] = useState(0);
+  const ref = useMemo(() => Math.random().toString(36).slice(2, 12) + Date.now().toString(36), []);
 
   const [place, setPlace] = useState<Place | null>(null);
   const [placeEvents, setPlaceEvents] = useState<PlaceEvent[]>([]);
@@ -103,60 +136,120 @@ export default function NearPlacePage() {
   const [realBusy, setRealBusy] = useState(false);
   const [realNote, setRealNote] = useState<string | null>(null);
   const [focus, setFocus] = useState<number | null>(null);
+  const [topKey, setTopKey] = useState(0);
 
   useEffect(() => {
     call('config').then((j) => { setRealOn(!!j.real_times); setRealMsg(j.real_times_message || null); })
       .catch(() => setRealMsg('Could not check whether real Google times are on. Refresh the page to try again.'));
   }, []);
 
-  // Search as you type (debounced). Empty box lists the events.
+  // Search after a short pause in typing, or straight away on Enter. Our own
+  // list is searched every time; Google is only asked (by hotel-api) for
+  // "Something else" or when our list has nothing, and only from 3 letters.
+  // An empty box lists the popular places for the chosen category.
   useEffect(() => {
+    const term = q.trim();
     const t = setTimeout(async () => {
       setSearching(true);
       try {
-        const params = new URLSearchParams({ q: q.trim(), limit: '20' });
-        if (kind) params.set('kind', kind);
+        const params = new URLSearchParams({ q: term, category: cat });
+        if (term.length >= 3) { params.set('log', '1'); params.set('ref', ref); } else params.set('google', '0');
         const j = await call(`search?${params}`);
         setPlaces(j.places || []); setEvents(j.events || []);
+        setGoogle(j.google || []); setGoogleAsked(!!j.google_asked); setGoogleMsg(j.google_message || null);
+        setSearchId(j.search_id ?? null);
         setSetupMsg(j.setup === false ? plain(j.message) : null);
       } catch (e: any) { setErr(plain(e.message)); }
       finally { setSearching(false); }
-    }, 250);
+    }, searchNow && term ? 0 : 700);
     return () => clearTimeout(t);
-  }, [q, kind]);
+  }, [q, cat, ref, searchNow]);
 
-  // The address bar always matches what is shown, so a place view can be
+  /** Remember what was picked for this search (feeds "What people searched for"). */
+  const noteChoice = (body: { place_id?: number; google_id?: string; name?: string }) => {
+    if (searchId) void send(`searches/${searchId}/choice`, 'POST', body).catch(() => {});
+  };
+
+  // The address bar always matches what is shown, so a view can be
   // bookmarked, shared or opened in a new tab. `push` adds a history step
   // (picking a place); filter changes just update the current one.
-  const load = useCallback(async (p: Place, r = radius, s = minStars, push = false) => {
+  const load = useCallback(async (p: Place, r = radius, s = minStars, push = false, c: CatKey = cat) => {
     setLoading(true); setErr(null); setRealNote(null);
-    const href = placeHref(p.id, r, s);
+    const href = p.id ? placeHref(p.id, r, s, c) : pointHref(p, r, s);
     if (window.location.pathname + window.location.search !== href) {
       window.history[push ? 'pushState' : 'replaceState'](null, '', href);
     }
     try {
-      const j = await call(`${p.id}/hotels?radius_km=${r}&min_stars=${s}&limit=60`);
-      setPlace(j.place || p); setPlaceEvents(j.events || []); setHotels(j.hotels || []);
+      const j = p.id
+        ? await call(`${p.id}/hotels?radius_km=${r}&min_stars=${s}&limit=60`)
+        : await call(`near?${new URLSearchParams({
+          lat: String(p.latitude), lng: String(p.longitude), name: p.name, google_id: p.google_id || '',
+          radius_km: String(r), min_stars: String(s), limit: '60' })}`);
+      const got: Place = j.place ? { ...j.place, address: j.place.address ?? p.address } : p;
+      setPlace(got); setPlaceEvents(j.events || []); setHotels(j.hotels || []);
+      // A Google result someone has since saved: show it as the saved place.
+      if (!p.id && got.id) window.history.replaceState(null, '', placeHref(got.id, r, s, c));
       setBasis(j.estimate_basis || '');
       setRealOn(!!j.real_times); setRealMsg(j.real_times_message || null);
       if (j.setup === false) setSetupMsg(plain(j.message));
     } catch (e: any) { setErr(plain(e.message)); }
     finally { setLoading(false); }
-  }, [radius, minStars]);
+  }, [radius, minStars, cat]);
 
-  const pick = (p: Place) => { setFocus(null); void load(p, radius, minStars, true); };
+  const pick = (p: Place) => { setFocus(null); noteChoice({ place_id: p.id ?? undefined, name: p.name }); void load(p, radius, minStars, true); };
 
-  // Open the place in the address (?place=…&km=…&stars=…), on first load and
-  // on Back/Forward.
+  const pickGoogle = (g: GoogleResult) => {
+    setFocus(null);
+    noteChoice({ google_id: g.google_id, place_id: g.place_id ?? undefined, name: g.name });
+    const p: Place = g.place_id
+      ? ({ id: g.place_id } as Place)
+      : {
+        id: null, kind: null, code: g.google_id, name: g.name, category: null, city: g.city, country: g.country,
+        latitude: g.latitude, longitude: g.longitude, coords_verified: false, google_id: g.google_id, address: g.address,
+      };
+    void load(p, radius, minStars, true);
+  };
+
+  /**
+   * Notes, tags and saved Google times belong to a place on our list. For a
+   * place found on Google, save it to our list the first time someone needs
+   * that, then carry on as normal. Returns the place id, or null.
+   */
+  const ensurePlaceId = useCallback(async (): Promise<number | null> => {
+    if (!place) return null;
+    if (place.id) return place.id;
+    if (!place.google_id) { setErr('This spot is not on our list, so notes can\'t be saved here. Search for it again and pick it from the list.'); return null; }
+    try {
+      const j = await send('google', 'POST', { google_id: place.google_id, category: cat, name: place.name });
+      const saved: Place = { ...j.place, address: place.address };
+      setPlace(saved);
+      window.history.replaceState(null, '', placeHref(saved.id!, radius, minStars, cat));
+      setTopKey((k) => k + 1);
+      return saved.id;
+    } catch (e: any) { setErr(`Could not add ${place.name} to our list: ${plain(e.message)}`); return null; }
+  }, [place, cat, radius, minStars]);
+
+  // Open what the address says (?near=…&place=… or a Google spot with
+  // lat/lng), on first load and on Back/Forward.
   useEffect(() => {
     const fromUrl = () => {
       const sp = new URLSearchParams(window.location.search);
-      const id = Number(sp.get('place'));
-      if (!Number.isInteger(id) || id <= 0) { setPlace(null); setHotels([]); return; }
+      const c = CAT_KEYS.includes(sp.get('near') as CatKey) ? (sp.get('near') as CatKey) : 'airport';
+      setCat(c);
       const r = RADII.includes(Number(sp.get('km'))) ? Number(sp.get('km')) : 3;
       const s = Number.isFinite(Number(sp.get('stars'))) && sp.get('stars') !== null ? Number(sp.get('stars')) : 4;
+      const id = Number(sp.get('place'));
+      const lat = Number(sp.get('lat')); const lng = Number(sp.get('lng'));
       setRadius(r); setMinStars(s); setFocus(null);
-      void load({ id } as Place, r, s);
+      if (Number.isInteger(id) && id > 0) { void load({ id } as Place, r, s, false, c); return; }
+      if (sp.get('lat') && sp.get('lng') && Number.isFinite(lat) && Number.isFinite(lng)) {
+        void load({
+          id: null, kind: null, code: sp.get('gid'), name: sp.get('name') || 'This spot', category: null, city: null, country: null,
+          latitude: lat, longitude: lng, coords_verified: false, google_id: sp.get('gid'),
+        }, r, s, false, c);
+        return;
+      }
+      setPlace(null); setHotels([]);
     };
     fromUrl();
     window.addEventListener('popstate', fromUrl);
@@ -164,24 +257,38 @@ export default function NearPlacePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const changeCat = (c: CatKey) => {
+    setCat(c); setGoogle([]); setGoogleAsked(false); setSearchId(null);
+    if (!place) {
+      const href = `/console/near?near=${c}`;
+      if (window.location.pathname + window.location.search !== href) window.history.replaceState(null, '', href);
+    }
+  };
+
   /** A real link, so Ctrl/Cmd-click and "open in new tab" work; a plain click stays on the page. */
   const onPlaceClick = (e: React.MouseEvent, p: Place) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault(); pick(p);
+  };
+  const onGoogleClick = (e: React.MouseEvent, g: GoogleResult) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault(); pickGoogle(g);
   };
 
   const getRealTimes = async () => {
     if (!place) return;
     setRealBusy(true); setRealNote(null); setErr(null);
     try {
+      const placeId = await ensurePlaceId();
+      if (!placeId) return;
       const ids = hotels.slice(0, 20).map((h) => h.hotel_id);
-      const j = await send(`${place.id}/travel-times`, 'POST', { hotel_ids: ids });
+      const j = await send(`${placeId}/travel-times`, 'POST', { hotel_ids: ids });
       if (j.configured === false) { setRealOn(false); setRealMsg(j.error); return; }
       const n = (j.fetched || 0) + (j.cached || 0);
       setRealNote(
         `Real times ready for ${n} hotel${n === 1 ? '' : 's'} (${j.fetched || 0} new from Google, ${j.cached || 0} already saved).` +
         (j.errors?.length ? ` Some could not be fetched: ${j.errors.join('; ')}` : ''));
-      await load(place);
+      await load({ ...place, id: placeId });
     } catch (e: any) {
       const m = plain(e.message);
       if (m === REAL_OFF_PLAIN) { setRealOn(false); setRealMsg(m); } else setErr(m);
@@ -192,6 +299,10 @@ export default function NearPlacePage() {
   const patchHotel = (id: number, fn: (h: Hotel) => Hotel) =>
     setHotels((hs) => hs.map((h) => (h.hotel_id === id ? fn(h) : h)));
 
+  const term = q.trim();
+  const catInfo = CATS.find((c) => c.key === cat)!;
+  const nothingOurs = places.length === 0 && events.length === 0;
+
   return (
     <div className="near-page">
       <style>{NEAR_CSS}</style>
@@ -200,7 +311,7 @@ export default function NearPlacePage() {
         <span className="c-pill c-pill-warn">Test page</span>
       </div>
       <p style={{ fontSize: 13, color: 'var(--c-fg-soft)', margin: '6px 0 0', maxWidth: '75ch', lineHeight: 1.5 }}>
-        Find our hotels close to an airport, venue, landmark or event, and record what you know about each one.
+        Find our hotels close to an airport, venue, event or any other place, and record what you know about each one.
         Nothing here shows on the website yet. Your tags and notes are saved for good and stay put when suppliers update their hotel lists.
       </p>
 
@@ -209,62 +320,78 @@ export default function NearPlacePage() {
 
       <div className="near-layout">
         {/* ---- search */}
-        <div className="c-card">
-          <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <label className="c-label" htmlFor="near-q">Find a place</label>
-            <input id="near-q" className="c-input" placeholder="e.g. SYD, Melbourne Park, Wimbledon, Paris"
-              value={q} onChange={(e) => setQ(e.target.value)} autoFocus aria-describedby="near-q-help" />
-            <div id="near-q-help" style={muted}>Type a name, a city or a 3-letter airport code, then pick it from the list.</div>
-            <label className="c-label" htmlFor="near-kind" style={{ marginTop: 4, marginBottom: 0 }}>Show</label>
-            <select id="near-kind" className="c-input" value={kind} onChange={(e) => setKind(e.target.value)}>
-              <option value="">Everything</option>
-              <option value="airport">Airports</option>
-              <option value="venue">Venues</option>
-              <option value="landmark">Landmarks</option>
-              <option value="event">Events</option>
-            </select>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+          <div className="c-card">
+            <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <label className="c-label" htmlFor="near-cat" style={{ fontSize: 14, fontWeight: 600 }}>Find me hotels near</label>
+              <select id="near-cat" className="c-input" value={cat} onChange={(e) => changeCat(e.target.value as CatKey)}>
+                {CATS.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+              <input id="near-q" className="c-input" placeholder={catInfo.placeholder} aria-label={catInfo.placeholder}
+                value={q} onChange={(e) => setQ(e.target.value)} autoFocus aria-describedby="near-q-help"
+                onKeyDown={(e) => { if (e.key === 'Enter') setSearchNow((n) => n + 1); }} />
+              <div id="near-q-help" style={muted}>{catInfo.help}</div>
+            </div>
+            <div style={{ maxHeight: 520, overflowY: 'auto', borderTop: '1px solid var(--c-line-soft)' }}>
+              {searching && nothingOurs && google.length === 0 && (
+                <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>Searching…</div>
+              )}
+              {!term && places.length > 0 && <div style={sectionHead}>Popular</div>}
+              {places.map((p) => (
+                <a key={`p${p.id}`} href={placeHref(p.id!, radius, minStars, cat)} onClick={(e) => onPlaceClick(e, p)}
+                  style={rowBtn(place?.id === p.id)} aria-current={place?.id === p.id ? 'true' : undefined}>
+                  <div style={{ fontWeight: 600 }}>
+                    {p.kind === 'airport' && <span className="c-mono" style={{ marginRight: 6 }}>{p.code}</span>}
+                    {p.name}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
+                    {placeLabel(p)} · {[p.city, p.country].filter(Boolean).join(', ')}
+                  </div>
+                </a>
+              ))}
+              {events.length > 0 && <div style={sectionHead}>{term ? 'Events' : 'Coming up'}</div>}
+              {events.map((ev) => ev.place && (
+                <a key={`e${ev.id}`} href={placeHref(ev.place.id!, radius, minStars, cat)} onClick={(e) => onPlaceClick(e, ev.place!)}
+                  style={rowBtn(place?.id === ev.place.id)} aria-current={place?.id === ev.place.id ? 'true' : undefined}>
+                  <div style={{ fontWeight: 600 }}>
+                    {ev.name} {ev.is_test && <span className="c-pill c-pill-warn" style={{ marginLeft: 4 }} title="Made-up example event for testing">example</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
+                    at {ev.place?.name} · {fmtDate(ev.starts_on)}{ev.ends_on && ev.ends_on !== ev.starts_on ? ` – ${fmtDate(ev.ends_on)}` : ''}
+                  </div>
+                </a>
+              ))}
+              {google.length > 0 && (
+                <div style={sectionHead}>{nothingOurs ? 'Not on our list. Found on Google Maps:' : 'Also on Google Maps'}</div>
+              )}
+              {google.map((g) => (
+                <a key={`g${g.google_id}`} href={g.place_id ? placeHref(g.place_id, radius, minStars, cat) : pointHref({ ...g, id: null } as unknown as Place, radius, minStars)}
+                  onClick={(e) => onGoogleClick(e, g)} style={rowBtn(!!place && place.google_id === g.google_id)}>
+                  <div style={{ fontWeight: 600 }}>{g.name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
+                    {[g.type, g.address].filter(Boolean).join(' · ')}
+                    {g.place_id && <span className="c-pill c-pill-muted" style={{ marginLeft: 4 }}>on our list</span>}
+                  </div>
+                </a>
+              ))}
+              {googleMsg && <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>{googleMsg}</div>}
+              {!searching && term && nothingOurs && google.length === 0 && !setupMsg && !googleMsg && (
+                <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>
+                  {term.length < 3
+                    ? 'Nothing on our list yet. Keep typing (3 letters or more) to look further.'
+                    : googleAsked
+                      ? <>Nothing found for &ldquo;{term}&rdquo;. Try adding the city, e.g. &ldquo;{term} London&rdquo;.</>
+                      : <>Nothing on our list matches &ldquo;{term}&rdquo;. Try the city name, or pick &ldquo;Something else&rdquo; above to look wider.</>}
+                </div>
+              )}
+              {!searching && !term && nothingOurs && !setupMsg && (
+                <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>
+                  {cat === 'other' ? 'Type the name of any place: a building, a street, a school, a park.' : 'Type above to search.'}
+                </div>
+              )}
+            </div>
           </div>
-          <div style={{ maxHeight: 520, overflowY: 'auto', borderTop: '1px solid var(--c-line-soft)' }}>
-            {searching && places.length === 0 && events.length === 0 && (
-              <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>Searching…</div>
-            )}
-            {places.map((p) => (
-              <a key={`p${p.id}`} href={placeHref(p.id, radius, minStars)} onClick={(e) => onPlaceClick(e, p)}
-                style={rowBtn(place?.id === p.id)} aria-current={place?.id === p.id ? 'true' : undefined}>
-                <div style={{ fontWeight: 600 }}>
-                  {p.kind === 'airport' && <span className="c-mono" style={{ marginRight: 6 }}>{p.code}</span>}
-                  {p.name}
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
-                  {KIND_LABEL[p.kind]}{p.category && p.kind !== 'airport' ? ` · ${p.category}` : ''} · {[p.city, p.country].filter(Boolean).join(', ')}
-                </div>
-              </a>
-            ))}
-            {events.length > 0 && (
-              <div style={{ padding: '8px 12px 4px', fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', textTransform: 'uppercase' }}>
-                {q.trim() ? 'Events' : 'Events (or type above to search)'}
-              </div>
-            )}
-            {events.map((ev) => ev.place && (
-              <a key={`e${ev.id}`} href={placeHref(ev.place.id, radius, minStars)} onClick={(e) => onPlaceClick(e, ev.place!)}
-                style={rowBtn(place?.id === ev.place.id)} aria-current={place?.id === ev.place.id ? 'true' : undefined}>
-                <div style={{ fontWeight: 600 }}>
-                  {ev.name} {ev.is_test && <span className="c-pill c-pill-warn" style={{ marginLeft: 4 }} title="Made-up example event for testing">example</span>}
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
-                  at {ev.place?.name} · {fmtDate(ev.starts_on)}{ev.ends_on && ev.ends_on !== ev.starts_on ? ` – ${fmtDate(ev.ends_on)}` : ''}
-                </div>
-              </a>
-            ))}
-            {!searching && q.trim() && places.length === 0 && events.length === 0 && !setupMsg && (
-              <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>
-                Nothing matches &ldquo;{q.trim()}&rdquo;. Try the city name or the 3-letter airport code instead.
-              </div>
-            )}
-            {!searching && !q.trim() && places.length === 0 && events.length === 0 && !setupMsg && (
-              <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>Start typing above to see places.</div>
-            )}
-          </div>
+          <SearchedFor key={topKey} onAdded={(p) => { setTopKey((k) => k + 1); void load(p, radius, minStars, true); }} onError={setErr} />
         </div>
 
         {/* ---- place + hotels */}
@@ -273,7 +400,8 @@ export default function NearPlacePage() {
             <div className="c-card" style={{ padding: 24, fontSize: 13, color: 'var(--c-fg-soft)', lineHeight: 1.6 }}>
               <div className="c-empty-title">How this works</div>
               <ol style={{ margin: '8px 0 0', paddingLeft: 20 }}>
-                <li><strong>Find a place</strong> on the left: an airport, stadium, landmark or event.</li>
+                <li><strong>Pick what you are looking near</strong> on the left: an airport, a conference centre, a sporting event, a festival, a concert or theatre, or something else.</li>
+                <li><strong>Type a name or a city</strong>, or leave the box empty to see the popular ones, then pick from the list.</li>
                 <li>See <strong>our hotels around it</strong>, nearest first, with a rough walk and drive time for each.</li>
                 <li>Click <strong>Get real times</strong> to ask Google for actual walk, drive and public transport times.</li>
                 <li><strong>Tag each hotel</strong> (Inside, Connected, Walkable, Short ride, Not close) and add a note. These are saved for good.</li>
@@ -289,10 +417,16 @@ export default function NearPlacePage() {
                       {place.name}
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginTop: 2 }}>
-                      {KIND_LABEL[place.kind]}{place.category && place.kind !== 'airport' ? ` · ${place.category}` : ''} · {[place.city, place.country].filter(Boolean).join(', ')}
+                      {place.id
+                        ? <>{placeLabel(place)} · {[place.city, place.country].filter(Boolean).join(', ')}</>
+                        : <>{place.address || 'Found on Google Maps'}</>}
                       {' · '}
                       <a href={`https://www.google.com/maps?q=${place.latitude},${place.longitude}`} target="_blank" rel="noreferrer">open in Google Maps</a>
-                      {!place.coords_verified && (
+                      {!place.id ? (
+                        <span className="c-pill c-pill-muted" style={{ marginLeft: 6 }} title="Found on Google Maps. It is added to our list the first time you tag a hotel or get real times here.">
+                          not on our list yet
+                        </span>
+                      ) : !place.coords_verified && (
                         <span className="c-pill c-pill-warn" style={{ marginLeft: 6 }} title="The pin for this place has not been checked by hand yet, so distances could be slightly off.">
                           pin not checked yet
                         </span>
@@ -399,7 +533,7 @@ export default function NearPlacePage() {
                       </thead>
                       <tbody>
                         {hotels.map((h, i) => (
-                          <HotelRow key={h.hotel_id} index={i + 1} hotel={h} place={place}
+                          <HotelRow key={h.hotel_id} index={i + 1} hotel={h} place={place} ensurePlaceId={ensurePlaceId}
                             focused={focus === h.hotel_id} onFocus={() => setFocus(h.hotel_id)}
                             onChange={(fn) => patchHotel(h.hotel_id, fn)} onError={setErr} />
                         ))}
@@ -416,7 +550,14 @@ export default function NearPlacePage() {
   );
 }
 
-const placeHref = (id: number, km: number, stars: number) => `/console/near?place=${id}&km=${km}&stars=${stars}`;
+const placeHref = (id: number, km: number, stars: number, near?: string) =>
+  `/console/near?${near ? `near=${near}&` : ''}place=${id}&km=${km}&stars=${stars}`;
+/** A place found on Google that is not on our list: the address carries its point. */
+const pointHref = (p: Pick<Place, 'latitude' | 'longitude' | 'name' | 'google_id'>, km: number, stars: number) =>
+  `/console/near?${new URLSearchParams({
+    near: 'other', lat: String(p.latitude), lng: String(p.longitude), name: p.name, ...(p.google_id ? { gid: p.google_id } : {}),
+    km: String(km), stars: String(stars),
+  })}`;
 
 function rowBtn(active: boolean): React.CSSProperties {
   return {
@@ -428,8 +569,8 @@ function rowBtn(active: boolean): React.CSSProperties {
 
 // ------------------------------------------------------------------ hotel row
 
-function HotelRow({ index, hotel: h, place, focused, onFocus, onChange, onError }: {
-  index: number; hotel: Hotel; place: Place; focused: boolean; onFocus: () => void;
+function HotelRow({ index, hotel: h, place, ensurePlaceId, focused, onFocus, onChange, onError }: {
+  index: number; hotel: Hotel; place: Place; ensurePlaceId: () => Promise<number | null>; focused: boolean; onFocus: () => void;
   onChange: (fn: (h: Hotel) => Hotel) => void; onError: (m: string | null) => void;
 }) {
   const [note, setNote] = useState(h.note?.note || '');
@@ -443,7 +584,10 @@ function HotelRow({ index, hotel: h, place, focused, onFocus, onChange, onError 
   const saveNote = async (body: { proximity?: string | null; note?: string | null }) => {
     setSaving(true); onError(null);
     try {
-      const j = await send(`${place.id}/hotels/${h.hotel_id}/note`, 'PUT', body);
+      // A Google spot is added to our list here, the first time it is needed.
+      const placeId = await ensurePlaceId();
+      if (!placeId) return;
+      const j = await send(`${placeId}/hotels/${h.hotel_id}/note`, 'PUT', body);
       onChange((x) => ({ ...x, note: j.note ? { proximity: j.note.proximity, note: j.note.note, updated_by: j.note.updated_by, updated_at: j.note.updated_at } : null }));
       setSaved(true); setTimeout(() => setSaved(false), 3000);
     } catch (e: any) { onError(`Could not save for ${h.name}: ${plain(e.message)}`); }
@@ -540,6 +684,102 @@ function HotelRow({ index, hotel: h, place, focused, onFocus, onChange, onError 
         </div>
       </td>
     </tr>
+  );
+}
+
+// ------------------------------------------------------------------ searched for
+
+/**
+ * Places people looked for that are not on our list, most searched first.
+ * "Add to our list" looks the words up on Google Maps; pick the right match
+ * and what kind of place it is, and it joins our list for everyone.
+ */
+function SearchedFor({ onAdded, onError }: { onAdded: (p: Place) => void; onError: (m: string | null) => void }) {
+  const [terms, setTerms] = useState<SearchedTerm[] | null>(null);
+  const [off, setOff] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+  const [matches, setMatches] = useState<GoogleResult[]>([]);
+  const [looking, setLooking] = useState(false);
+  const [kind, setKind] = useState<CatKey>('other');
+  const [adding, setAdding] = useState<string | null>(null);
+
+  useEffect(() => {
+    call('searches/top?limit=10')
+      .then((j) => { setTerms(j.terms || []); setOff(j.setup === false); })
+      .catch(() => setTerms([]));
+  }, []);
+
+  const expand = async (t: SearchedTerm) => {
+    if (open === t.q) { setOpen(null); return; }
+    setOpen(t.q); setMatches([]); setLooking(true);
+    setKind(CAT_KEYS.includes(t.category as CatKey) ? (t.category as CatKey) : 'other');
+    try {
+      const j = await call(`search?${new URLSearchParams({ q: t.q, category: 'other' })}`);
+      const found: GoogleResult[] = j.google || [];
+      // The one they picked last time goes first.
+      if (t.google) found.sort((a, b) => Number(b.google_id === t.google!.google_id) - Number(a.google_id === t.google!.google_id));
+      setMatches(found);
+    } catch (e: any) { onError(plain(e.message)); }
+    finally { setLooking(false); }
+  };
+
+  const add = async (g: GoogleResult) => {
+    setAdding(g.google_id); onError(null);
+    try {
+      const j = await send('google', 'POST', { google_id: g.google_id, category: kind, recategorise: true });
+      onAdded({ ...j.place, address: g.address });
+    } catch (e: any) { onError(`Could not add ${g.name}: ${plain(e.message)}`); }
+    finally { setAdding(null); }
+  };
+
+  if (off || terms === null) return null;
+  return (
+    <div className="c-card">
+      <div className="c-card-head"><h2 className="c-card-title">What people searched for</h2></div>
+      <div style={{ padding: '0 12px 8px', ...muted }}>
+        Places people looked for in the last 90 days that are not on our list yet, most searched first.
+      </div>
+      {terms.length === 0 ? (
+        <div style={{ padding: '0 12px 12px', fontSize: 13, color: 'var(--c-fg-muted)' }}>Nothing yet. Searches will show here.</div>
+      ) : terms.map((t) => (
+        <div key={t.q} style={{ borderTop: '1px solid var(--c-line-soft)', padding: '8px 12px', fontSize: 13 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{t.q}</div>
+              <div style={muted}>{t.searches} search{t.searches === 1 ? '' : 'es'} · last {new Date(t.last_at).toLocaleDateString('en-AU')}</div>
+            </div>
+            <button className="c-btn" style={{ fontSize: 12 }} onClick={() => expand(t)} aria-expanded={open === t.q}>
+              {open === t.q ? 'Close' : 'Add to our list'}
+            </button>
+          </div>
+          {open === t.q && (
+            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ ...muted, display: 'flex', gap: 6, alignItems: 'center' }}>
+                Add it as
+                <select className="c-input" value={kind} onChange={(e) => setKind(e.target.value as CatKey)} style={{ fontSize: 12 }}>
+                  {CATS.map((c) => <option key={c.key} value={c.key}>{c.key === 'other' ? 'Something else' : c.label.replace(/^An? /, '')}</option>)}
+                </select>
+              </label>
+              {looking && <div style={muted}>Looking it up on Google Maps…</div>}
+              {!looking && matches.length === 0 && <div style={muted}>Google Maps found nothing for this.</div>}
+              {matches.map((g) => (
+                <div key={g.google_id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div>{g.name}{t.google?.google_id === g.google_id && <span className="c-pill c-pill-muted" style={{ marginLeft: 4 }}>the one they picked</span>}</div>
+                    <div style={muted}>{g.address}</div>
+                  </div>
+                  {g.place_id ? <span style={muted}>on our list</span> : (
+                    <button className="c-btn c-btn-primary" style={{ fontSize: 12 }} disabled={adding !== null} onClick={() => add(g)}>
+                      {adding === g.google_id ? 'Adding…' : 'Add'}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 
