@@ -1628,6 +1628,7 @@ function HeroImageField({ value, video, slug, onChange, onVideoChange }: {
         <input className="c-input" style={{ flex: 1, minWidth: 200 }} value={value} onChange={(e) => onChange(e.target.value)}
           placeholder="Paste an image link, or upload" aria-label="Hero image link" />
         <button type="button" className="c-btn" disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? 'Working…' : 'Upload'}</button>
+        <span style={{ fontSize: 12, color: 'var(--c-fg-muted)', whiteSpace: 'nowrap' }}>(1 MB, 3:1)</span>
         <button type="button" className="c-btn" onClick={toggle}>{open ? 'Close' : 'Pick from uploads'}</button>
         <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" hidden
           onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />

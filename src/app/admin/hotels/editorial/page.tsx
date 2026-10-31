@@ -727,7 +727,7 @@ export default function HotelEditorialPage() {
                       </div>
 
                       <div>
-                        <label className="block text-sm font-medium mb-2">Title</label>
+                        <label className="block text-sm font-medium mb-2">Job title (optional, not Mr/Ms)</label>
                         <input
                           type="text"
                           value={newMedia.title || ''}
@@ -844,12 +844,12 @@ export default function HotelEditorialPage() {
                         </div>
 
                         <div>
-                          <label className="block text-sm font-medium mb-2">Title</label>
+                          <label className="block text-sm font-medium mb-2">Job title (optional, not Mr/Ms)</label>
                           <input
                             type="text"
                             value={newReview.reviewer_title || ''}
                             onChange={(e) => setNewReview({ ...newReview, reviewer_title: e.target.value })}
-                            placeholder="Senior Travel Editor"
+                            placeholder="FirstClass Specialist"
                             className="w-full px-4 py-2 border rounded-lg"
                           />
                         </div>
