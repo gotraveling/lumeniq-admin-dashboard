@@ -1622,10 +1622,11 @@ function HeroImageField({ value, video, slug, onChange, onVideoChange }: {
 
   return (
     <div style={{ display: 'grid', gap: 6 }}>
-      <span className="c-label">Hero image</span>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span className="c-label">Hero image &amp; video</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {value && <img src={value} alt="" style={{ width: 80, height: 48, objectFit: 'cover', borderRadius: 4 }} />}
-        <input className="c-input" style={{ flex: 1 }} value={value} onChange={(e) => onChange(e.target.value)} placeholder="Paste a link, or upload" />
+        <input className="c-input" style={{ flex: 1, minWidth: 200 }} value={value} onChange={(e) => onChange(e.target.value)}
+          placeholder="Paste an image link, or upload" aria-label="Hero image link" />
         <button type="button" className="c-btn" disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? 'Working…' : 'Upload'}</button>
         <button type="button" className="c-btn" onClick={toggle}>{open ? 'Close' : 'Pick from uploads'}</button>
         <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" hidden
@@ -1636,7 +1637,7 @@ function HeroImageField({ value, video, slug, onChange, onVideoChange }: {
       </span>
       {video && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <video src={video} poster={value || undefined} muted loop autoPlay playsInline preload="metadata"
+          <video src={video} poster={value || undefined} muted loop autoPlay playsInline preload="metadata" aria-label="Hero video preview"
             style={{ width: 80, height: 48, objectFit: 'cover', borderRadius: 4, background: 'var(--c-line)' }} />
           <span style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={video}>
             Hero video: {video.split('/').pop()}
@@ -1646,6 +1647,7 @@ function HeroImageField({ value, video, slug, onChange, onVideoChange }: {
       )}
       {video && !value && <div style={{ color: 'var(--c-danger)', fontSize: 12 }}>Add a hero image too — it shows while the video loads.</div>}
       {error && <div style={{ color: 'var(--c-danger)', fontSize: 12 }}>{error}</div>}
+      {open && !uploads && busy && <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>Loading uploads…</div>}
       {open && uploads && uploads.length === 0 && <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>Nothing uploaded yet.</div>}
       {open && folders.map(([folder, items]) => (
         <div key={folder} style={{ display: 'grid', gap: 4 }}>
