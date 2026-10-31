@@ -10,6 +10,7 @@
  * uploaded. The eye button hides a photo everywhere; hidden photos stay here,
  * greyed out, so they can be shown again.
  *
+ * Only a signed-in console user can change photos (see /api/admin/editorial/photos).
  * All of it is saved in the editorial overlay (keyed by hotel_id), so a supplier
  * re-sync never undoes it: a hidden photo that comes back in a sync stays hidden.
  */
@@ -18,6 +19,9 @@ import { Eye, EyeOff, Upload } from 'lucide-react';
 import { viaResizer } from '@/lib/imageUrl';
 
 const HOTEL_API_URL = process.env.NEXT_PUBLIC_HOTEL_API_URL || 'https://hotel-api-91901273027.australia-southeast1.run.app';
+// Changes go through the console's own server, which checks the login and adds
+// the hotel-api admin key. Reads go straight to hotel-api.
+const PHOTOS_API = '/api/admin/editorial/photos';
 const UPLOAD_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const UPLOAD_MAX_MB = 10;
 
@@ -81,10 +85,10 @@ export default function MainPhotoPicker({
   }, [hotelId, loadHidden]);
 
   async function saveMain(url: string) {
-    const r = await fetch(`${HOTEL_API_URL}/api/editorial/hotels/${hotelId}/featured-photo`, {
+    const r = await fetch(`${PHOTOS_API}?hotelId=${hotelId}&kind=main`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ media_url: url, updated_by: 'console' }),
+      body: JSON.stringify({ media_url: url }),
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.success === false) throw new Error(d.error || `HTTP ${r.status}`);
@@ -104,7 +108,7 @@ export default function MainPhotoPicker({
     if (!confirm('Go back to the supplier\'s photo order?')) return;
     setBusy(true); setError(null);
     try {
-      const r = await fetch(`${HOTEL_API_URL}/api/editorial/hotels/${hotelId}/featured-photo`, { method: 'DELETE' });
+      const r = await fetch(`${PHOTOS_API}?hotelId=${hotelId}&kind=main`, { method: 'DELETE' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       onChanged();
     } catch (e) { setError((e as Error).message); }
@@ -116,11 +120,11 @@ export default function MainPhotoPicker({
     setBusy(true); setError(null);
     try {
       const r = isHidden
-        ? await fetch(`${HOTEL_API_URL}/api/editorial/hotels/${hotelId}/hidden-images?media_url=${encodeURIComponent(url)}`, { method: 'DELETE' })
-        : await fetch(`${HOTEL_API_URL}/api/editorial/hotels/${hotelId}/hidden-images`, {
+        ? await fetch(`${PHOTOS_API}?hotelId=${hotelId}&kind=hidden&media_url=${encodeURIComponent(url)}`, { method: 'DELETE' })
+        : await fetch(`${PHOTOS_API}?hotelId=${hotelId}&kind=hidden`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ media_url: url, updated_by: 'console' }),
+            body: JSON.stringify({ media_url: url }),
           });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.success === false) throw new Error(d.error || `HTTP ${r.status}`);
@@ -147,7 +151,7 @@ export default function MainPhotoPicker({
     if (file.size > UPLOAD_MAX_MB * 1024 * 1024) { setError(`Photo is over ${UPLOAD_MAX_MB} MB`); return; }
     setBusy(true);
     try {
-      const r = await fetch(`${HOTEL_API_URL}/api/editorial/hotels/${hotelId}/photos`, {
+      const r = await fetch(`${PHOTOS_API}?hotelId=${hotelId}`, {
         method: 'POST',
         headers: { 'Content-Type': file.type },
         body: file,
