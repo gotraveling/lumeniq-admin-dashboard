@@ -23,7 +23,7 @@ import {
   SlidersHorizontal,
   Link2,
   Tag,
-  LayoutList, TrendingDown, Activity} from 'lucide-react';
+  LayoutList, TrendingDown, Activity, MapPin} from 'lucide-react';
 
 /**
  * Console shell — sidebar nav + topbar + content slot.
@@ -63,6 +63,7 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
       { href: '/console/profiles',         label: 'Profiles',          icon: SlidersHorizontal, adminOnly: true },
       { href: '/console/editorial',        label: 'Editorial Content', icon: Sparkles, adminOnly: true },
       { href: '/console/hotels/visibility', label: 'Hotel Visibility', icon: EyeOff, adminOnly: true },
+      { href: '/console/near',             label: 'Near a place (test)', icon: MapPin, adminOnly: true },
     ],
   },
   {
