@@ -125,8 +125,15 @@ export default function NearPlacePage() {
     return () => clearTimeout(t);
   }, [q, kind]);
 
-  const load = useCallback(async (p: Place, r = radius, s = minStars) => {
+  // The address bar always matches what is shown, so a place view can be
+  // bookmarked, shared or opened in a new tab. `push` adds a history step
+  // (picking a place); filter changes just update the current one.
+  const load = useCallback(async (p: Place, r = radius, s = minStars, push = false) => {
     setLoading(true); setErr(null); setRealNote(null);
+    const href = placeHref(p.id, r, s);
+    if (window.location.pathname + window.location.search !== href) {
+      window.history[push ? 'pushState' : 'replaceState'](null, '', href);
+    }
     try {
       const j = await call(`${p.id}/hotels?radius_km=${r}&min_stars=${s}&limit=60`);
       setPlace(j.place || p); setPlaceEvents(j.events || []); setHotels(j.hotels || []);
@@ -137,7 +144,31 @@ export default function NearPlacePage() {
     finally { setLoading(false); }
   }, [radius, minStars]);
 
-  const pick = (p: Place) => { setFocus(null); void load(p); };
+  const pick = (p: Place) => { setFocus(null); void load(p, radius, minStars, true); };
+
+  // Open the place in the address (?place=…&km=…&stars=…), on first load and
+  // on Back/Forward.
+  useEffect(() => {
+    const fromUrl = () => {
+      const sp = new URLSearchParams(window.location.search);
+      const id = Number(sp.get('place'));
+      if (!Number.isInteger(id) || id <= 0) { setPlace(null); setHotels([]); return; }
+      const r = RADII.includes(Number(sp.get('km'))) ? Number(sp.get('km')) : 3;
+      const s = Number.isFinite(Number(sp.get('stars'))) && sp.get('stars') !== null ? Number(sp.get('stars')) : 4;
+      setRadius(r); setMinStars(s); setFocus(null);
+      void load({ id } as Place, r, s);
+    };
+    fromUrl();
+    window.addEventListener('popstate', fromUrl);
+    return () => window.removeEventListener('popstate', fromUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** A real link, so Ctrl/Cmd-click and "open in new tab" work; a plain click stays on the page. */
+  const onPlaceClick = (e: React.MouseEvent, p: Place) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault(); pick(p);
+  };
 
   const getRealTimes = async () => {
     if (!place) return;
@@ -198,7 +229,8 @@ export default function NearPlacePage() {
               <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>Searching…</div>
             )}
             {places.map((p) => (
-              <button key={`p${p.id}`} onClick={() => pick(p)} style={rowBtn(place?.id === p.id)} aria-pressed={place?.id === p.id}>
+              <a key={`p${p.id}`} href={placeHref(p.id, radius, minStars)} onClick={(e) => onPlaceClick(e, p)}
+                style={rowBtn(place?.id === p.id)} aria-current={place?.id === p.id ? 'true' : undefined}>
                 <div style={{ fontWeight: 600 }}>
                   {p.kind === 'airport' && <span className="c-mono" style={{ marginRight: 6 }}>{p.code}</span>}
                   {p.name}
@@ -206,23 +238,23 @@ export default function NearPlacePage() {
                 <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
                   {KIND_LABEL[p.kind]}{p.category && p.kind !== 'airport' ? ` · ${p.category}` : ''} · {[p.city, p.country].filter(Boolean).join(', ')}
                 </div>
-              </button>
+              </a>
             ))}
             {events.length > 0 && (
               <div style={{ padding: '8px 12px 4px', fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', textTransform: 'uppercase' }}>
                 {q.trim() ? 'Events' : 'Events (or type above to search)'}
               </div>
             )}
-            {events.map((ev) => (
-              <button key={`e${ev.id}`} onClick={() => ev.place && pick(ev.place)} disabled={!ev.place}
-                style={rowBtn(!!ev.place && place?.id === ev.place?.id)} aria-pressed={!!ev.place && place?.id === ev.place?.id}>
+            {events.map((ev) => ev.place && (
+              <a key={`e${ev.id}`} href={placeHref(ev.place.id, radius, minStars)} onClick={(e) => onPlaceClick(e, ev.place!)}
+                style={rowBtn(place?.id === ev.place.id)} aria-current={place?.id === ev.place.id ? 'true' : undefined}>
                 <div style={{ fontWeight: 600 }}>
                   {ev.name} {ev.is_test && <span className="c-pill c-pill-warn" style={{ marginLeft: 4 }} title="Made-up example event for testing">example</span>}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
                   at {ev.place?.name} · {fmtDate(ev.starts_on)}{ev.ends_on && ev.ends_on !== ev.starts_on ? ` – ${fmtDate(ev.ends_on)}` : ''}
                 </div>
-              </button>
+              </a>
             ))}
             {!searching && q.trim() && places.length === 0 && events.length === 0 && !setupMsg && (
               <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>
@@ -384,9 +416,11 @@ export default function NearPlacePage() {
   );
 }
 
+const placeHref = (id: number, km: number, stars: number) => `/console/near?place=${id}&km=${km}&stars=${stars}`;
+
 function rowBtn(active: boolean): React.CSSProperties {
   return {
-    display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 13,
+    display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 13, textDecoration: 'none',
     border: 0, borderBottom: '1px solid var(--c-line-soft)', cursor: 'pointer',
     background: active ? 'var(--c-accent-soft)' : 'transparent', color: 'var(--c-fg)',
   };
