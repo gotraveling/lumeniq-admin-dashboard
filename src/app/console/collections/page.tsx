@@ -838,7 +838,7 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy, originalSlu
         </Field>
         <Field label="Title"><input className="c-input" value={value.title} onChange={(e) => set({ title: e.target.value })} placeholder="The Maldives, Reimagined" /></Field>
         <Field label="Subtitle"><input className="c-input" value={value.subtitle || ''} onChange={(e) => set({ subtitle: e.target.value })} /></Field>
-        <Field label="Hero image URL"><input className="c-input" value={value.heroImage || ''} onChange={(e) => set({ heroImage: e.target.value })} /></Field>
+        <HeroImageField value={value.heroImage || ''} slug={value.slug} onChange={(url) => set({ heroImage: url })} />
         <Field label="Member benefit line"><input className="c-input" value={value.memberBenefit || ''} onChange={(e) => set({ memberBenefit: e.target.value })} /></Field>
         <Field label="Search destination — fills the “Discover {this} like never before” heading and scopes the hero search box (e.g. Maldives, Cairo). Clear the intro below to hide the heading entirely.">
           <input className="c-input" value={value.searchDestination || ''} onChange={(e) => set({ searchDestination: e.target.value })} placeholder="Maldives" />
@@ -1553,6 +1553,88 @@ function PhotoPicker({ hotelId, image, images, onChange }: {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Header image: paste a link, upload one, or pick an earlier upload. Uploads
+ * land in a folder named after the collection's slug, and the picker lists
+ * them by folder with this collection's first.
+ */
+function HeroImageField({ value, slug, onChange }: { value: string; slug: string; onChange: (url: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [uploads, setUploads] = useState<{ folder: string; url: string }[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const loadUploads = async () => {
+    const r = await fetch('/api/admin/collections/hero-image', { cache: 'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    setUploads(d.images || []);
+  };
+
+  const toggle = async () => {
+    setOpen((o) => !o);
+    if (uploads || busy) return;
+    setBusy(true); setError('');
+    try { await loadUploads(); } catch (e) { setError(e instanceof Error ? e.message : 'Could not load uploads'); }
+    finally { setBusy(false); }
+  };
+
+  const upload = async (file: File) => {
+    setBusy(true); setError('');
+    try {
+      const r = await fetch(`/api/admin/collections/hero-image?folder=${encodeURIComponent(slug)}`, {
+        method: 'POST', headers: { 'Content-Type': file.type }, body: file,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.url) throw new Error(d.error || `HTTP ${r.status}`);
+      onChange(d.url);
+      if (uploads) await loadUploads();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const folders = useMemo(() => {
+    const by = new Map<string, string[]>();
+    for (const u of uploads || []) by.set(u.folder, [...(by.get(u.folder) || []), u.url]);
+    const mine = slug ? slug.toLowerCase() : '';
+    return [...by.entries()].sort(([a], [b]) => (a === mine ? -1 : b === mine ? 1 : a.localeCompare(b)));
+  }, [uploads, slug]);
+
+  return (
+    <div style={{ display: 'grid', gap: 6 }}>
+      <span className="c-label">Hero image</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {value && <img src={value} alt="" style={{ width: 80, height: 48, objectFit: 'cover', borderRadius: 4 }} />}
+        <input className="c-input" style={{ flex: 1 }} value={value} onChange={(e) => onChange(e.target.value)} placeholder="Paste a link, or upload" />
+        <button type="button" className="c-btn" disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? 'Working…' : 'Upload'}</button>
+        <button type="button" className="c-btn" onClick={toggle}>{open ? 'Close' : 'Pick from uploads'}</button>
+        <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" hidden
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
+      </div>
+      {error && <div style={{ color: 'var(--c-danger)', fontSize: 12 }}>{error}</div>}
+      {open && uploads && uploads.length === 0 && <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>No header images uploaded yet.</div>}
+      {open && folders.map(([folder, urls]) => (
+        <div key={folder} style={{ display: 'grid', gap: 4 }}>
+          <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>{folder}</span>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 6 }}>
+            {urls.map((url) => (
+              <button key={url} type="button" onClick={() => onChange(url)} title="Use as hero image"
+                style={{ padding: 0, border: url === value ? '3px solid var(--c-accent, #7a6a45)' : '1px solid var(--c-line)', borderRadius: 4, cursor: 'pointer', background: 'none' }}>
+                <img src={url} alt="" loading="lazy" style={{ width: '100%', height: 80, objectFit: 'cover', display: 'block', borderRadius: 3 }} />
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
