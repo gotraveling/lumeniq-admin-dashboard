@@ -20,6 +20,8 @@ type Place = {
   category: string | null; city: string | null; country: string | null;
   latitude: number; longitude: number; coords_verified: boolean;
   google_id?: string | null; address?: string | null;
+  /** Airports: region (e.g. Sicily) and country name, and km when listed as "Airports near ...". */
+  region_name?: string | null; country_name?: string | null; size?: 'large' | 'medium' | null; km?: number;
 };
 type GoogleResult = {
   google_id: string; name: string; address: string | null; type: string | null;
@@ -116,6 +118,7 @@ export default function NearPlacePage() {
   const [google, setGoogle] = useState<GoogleResult[]>([]);
   const [googleAsked, setGoogleAsked] = useState(false);
   const [googleMsg, setGoogleMsg] = useState<string | null>(null);
+  const [placesHeading, setPlacesHeading] = useState<string | null>(null);
   const [searchId, setSearchId] = useState<number | null>(null);
   const [setupMsg, setSetupMsg] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
@@ -155,7 +158,7 @@ export default function NearPlacePage() {
         const params = new URLSearchParams({ q: term, category: cat });
         if (term.length >= 3) { params.set('log', '1'); params.set('ref', ref); } else params.set('google', '0');
         const j = await call(`search?${params}`);
-        setPlaces(j.places || []); setEvents(j.events || []);
+        setPlaces(j.places || []); setEvents(j.events || []); setPlacesHeading(j.places_heading || null);
         setGoogle(j.google || []); setGoogleAsked(!!j.google_asked); setGoogleMsg(j.google_message || null);
         setSearchId(j.search_id ?? null);
         setSetupMsg(j.setup === false ? plain(j.message) : null);
@@ -337,6 +340,7 @@ export default function NearPlacePage() {
                 <div style={{ padding: 12, fontSize: 13, color: 'var(--c-fg-muted)' }}>Searching…</div>
               )}
               {!term && places.length > 0 && <div style={sectionHead}>Popular</div>}
+              {term && placesHeading && places.length > 0 && <div style={sectionHead}>{placesHeading}</div>}
               {places.map((p) => (
                 <a key={`p${p.id}`} href={placeHref(p.id!, radius, minStars, cat)} onClick={(e) => onPlaceClick(e, p)}
                   style={rowBtn(place?.id === p.id)} aria-current={place?.id === p.id ? 'true' : undefined}>
@@ -345,7 +349,8 @@ export default function NearPlacePage() {
                     {p.name}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--c-fg-muted)' }}>
-                    {placeLabel(p)} · {[p.city, p.country].filter(Boolean).join(', ')}
+                    {placeLabel(p)} · {[p.city, p.region_name !== p.city ? p.region_name : null, p.country].filter(Boolean).join(', ')}
+                    {p.km != null && ` · ${p.km} km away`}
                   </div>
                 </a>
               ))}
