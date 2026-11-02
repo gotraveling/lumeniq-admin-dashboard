@@ -213,7 +213,11 @@ type AdminRate = {
     // 'supplier' = the AUD is the supplier's own billing amount, untouched;
     // 'converted' = we multiplied by the configured fx rate.
     audSource?: 'supplier' | 'converted' | null;
-    markup?: { type: string; value: number; amount: number; ruleName?: string };
+    markup?: {
+      type: string; value: number; amount: number; ruleName?: string;
+      // What the rule that priced this rate reaches (engine ruleScopeOf).
+      ruleScope?: { kind: 'global' | 'hotel' | 'narrowed'; ratePlans?: string[]; roomName?: string | null; other?: boolean } | null;
+    };
   };
   // Promotional OFFER metadata (Hummingbird deal.offers[]). Structured as
   // { name, code } so admins see which promo produced the price AND its supplier
@@ -2749,6 +2753,17 @@ const MEAL_PLAN_CHOICES: Array<{ value: string; label: string }> = [
   { value: 'allinclusive', label: 'All inclusive' },
 ];
 
+// Short name for the markup that priced a rate, shown under its %.
+function markupScopeLabel(scope: { kind: string; ratePlans?: string[]; roomName?: string | null; other?: boolean } | null | undefined): string | null {
+  if (!scope) return null;
+  if (scope.kind === 'global') return 'default markup';
+  if (scope.kind === 'hotel') return 'hotel markup';
+  const plans = (scope.ratePlans || []).map((pl) => MEAL_PLAN_CHOICES.find((c) => c.value === pl)?.label || pl);
+  if (scope.roomName) return `${scope.roomName}${plans.length ? `, ${plans.join(', ')}` : ''} markup`;
+  if (plans.length) return `${plans.join(', ')} markup`;
+  return 'special markup';
+}
+
 function fmtPct(v: number | null | undefined) {
   return v == null ? '—' : `${Number(v)}%`;
 }
@@ -3703,6 +3718,11 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNet
                       {saving ? 'Saving…' : 'Save'}
                     </button>
                   </div>
+                  {scopedMarkups.length > 0 && (
+                    <div style={{ fontSize: 11.5, color: '#92600a', marginTop: 4 }}>
+                      {scopedMarkups.length === 1 ? 'One markup below overrides' : `${scopedMarkups.length} markups below override`} this for some rates.
+                    </div>
+                  )}
                   <PriceToMarkup
                     netAud={cheapestNetAud}
                     sellAud={cheapestSellAud}
@@ -5962,6 +5982,20 @@ function RoomGroupedRates({
                                   style={{ fontWeight: broken ? 700 : 600, color: broken ? 'var(--c-danger)' : undefined }}
                                   title={broken ? 'No markup applied to this rate — selling at net. Check the pricing rule scope for this hotel.' : undefined}
                                 >{pct}%</div>
+                              );
+                            })()}
+                            {(() => {
+                              // Which markup priced this rate. A breakfast-only
+                              // markup overriding the hotel's figure looked like
+                              // an edit that never saved (Amane, Nov 2026).
+                              const label = markupScopeLabel(r.pricing.markup?.ruleScope);
+                              if (!label) return null;
+                              const narrowed = r.pricing.markup?.ruleScope?.kind === 'narrowed';
+                              return (
+                                <div
+                                  style={{ fontSize: 10.5, fontFamily: 'var(--c-sans, inherit)', color: narrowed ? '#92600a' : 'var(--c-fg-muted)', fontWeight: narrowed ? 600 : 400 }}
+                                  title={narrowed ? 'This markup overrides the hotel markup for these rates. Change or remove it under Manage → By meal plan.' : undefined}
+                                >{label}</div>
                               );
                             })()}
                             {(() => {
