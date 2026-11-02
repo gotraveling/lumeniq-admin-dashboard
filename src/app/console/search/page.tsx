@@ -5992,10 +5992,10 @@ function RoomGroupedRates({
                               if (!label) return null;
                               const narrowed = r.pricing.markup?.ruleScope?.kind === 'narrowed';
                               return (
-                                <div
-                                  style={{ fontSize: 10.5, fontFamily: 'var(--c-sans, inherit)', color: narrowed ? '#92600a' : 'var(--c-fg-muted)', fontWeight: narrowed ? 600 : 400 }}
-                                  title={narrowed ? 'This markup overrides the hotel markup for these rates. Change or remove it under Manage → By meal plan.' : undefined}
-                                >{label}</div>
+                                <div style={{ fontSize: 10.5, fontFamily: 'var(--c-sans, inherit)', color: narrowed ? '#92600a' : 'var(--c-fg-muted)', fontWeight: narrowed ? 600 : 400 }}>
+                                  {label}
+                                  {narrowed && <div style={{ fontWeight: 400 }}>overrides hotel %</div>}
+                                </div>
                               );
                             })()}
                             {(() => {
