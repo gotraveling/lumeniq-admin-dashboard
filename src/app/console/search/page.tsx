@@ -5198,7 +5198,11 @@ function RoomGroupedRates({
       // Try the cross-supplier canonical key first (collapses HB + RateHawk
       // rates for the same physical room into one group), else fall back to
       // the existing per-variant grouping.
-      const lk = roomMap?.get(`${(r.supplier || '').toLowerCase()}|${normName(r.roomTypeName)}`);
+      // Pairs are stored by the static room name; a live rate can carry a
+      // slightly different name, so try the static match too.
+      const sup = (r.supplier || '').toLowerCase();
+      const lk = roomMap?.get(`${sup}|${normName(r.roomTypeName)}`)
+        || (r.roomGroupName ? roomMap?.get(`${sup}|${normName(r.roomGroupName)}`) : undefined);
       const k = lk?.key || r.displayRoomName || r.roomGroupName || r.roomTypeName || r.rateKey || 'Room';
       const label = lk?.label || r.displayRoomName || r.roomGroupName || r.roomTypeName || r.rateKey || 'Room';
       if (!m.has(k)) m.set(k, { list: [], label });
