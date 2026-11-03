@@ -105,20 +105,18 @@ function nightsBetween(a?: string | null, b?: string | null): number | null {
 
 /**
  * The supplier deadline is stored as UTC without a zone marker
- * ("2027-04-20T16:00:00"). Read it as UTC, and show Sydney time beside it
- * because that is where most of our clients read it.
+ * ("2027-04-20T16:00:00"). Read it as UTC and show it in Sydney time, with
+ * AEST or AEDT as the date falls, because that is how our clients read it.
  */
-function fmtDeadline(raw: string): { utc: string; sydney: string } | null {
+function fmtDeadline(raw: string): string | null {
   const iso = /[zZ]|[+-]\d{2}:?\d{2}$/.test(raw) ? raw : `${raw}Z`;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
   const opts: Intl.DateTimeFormatOptions = {
     day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    timeZone: TZ, timeZoneName: 'short',
   };
-  return {
-    utc: new Intl.DateTimeFormat('en-AU', { ...opts, timeZone: 'UTC' }).format(d) + ' UTC',
-    sydney: new Intl.DateTimeFormat('en-AU', { ...opts, timeZone: TZ }).format(d) + ' Sydney time',
-  };
+  return new Intl.DateTimeFormat('en-AU', opts).format(d);
 }
 
 function fmtIssued(iso?: string | null): string {
@@ -231,8 +229,8 @@ function cancellationText(terms: any): { title: string; detail?: string } {
     if (d) {
       const past = Date.parse(/[zZ]$/.test(raw) ? raw : `${raw}Z`) < Date.now();
       return past
-        ? { title: 'Free cancellation has ended', detail: `It ended on ${d.utc} (${d.sydney}).` }
-        : { title: `Free cancellation until ${d.utc}`, detail: `That is ${d.sydney}. After this the booking cannot be cancelled without charge.` };
+        ? { title: 'Free cancellation has ended', detail: `It ended on ${d}.` }
+        : { title: `Free cancellation until ${d}`, detail: 'After this the booking cannot be cancelled without charge.' };
     }
   }
   return { title: 'Cancellation terms', detail: 'Please ask your FirstClass consultant before making any change.' };
