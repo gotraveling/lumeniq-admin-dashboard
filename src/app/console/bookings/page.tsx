@@ -23,6 +23,9 @@ interface Booking {
   priceBreakdown?: any;
   commissionAmount?: number | null;
   totalAmount: number | null;
+  // Price agreed with the client when the consultant quoted something other
+  // than totalAmount (rounded, discounted). null = charge totalAmount.
+  clientPrice?: number | null;
   currency: string;
   confirmationNumber: string;
   cancellationNumber?: string | null;
@@ -297,7 +300,7 @@ export default function ConsoleBookingsPage() {
                         hunted across the row. */}
                     <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
                       <div className="c-mono" style={{ fontWeight: 700 }}>
-                        {b.totalAmount != null ? `${amount(b.totalAmount)} ${b.currency || 'AUD'}` : '—'}
+                        {(b.clientPrice ?? b.totalAmount) != null ? `${amount((b.clientPrice ?? b.totalAmount) as number)} ${b.currency || 'AUD'}` : '—'}
                       </div>
                       {(() => {
                         const net = b.priceBreakdown?.supplierNet;
@@ -529,8 +532,8 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
     let reference = current.reference || '';
     if (status !== 'unpaid') {
       const suggested = status === 'refunded'
-        ? (current.amount ?? b.totalAmount)
-        : b.totalAmount;
+        ? (current.amount ?? b.clientPrice ?? b.totalAmount)
+        : (b.clientPrice ?? b.totalAmount);
       const entered = prompt(
         status === 'deposit' ? 'Deposit taken (amount):'
         : status === 'refunded' ? 'Amount refunded:'
@@ -554,6 +557,32 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
       if (r.ok && j.success) { flash(true, status === 'unpaid' ? 'Payment record cleared.' : 'Payment recorded.'); await refresh(); }
       else flash(false, j.error || j.details || `Could not record payment (${r.status})`);
     } catch { flash(false, 'Network error recording payment'); }
+    finally { setBusy(null); }
+  };
+
+  // The price agreed with the client, when it is not the system's sell price.
+  // The sell price stays on the booking; this sits beside it. Blank resets it.
+  const saveClientPrice = async () => {
+    const entered = prompt(
+      'Price agreed with the client (leave blank to use the system price):',
+      String(b.clientPrice ?? b.totalAmount ?? '')
+    );
+    if (entered === null) return;
+    const trimmed = entered.trim();
+    const n = trimmed === '' ? null : Number(trimmed);
+    if (n !== null && (!Number.isFinite(n) || n < 0)) { flash(false, 'That is not an amount.'); return; }
+    const amount = n !== null && b.totalAmount != null && Math.abs(n - b.totalAmount) < 0.005 ? null : n;
+    setBusy('clientPrice');
+    try {
+      const r = await fetch(`/api/bookings/${id}/client-price`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-consultant-email': user?.email || '' },
+        body: JSON.stringify({ amount }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.success) { flash(true, amount == null ? 'Client price reset to the system price.' : 'Client price saved.'); await refresh(); }
+      else flash(false, j.error || j.details || `Could not save client price (${r.status})`);
+    } catch { flash(false, 'Network error saving client price'); }
     finally { setBusy(null); }
   };
 
@@ -921,17 +950,40 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
                   : 'not recorded'}
               </span>
             </div>
-            <div style={{ padding: '8px 10px', borderRadius: 7, border: '1px solid var(--c-line)', background: 'var(--c-bg-soft)', display: 'grid', gap: 5, marginBottom: 8 }}>
-              {pb?.commissionAmount != null && (
-                <KV k={`Our margin${pb.commissionPercent != null ? ` (${pb.commissionPercent}%)` : ''}`} v={fmtMoney(pb.commissionAmount, pb.sellingCurrency)} />
-              )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
-                <span style={{ fontSize: 12, color: 'var(--c-fg-soft)', fontWeight: 600 }}>Charge the client</span>
-                <span className="c-mono" style={{ fontSize: 15, fontWeight: 700, whiteSpace: 'nowrap' }}>
-                  {fmtMoney(b.totalAmount, b.currency)}
-                </span>
-              </div>
-            </div>
+            {(() => {
+              // With an agreed client price the margin is what is left of
+              // that over the net, so a discount shows as a smaller margin.
+              const agreed = b.clientPrice ?? null;
+              const netSame = pb?.supplierNet != null
+                && (pb.supplierNetCurrency || pb.sellingCurrency || b.currency) === b.currency;
+              const margin = agreed != null
+                ? (netSame ? agreed - pb.supplierNet : null)
+                : (pb?.commissionAmount ?? null);
+              const marginPct = agreed != null
+                ? (netSame && pb.supplierNet > 0 ? Math.round((margin as number) / pb.supplierNet * 1000) / 10 : null)
+                : (pb?.commissionPercent ?? null);
+              return (
+                <div style={{ padding: '8px 10px', borderRadius: 7, border: '1px solid var(--c-line)', background: 'var(--c-bg-soft)', display: 'grid', gap: 5, marginBottom: 8 }}>
+                  {margin != null && (
+                    <KV k={`Our margin${marginPct != null ? ` (${marginPct}%)` : ''}`} v={fmtMoney(margin, agreed != null ? b.currency : pb.sellingCurrency)} />
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+                    <span style={{ fontSize: 12, color: 'var(--c-fg-soft)', fontWeight: 600 }}>Charge the client</span>
+                    <span className="c-mono" style={{ fontSize: 15, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                      {fmtMoney(agreed ?? b.totalAmount, b.currency)}
+                    </span>
+                  </div>
+                  {agreed != null && (
+                    <div style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>
+                      Agreed with the client. System price was {fmtMoney(b.totalAmount, b.currency)}.
+                    </div>
+                  )}
+                  <div>
+                    <button className="c-btn" disabled={busy === 'clientPrice'} onClick={saveClientPrice}>Change client price</button>
+                  </div>
+                </div>
+              );
+            })()}
             {/* Has the client paid? Taken offline on our terminal, recorded here
                 so the answer is not somebody's memory. */}
             {(() => {
