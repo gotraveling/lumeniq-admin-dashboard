@@ -1084,9 +1084,13 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
                       {q.net != null ? (
                         <>
                           {fmtMoney(q.net, q.netCurrency)}
-                          {/* The same cost in the rate's own currency. Shown in
-                              brackets so it is never read as a second charge. */}
-                          {q.netInRateCurrency != null && q.rateCurrency && q.rateCurrency !== q.netCurrency && (
+                          {/* The same cost in the rate's own currency, for a
+                              supplier that really prices in it (Hummingbird
+                              quotes USD). RateHawk bills us in AUD; their USD
+                              is a conversion we asked the API for and is on no
+                              invoice, so it only confused the booking (Tina,
+                              Nov 2026). */}
+                          {isHB && q.netInRateCurrency != null && q.rateCurrency && q.rateCurrency !== q.netCurrency && (
                             <span style={{ color: 'var(--c-fg-muted)' }}> ({fmtMoney(q.netInRateCurrency, q.rateCurrency)})</span>
                           )}
                         </>
