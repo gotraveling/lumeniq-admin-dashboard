@@ -706,6 +706,29 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
     finally { setBusy(null); }
   };
 
+  // Our own voucher for the client: same layout as the supplier's, without
+  // its "PAID" stamp (which means we paid them, not that the client paid us),
+  // without prices and without the supplier's name. Rendered as an HTML page
+  // the consultant can print or save as PDF.
+  const handleClientVoucher = async () => {
+    setBusy('client-voucher');
+    try {
+      const r = await fetch(`/api/bookings/${id}/client-voucher`);
+      const isHtml = (r.headers.get('content-type') || '').includes('text/html');
+      if (r.ok && isHtml) {
+        const blob = new Blob([await r.text()], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank', 'noopener');
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        flash(true, 'Client voucher opened in a new tab.');
+      } else {
+        const j = await r.json().catch(() => ({}));
+        flash(false, j?.message || j?.error || `Client voucher unavailable (${r.status})`);
+      }
+    } catch { flash(false, 'Network error building the client voucher'); }
+    finally { setBusy(null); }
+  };
+
   const handleResend = async () => {
     // Tina clicked this thinking it mailed HER and it went to the client.
     // The label now says who receives it, and it asks first, naming the
@@ -819,10 +842,19 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
             {b.supplierId === 'ratehawk' && (
               <button
                 className="c-btn" disabled={!!busy} onClick={handleVoucher}
-                title="Open RateHawk's voucher for this booking — the document the hotel recognises at check-in"
+                title="Open RateHawk's voucher for this booking. It carries their PAID stamp and their branding, so it is for us, not the client."
                 style={{ padding: '5px 11px', fontSize: 12 }}
               >
-                {busy === 'voucher' ? 'Fetching…' : 'Voucher'}
+                {busy === 'voucher' ? 'Fetching…' : 'Supplier voucher'}
+              </button>
+            )}
+            {b.status !== 'cancelled' && (
+              <button
+                className="c-btn" disabled={!!busy} onClick={handleClientVoucher}
+                title="Open the FirstClass voucher to send the client: our logo, no prices, no PAID stamp, no supplier name. Print or save it as PDF."
+                style={{ padding: '5px 11px', fontSize: 12 }}
+              >
+                {busy === 'client-voucher' ? 'Building…' : 'Client voucher'}
               </button>
             )}
             {active && (
