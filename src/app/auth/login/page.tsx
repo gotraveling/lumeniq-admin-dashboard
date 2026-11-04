@@ -38,16 +38,6 @@ export default function LoginPage() {
     }
   };
 
-  const handleQuickLogin = (role: 'super_admin' | 'firstclass_admin') => {
-    if (role === 'super_admin') {
-      setEmail('admin@equationx.ai');
-      setPassword('superadmin123');
-    } else if (role === 'firstclass_admin') {
-      setEmail('admin@firstclass.com.au');
-      setPassword('firstclass123');
-    }
-  };
-
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <div className="max-w-md w-full mx-4">
@@ -117,25 +107,6 @@ export default function LoginPage() {
               {loading ? 'Signing in...' : 'Sign in'}
             </button>
           </form>
-
-          {/* Demo Login Buttons */}
-          <div className="mt-6 pt-6 border-t border-gray-200">
-            <p className="text-center text-sm text-gray-500 mb-4">Quick Demo Login:</p>
-            <div className="space-y-2">
-              <button
-                onClick={() => handleQuickLogin('super_admin')}
-                className="w-full text-left px-4 py-2 bg-gray-100 hover:bg-gray-200 border border-gray-200 rounded-md text-gray-700 transition-colors"
-              >
-                <div className="font-medium">Super Admin</div>
-              </button>
-              <button
-                onClick={() => handleQuickLogin('firstclass_admin')}
-                className="w-full text-left px-4 py-2 bg-gray-100 hover:bg-gray-200 border border-gray-200 rounded-md text-gray-700 transition-colors"
-              >
-                <div className="font-medium">FirstClass Admin</div>
-              </button>
-            </div>
-          </div>
         </div>
 
         <div className="text-center mt-6">
