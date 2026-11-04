@@ -604,6 +604,10 @@ export default function ConsoleSearchPage() {
   // into ONE card ("one room, both rates"). Soft-fails to empty (drawer must
   // never break on a mapping fetch error). Reset/refetch on hotel change.
   const [roomMap, setRoomMap] = useState<Map<string, { key: string; label: string }>>(new Map());
+  // Suggested pairs for the open hotel (review_low with both names), waiting
+  // for someone to confirm. Shown above the rates so Tina can clear them while
+  // she quotes; a confirmed pair merges straight into the room cards.
+  const [pendingPairs, setPendingPairs] = useState<Array<{ id: number; hb_room_name: string; rh_room_name: string }>>([]);
   // Lazy B2C compare: false until the consultant clicks "Compare B2C" on the
   // open hotel (so we don't pay 2x ETG calls on every search). Base channel
   // is always Member (cug); B2C rates are merged in on demand, tagged.
@@ -1296,7 +1300,7 @@ export default function ConsoleSearchPage() {
   // as separate cards. Soft-fails to an empty map.
   useEffect(() => {
     const id = detailHotel?.id;
-    if (!id) { setRoomMap(new Map()); return; }
+    if (!id) { setRoomMap(new Map()); setPendingPairs([]); return; }
     let cancelled = false;
     (async () => {
       try {
@@ -1315,13 +1319,37 @@ export default function ConsoleSearchPage() {
           m.set(`hummingbird|${normName(row.hb_room_name)}`, { key, label });
           m.set(`ratehawk|${normName(row.rh_room_name)}`,   { key, label });
         }
-        if (!cancelled) setRoomMap(m);
+        if (!cancelled) {
+          setRoomMap(m);
+          setPendingPairs(rows.filter(r => r.status === 'review_low' && r.hb_room_name && r.rh_room_name) as any);
+        }
       } catch {
-        if (!cancelled) setRoomMap(new Map());                          // never break the drawer
+        if (!cancelled) { setRoomMap(new Map()); setPendingPairs([]); }  // never break the drawer
       }
     })();
     return () => { cancelled = true; };
   }, [detailHotel?.id]);
+
+  // Confirm or reject a suggested pair from the hotel drawer. A confirmed pair
+  // joins roomMap at once, so its two rates merge without a reload.
+  const reviewPair = useCallback(async (row: { id: number; hb_room_name: string; rh_room_name: string }, status: 'confirmed' | 'rejected') => {
+    const res = await fetch(`/api/admin/room-mappings/${row.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, updated_by: user?.email || 'console' }),
+    });
+    if (!res.ok) return;
+    setPendingPairs(p => p.filter(x => x.id !== row.id));
+    if (status === 'confirmed') {
+      setRoomMap(prev => {
+        const m = new Map(prev);
+        const v = { key: `canon:${row.id}`, label: row.hb_room_name };
+        m.set(`hummingbird|${normName(row.hb_room_name)}`, v);
+        m.set(`ratehawk|${normName(row.rh_room_name)}`, v);
+        return m;
+      });
+    }
+  }, [user?.email]);
 
   // When the consultant picks a rate, immediately fire a prebook
   // so we verify availability + price BEFORE they fill the form.
@@ -2307,6 +2335,9 @@ export default function ConsoleSearchPage() {
                 </div>
               );
             })()}
+            {isAdmin && pendingPairs.length > 0 && (
+              <RoomMatchCheck pairs={pendingPairs} onReview={reviewPair} />
+            )}
             {rates.length > 0 && (
               <RoomGroupedRates
                 rates={supplierFocus ? rates.filter(r => r.supplier === supplierFocus) : rates}
@@ -7177,6 +7208,42 @@ function PriceToMarkup({ netAud, sellAud, actionLabel = 'Use', busy, onApply }: 
       {!(Number.isFinite(Number(netAud)) && Number(netAud) > 0) && (
         <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginTop: 4 }}>
           Nothing is loaded to start from. Search dates for this hotel, or type the net yourself.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Suggested room pairs for the open hotel. Each one is the same room from
+// Hummingbird and RateHawk until someone says otherwise; until it is
+// confirmed, the two rates stay on separate cards.
+function RoomMatchCheck({ pairs, onReview }: {
+  pairs: Array<{ id: number; hb_room_name: string; rh_room_name: string }>;
+  onReview: (row: { id: number; hb_room_name: string; rh_room_name: string }, status: 'confirmed' | 'rejected') => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ border: '1px solid var(--c-line)', borderRadius: 8, padding: '8px 12px', margin: '12px 0', background: 'var(--c-bg)' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{ all: 'unset', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+      >
+        {open ? '▾' : '▸'} {pairs.length} room match{pairs.length === 1 ? '' : 'es'} to check
+        <span style={{ fontWeight: 400, color: 'var(--c-fg-soft)' }}> · same room at both suppliers?</span>
+      </button>
+      {open && (
+        <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+          {pairs.map(p => (
+            <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, flexWrap: 'wrap' }}>
+              <span style={{ flex: '1 1 260px' }}>
+                {p.hb_room_name} <span style={{ color: 'var(--c-fg-soft)' }}>(Hummingbird)</span>
+                {' = '}
+                {p.rh_room_name} <span style={{ color: 'var(--c-fg-soft)' }}>(RateHawk)</span>
+              </span>
+              <button className="c-btn c-btn-primary" onClick={() => onReview(p, 'confirmed')}>Same room</button>
+              <button className="c-btn" onClick={() => onReview(p, 'rejected')}>Different</button>
+            </div>
+          ))}
         </div>
       )}
     </div>
