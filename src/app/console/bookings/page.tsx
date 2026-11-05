@@ -473,6 +473,10 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
   // Cancellation economics: prefer the live cancel response, else the
   // 'cancelled' audit event payload persisted on the booking.
   const cancelEv = Array.isArray(b.history) ? [...b.history].reverse().find((e: any) => e.action === 'cancelled') : null;
+  // A failed cancel leaves the booking live, so say so plainly until a later
+  // attempt succeeds.
+  const lastCancelEv = Array.isArray(b.history) ? [...b.history].reverse().find((e: any) => e.action === 'cancelled' || e.action === 'cancel_failed') : null;
+  const lastCancelFail = lastCancelEv?.action === 'cancel_failed' ? lastCancelEv : null;
   const co = cancelOutcome || (cancelEv ? cancelEv.payload : null);
 
   const flash = (ok: boolean, text: string) => setMsg({ ok, text });
@@ -1292,6 +1296,12 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
             <Section label="Notes"><div style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{b.specialRequests}</div></Section>
           )}
 
+          {b.status !== 'cancelled' && lastCancelFail && (
+            <div style={{ fontSize: 13, padding: '10px 12px', borderRadius: 6, background: 'rgba(192,57,43,0.08)', color: 'var(--c-danger, #c0392b)' }}>
+              <strong>Not cancelled.</strong> {lastCancelFail.actor} tried on {fmtCreatedAt(lastCancelFail.at)} and the supplier refused. This booking is still live.
+            </div>
+          )}
+
           {(b.status === 'cancelled' || co) && (
             <Section label="Cancellation">
               {b.cancellationNumber && <KV k="Cancellation ref" v={<span className="c-mono">{b.cancellationNumber}</span>} />}
@@ -1321,8 +1331,14 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
             <Section label="Audit timeline">
               <div style={{ display: 'grid', gap: 8 }}>
                 {b.history.map((ev: any, i: number) => (
-                  <div key={i} style={{ fontSize: 12, borderLeft: '2px solid var(--c-line)', paddingLeft: 10 }}>
-                    <div style={{ fontWeight: 600 }}>{String(ev.action).replace(/_/g, ' ')}</div>
+                  <div key={i} style={{ fontSize: 12, borderLeft: `2px solid ${ev.action === 'cancel_failed' ? 'var(--c-danger, #c0392b)' : 'var(--c-line)'}`, paddingLeft: 10 }}>
+                    <div style={{ fontWeight: 600, color: ev.action === 'cancel_failed' ? 'var(--c-danger, #c0392b)' : undefined }}>
+                      {ev.action === 'cancel_failed' ? 'Cancel attempt failed' : String(ev.action).replace(/_/g, ' ')}
+                    </div>
+                    {ev.action === 'cancel_failed' && ev.payload?.error && (
+                      <div style={{ fontSize: 11 }}>{ev.payload.error}</div>
+                    )}
+                    {ev.payload?.reason && <div style={{ fontSize: 11 }}>Reason: {ev.payload.reason}</div>}
                     <div style={{ color: 'var(--c-fg-muted)', fontSize: 11 }}>{ev.actor} · {fmtCreatedAt(ev.at)}</div>
                   </div>
                 ))}
