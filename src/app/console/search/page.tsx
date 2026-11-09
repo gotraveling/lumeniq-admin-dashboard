@@ -78,6 +78,10 @@ type HotelHit = {
     // we render stacked quote rows on the card so consultant can
     // compare and pick. The recommended-by-score gets a gold border.
     quotes?: Quote[];
+    // Cheapest rate carrying a supplier deal, across every supplier, from the
+    // compare API. Often not the cheapest room (Soneva Fushi's deal is on its
+    // 3+ bedroom villas), so the card shows it beside the "From" price.
+    bestOffer?: BestOffer | null;
   };
 };
 
@@ -133,6 +137,17 @@ type Quote = {
   // "Why this price?" popover can show gross − discount = net.
   grossTotal?: number;
   discountAmount?: number;
+};
+
+type BestOffer = {
+  supplier?: string;
+  rateKey?: string;
+  roomTypeName?: string;
+  offers?: Array<{ name: string | null; code: string | null }>;
+  pricing?: {
+    sell?: { nightlyAmount?: number; totalAmount?: number; currency?: string };
+    aud?: { nightlyAmount?: number; totalAmount?: number } | null;
+  };
 };
 
 type AdminRate = {
@@ -939,6 +954,7 @@ export default function ConsoleSearchPage() {
             priced: {
               available: true, supplier: r.cheapestSupplier || r.supplier, onRequest: true,
               ratesCount: r.ratesCount,
+              bestOffer: r.bestOffer ?? null,
               quotes: quotes.length ? quotes : undefined
             }
           };
@@ -1020,6 +1036,7 @@ export default function ConsoleSearchPage() {
             cancellationBufferDays:         r.cheapestRate?.cancellationBufferDays,
             transferLabel:           r.cheapestRate?.transfer ?? null,
             ratesCount:              r.ratesCount,
+            bestOffer:               r.bestOffer ?? null,
             quotes:                  displayQuotes
           }
         };
@@ -4484,6 +4501,20 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
               ★ {best.offers[0].name}{best.offers[0].code ? ` · ${best.offers[0].code}` : ''}
             </span>
           )}
+          {/* Deal on another room (or supplier) than the "From" price — with its own price. */}
+          {(() => {
+            const deal = h.priced?.bestOffer;
+            const name = deal?.offers?.[0]?.name;
+            if (!deal || !name || deal.rateKey === best?.rateKey) return null;
+            const aud = deal.pricing?.aud?.nightlyAmount;
+            const nightly = aud ?? deal.pricing?.sell?.nightlyAmount;
+            return (
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-success)' }}>
+                ★ {name}{deal.roomTypeName ? `: ${deal.roomTypeName}` : ''}
+                {nightly != null ? ` from ${fmtMoney(nightly)} ${aud != null ? 'AUD' : (deal.pricing?.sell?.currency || 'USD')}/nt` : ''}
+              </span>
+            );
+          })()}
           {best && (() => {
             const c = cancellationCopy(best);
             const tone = c.state === 'refundable' ? 'var(--c-success)'
