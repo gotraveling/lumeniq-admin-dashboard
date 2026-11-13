@@ -117,6 +117,8 @@ interface CollectionHotel {
   sectionId?: number | null;
   offer?: string; bookBy?: string; editorial?: string; whyThisHotel?: string; customisable?: boolean;
   hidden?: boolean;
+  /** 'secondary' = the smaller card, two to a row. Absent = main. */
+  tier?: 'secondary';
   /** Already round-tripped through this editor untyped — the load assigns the
    *  API's hotels wholesale and the save sends them back whole, and hotel-api
    *  persists it to collection_hotels.package. There was simply no UI, which is
@@ -1110,6 +1112,12 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy, originalSlu
                     <input type="checkbox" checked={!!h.customisable} onChange={(e) => setHotel(i, { customisable: e.target.checked })} /> packages can be tailored
                   </label>
                 </Field>
+                <Field label="Card on the page">
+                  <select className="c-input" value={h.tier || ''} onChange={(e) => setHotel(i, { tier: e.target.value === 'secondary' ? 'secondary' : undefined })}>
+                    <option value="">Main · large photo, full row</option>
+                    <option value="secondary">Secondary · smaller, two to a row</option>
+                  </select>
+                </Field>
                 <Field label="Collection visibility">
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <input type="checkbox" checked={!!h.hidden} onChange={(e) => setHotel(i, { hidden: e.target.checked })} /> hidden / check rates later
@@ -1695,20 +1703,80 @@ function HeroImageField({ value, video, slug, onChange, onVideoChange }: {
  * collection id by the parent, so switching collections remounts this with the
  * right text instead of the seed fighting what is being typed.
  */
+/**
+ * Pasted HTML down to the tags the collection page renders: paragraphs, h3,
+ * lists, bold and italic. Each top-level block becomes its own paragraph, so a
+ * blank line separates them like typed text. '' when there is nothing to keep.
+ */
+function pastedHtml(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const inline = (n: Node): string => {
+    if (n.nodeType === Node.TEXT_NODE) return (n.textContent || '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]!)).replace(/\s+/g, ' ');
+    if (n.nodeType !== Node.ELEMENT_NODE) return '';
+    const el = n as HTMLElement;
+    const inner = Array.from(el.childNodes).map(inline).join('');
+    const tag = el.tagName.toLowerCase();
+    const weight = el.style.fontWeight;
+    if (tag === 'b' || tag === 'strong' || weight === 'bold' || Number(weight) >= 600) return inner.trim() ? `<strong>${inner}</strong>` : inner;
+    if (tag === 'i' || tag === 'em') return inner.trim() ? `<em>${inner}</em>` : inner;
+    if (tag === 'br') return ' ';
+    return inner;
+  };
+  const blocks: string[] = [];
+  const walk = (n: Node) => {
+    if (n.nodeType === Node.TEXT_NODE) {
+      const t = inline(n).trim();
+      if (t) blocks.push(`<p>${t}</p>`);
+      return;
+    }
+    if (n.nodeType !== Node.ELEMENT_NODE) return;
+    const el = n as HTMLElement;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'ul' || tag === 'ol') {
+      const items = Array.from(el.children).filter((c) => c.tagName === 'LI')
+        .map((li) => inline(li).trim()).filter(Boolean);
+      if (items.length) blocks.push(`<${tag}>${items.map((t) => `<li>${t}</li>`).join('')}</${tag}>`);
+    } else if (/^h[1-6]$/.test(tag)) {
+      const t = inline(el).replace(/<\/?strong>/g, '').trim();
+      if (t) blocks.push(`<h3>${t}</h3>`);
+    } else if (tag === 'p') {
+      const t = inline(el).trim();
+      if (t) blocks.push(`<p>${t}</p>`);
+    } else {
+      Array.from(el.childNodes).forEach(walk);
+    }
+  };
+  Array.from(doc.body.childNodes).forEach(walk);
+  if (!blocks.some((b) => /<(ul|ol|h3|strong|em)>/.test(b))) return ''; // plain text: let the browser paste it
+  // A list keeps its heading in the same paragraph, so the page shows them together.
+  return blocks.join('\n\n').replace(/(<h3>.*?<\/h3>)\n\n(?=<[uo]l>)/g, '$1');
+}
+
 function IntroEditor({ intro, onChange }: { intro: string[]; onChange: (v: string[]) => void }) {
   const [text, setText] = useState(() => (intro || []).join('\n\n'));
+  const update = (next: string) => {
+    setText(next);
+    // Blank line = new paragraph. A single newline inside a paragraph stays
+    // as a soft break. Trimming and dropping empties is right for what we
+    // STORE — it just can't be allowed to rewrite what is on screen.
+    onChange(next.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean));
+  };
   return (
     <textarea
       className="c-input"
       rows={6}
       value={text}
-      onChange={(e) => {
-        const next = e.target.value;
-        setText(next);
-        // Blank line = new paragraph. A single newline inside a paragraph stays
-        // as a soft break. Trimming and dropping empties is right for what we
-        // STORE — it just can't be allowed to rewrite what is on screen.
-        onChange(next.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean));
+      onChange={(e) => update(e.target.value)}
+      onPaste={(e) => {
+        // A textarea only takes the plain copy, which turns Gemini's bullets
+        // into "*" and drops the bold. Take the formatted copy instead and keep
+        // the headings, lists and bold the page knows how to show.
+        const html = e.clipboardData.getData('text/html');
+        const kept = html ? pastedHtml(html) : '';
+        if (!kept) return;
+        e.preventDefault();
+        const el = e.currentTarget;
+        update(text.slice(0, el.selectionStart) + kept + text.slice(el.selectionEnd));
       }}
     />
   );
