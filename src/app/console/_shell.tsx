@@ -23,7 +23,8 @@ import {
   SlidersHorizontal,
   Link2,
   Tag,
-  LayoutList, TrendingDown, Activity, MapPin} from 'lucide-react';
+  LayoutList, TrendingDown, Activity, MapPin, FlaskConical} from 'lucide-react';
+import { certifierMayOpen } from '@/lib/certifierPolicy';
 
 /**
  * Console shell — sidebar nav + topbar + content slot.
@@ -52,6 +53,15 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
       { href: '/console/offers',           label: 'Offers',          icon: Tag, adminOnly: true },
       // AI Agent search disabled — driven via MCP now (2026-06-28)
       { href: '/console/search-activity',  label: 'Search Activity', icon: BarChart3, adminOnly: true },
+    ],
+  },
+  {
+    // Hotelbeds certification. Its own section so nobody mistakes it for live
+    // inventory: every call goes to the Hotelbeds TEST environment and every
+    // booking is a test row. A certifier login sees this item and nothing else.
+    section: 'Hotelbeds · test env',
+    items: [
+      { href: '/console/hotelbeds',        label: 'Hotelbeds (TEST)', icon: FlaskConical, adminOnly: true },
     ],
   },
   {
@@ -96,7 +106,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [user, loading] = useAuthState(auth);
-  const { isAdmin, loading: roleLoading } = useConsoleRole();
+  const { isAdmin, isCertifier, loading: roleLoading } = useConsoleRole();
 
   // Prove who is calling, on every console request to our own API.
   //
@@ -145,16 +155,25 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
   // route is bounced to B2B Search. UI-level guard — Tina's concern is
   // consultants ACCIDENTALLY changing settings, not a determined attacker.
   useEffect(() => {
-    if (!loading && user && !roleLoading && !isAdmin && !consultantMayAccess(pathname)) {
+    if (loading || !user || roleLoading) return;
+    // A Hotelbeds certifier may open the Hotelbeds screens and nothing else.
+    if (isCertifier) {
+      if (!certifierMayOpen(pathname)) router.replace('/console/hotelbeds');
+      return;
+    }
+    if (!isAdmin && !consultantMayAccess(pathname)) {
       router.replace('/console/search');
     }
-  }, [loading, user, roleLoading, isAdmin, pathname, router]);
+  }, [loading, user, roleLoading, isAdmin, isCertifier, pathname, router]);
 
   // Block render until firebase has answered. Otherwise the shell
   // flashes briefly before the redirect on slow connections — that
   // 'just enough to see' window is exactly what raised the question
   // about why pages render without login.
-  if (loading || !user) {
+  // Also wait for the role: until we know whether this is a certifier, the
+  // full nav must not render. A certifier off their page renders nothing
+  // while the redirect above runs.
+  if (loading || !user || roleLoading || (isCertifier && !certifierMayOpen(pathname))) {
     return (
       <div className="console-shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div className="c-loading">Checking sign-in…</div>
@@ -171,15 +190,19 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
           First<span className="accent">Class</span> · Console
         </div>
         <nav className="c-nav">
-          <Link
-            href="/console"
-            className={`c-nav-link ${pathname === '/console' ? 'active' : ''}`}
-          >
-            <Calendar size={15} /> Overview
-          </Link>
+          {!isCertifier && (
+            <Link
+              href="/console"
+              className={`c-nav-link ${pathname === '/console' ? 'active' : ''}`}
+            >
+              <Calendar size={15} /> Overview
+            </Link>
+          )}
           {NAV.map((section) => {
-            // Hide admin-only items (and any section left empty) from consultants.
-            const items = section.items.filter((it) => isAdmin || !it.adminOnly);
+            // Hide admin-only items (and any section left empty) from
+            // consultants. A certifier sees the Hotelbeds item only.
+            const items = section.items.filter((it) =>
+              isCertifier ? certifierMayOpen(it.href) : (isAdmin || !it.adminOnly));
             if (items.length === 0) return null;
             return (
             <div key={section.section}>

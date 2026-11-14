@@ -2,6 +2,7 @@ import 'server-only';
 import { NextRequest, NextResponse } from 'next/server';
 import { getApps, initializeApp, applicationDefault } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
+import { isCertifierEmail, certifierMayCall } from './certifierPolicy';
 
 /**
  * Server-side proof of who is calling.
@@ -39,7 +40,18 @@ export type ConsoleUser = {
   uid: string;
   email: string | null;
   admin: boolean;
+  /** The role custom claim, as the console's useConsoleRole reads it. */
+  role: string | null;
+  /** A Hotelbeds certifier: may use /console/hotelbeds and nothing else. */
+  certifier: boolean;
 };
+
+// Hotelbeds' certifiers sign in to this console to test our integration. They
+// may see the Hotelbeds screens and nothing else: no other supplier, no net
+// price or markup, no bookings. Keyed on the signed-in email because setting a
+// custom claim needs admin SDK access to lumeniq-platform we do not always have.
+// The rule itself lives in certifierPolicy so src/proxy.ts can share it.
+export { isCertifierEmail, certifierMayCall };
 
 /**
  * Returns the caller, or null when the token is missing, malformed, expired or
@@ -51,11 +63,15 @@ export async function getConsoleUser(request: NextRequest): Promise<ConsoleUser 
   if (!token) return null;
   try {
     const decoded = await adminAuth().verifyIdToken(token);
+    const certifier = isCertifierEmail(decoded.email);
     return {
       uid: decoded.uid,
       email: decoded.email ?? null,
       // Set as a custom claim; see the console-users memory note for how.
-      admin: decoded.admin === true || decoded.role === 'admin',
+      // A certifier is never an admin, whatever claims the account carries.
+      admin: !certifier && (decoded.admin === true || decoded.role === 'admin'),
+      role: certifier ? null : (typeof decoded.role === 'string' ? decoded.role : null),
+      certifier,
     };
   } catch {
     return null;
@@ -81,7 +97,19 @@ export async function requireConsoleUser(
       ),
     };
   }
+  // Every route that proves its caller here refuses a certifier unless it is
+  // one of theirs, so a new route is closed to them by default.
+  if (user.certifier && !certifierMayCall(request.nextUrl.pathname)) {
+    return { response: certifierForbidden() };
+  }
   return { user };
+}
+
+export function certifierForbidden(): NextResponse {
+  return NextResponse.json(
+    { error: 'forbidden', message: 'This login can use the Hotelbeds screens only.' },
+    { status: 403 }
+  );
 }
 
 /**
