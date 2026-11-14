@@ -48,10 +48,13 @@ interface HotelInsight {
 /** Tina's fixed rank steps. Higher comes first; applies wherever the hotel
  *  appears publicly, not just this collection (it lives on the hotel). */
 const RANK_OPTIONS: { value: number; label: string }[] = [
-  { value: 0, label: 'Automatic' },
-  { value: 1, label: '1 · Above automatic' },
-  { value: 3, label: '3 · Secondary' },
-  { value: 5, label: '5 · Featured first' },
+  // Order only. "Secondary" and "Featured" used to be in these labels, and
+  // picking "3 · Secondary" to make a card smaller moved the hotel to the TOP
+  // (Tina, Lima, Nov 2026). Card size is the Main / Secondary choice beside it.
+  { value: 0, label: 'Order: automatic' },
+  { value: 1, label: 'Order: 1 · a little higher' },
+  { value: 3, label: 'Order: 3 · higher' },
+  { value: 5, label: 'Order: 5 · top' },
 ];
 
 /** Same rules the hotel-api applies, so what she sees is what gets saved. */
@@ -1069,6 +1072,13 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy, originalSlu
                       {![0, 1, 3, 5].includes(rankOf(h)) && <option value={rankOf(h)}>{rankOf(h)} (old value)</option>}
                     </select>
                   ) : null}
+                  <select className="c-select" style={{ width: 'auto', marginRight: 6 }}
+                    title="Card size on this page. Secondary = smaller card, two to a row, after the main hotels."
+                    value={h.tier || ''}
+                    onChange={(e) => setHotel(i, { tier: e.target.value === 'secondary' ? 'secondary' : undefined })}>
+                    <option value="">Main card</option>
+                    <option value="secondary">Secondary card</option>
+                  </select>
                   <button className="c-btn" title="Move up" onClick={() => move(i, -1)} disabled={i === 0}><ArrowUp size={13} /></button>{' '}
                   <button className="c-btn" title="Move down" onClick={() => move(i, 1)} disabled={i === value.hotels.length - 1}><ArrowDown size={13} /></button>{' '}
                   <button className="c-btn c-btn-danger" title="Remove from collection" onClick={() => removeHotel(i)}><Trash2 size={13} /></button>
