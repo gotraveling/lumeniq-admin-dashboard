@@ -24,6 +24,8 @@ interface CollectionListRow {
   /** Pinned hotel names, and their cities/countries, so the search finds a
    *  collection by what is in it ("ritz", "japan"), not only by its title. */
   hotelNames?: string[]; places?: string[]; ruleText?: string | null;
+  /** The country most of its hotels are in; null for theme collections. */
+  country?: string | null;
 }
 /** One competitor price Tina checked for a hotel in this collection. */
 interface CompetitorRate {
@@ -466,6 +468,17 @@ export default function CollectionsPage() {
       return words.every((w) => hay.includes(w));
     });
   }, [list, q]);
+  // Grouped by country, A–Z, so Tina finds "Peru" without scrolling the lot.
+  // Collections with no country (themes: Ultra lux, Exclusive offers) go last.
+  const groups = useMemo(() => {
+    const by = new Map<string, CollectionListRow[]>();
+    for (const c of filtered) {
+      const k = c.country || '';
+      if (!by.has(k)) by.set(k, []);
+      by.get(k)!.push(c);
+    }
+    return [...by.entries()].sort(([a], [b]) => (!a ? 1 : !b ? -1 : a.localeCompare(b)));
+  }, [filtered]);
   const hotelHits = (c: CollectionListRow) => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return [];
@@ -517,8 +530,14 @@ export default function CollectionsPage() {
             filtered.length === 0 ? <div className="c-empty">No collection matches “{q}”.</div> : (
               <table className="c-table">
                 <thead><tr><th>Title</th><th>Slug</th><th>Hotels</th><th>Status</th><th></th></tr></thead>
-                <tbody>
-                  {filtered.map((c) => (
+                {groups.map(([country, rows]) => (
+                <tbody key={country || 'themes'}>
+                  <tr>
+                    <th colSpan={5} style={{ textAlign: 'left', paddingTop: 18, fontSize: 13 }}>
+                      {country || 'Themes & others'} <span style={{ fontWeight: 400, color: 'var(--c-fg-soft)' }}>({rows.length})</span>
+                    </th>
+                  </tr>
+                  {rows.map((c) => (
                     <tr key={c.id}>
                       <td>
                         {c.title}
@@ -551,6 +570,7 @@ export default function CollectionsPage() {
                     </tr>
                   ))}
                 </tbody>
+                ))}
               </table>
             )
           )}
