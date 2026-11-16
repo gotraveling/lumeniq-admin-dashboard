@@ -451,6 +451,8 @@ export default function CollectionsPage() {
     try {
       const r = await fetch(`/api/admin/collections/${row.id}`, { method: 'DELETE' });
       if (!r.ok) { const d = await r.json(); throw new Error(d.error || `HTTP ${r.status}`); }
+      closeEditor();
+      setNotice(`Deleted "${row.title}".`);
       await loadList();
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
@@ -573,7 +575,7 @@ export default function CollectionsPage() {
                 {groups.map(([country, rows]) => (
                 <tbody key={country || 'themes'}>
                   <tr className="c-group-row">
-                    <th colSpan={5}>
+                    <th colSpan={5} scope="colgroup">
                       {country || 'Themes & others'} <span>{rows.length}</span>
                     </th>
                   </tr>
@@ -581,10 +583,10 @@ export default function CollectionsPage() {
                     <tr key={c.id}>
                       <td>
                         <button className="c-title-link" onClick={() => openEditor(c.slug)} disabled={busy}>{c.title}</button>
-                        <div className="c-mono" style={{ fontSize: 11.5, color: 'var(--c-fg-soft)' }}>/{c.slug}</div>
+                        <div className="c-mono" style={{ fontSize: 12, color: 'var(--c-fg-soft)' }}>/{c.slug}</div>
                         {!!(c.tags || []).length && (
                           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
-                            {(c.tags || []).map((t) => <span key={t} className="c-pill" style={{ fontSize: 10.5 }}>{t}</span>)}
+                            {(c.tags || []).map((t) => <span key={t} className="c-pill">{t}</span>)}
                           </div>
                         )}
                         {hotelHits(c).length > 0 && (
@@ -596,19 +598,17 @@ export default function CollectionsPage() {
                       <td>{c.hotelCount}</td>
                       <td><span className={`c-pill ${c.status === 'published' ? 'c-pill-success' : 'c-pill-warn'}`}>{c.status}</span></td>
                       <td style={{ whiteSpace: 'nowrap', color: 'var(--c-fg-soft)' }}>
-                        {c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) : '—'}
+                        {c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', ...(new Date(c.updatedAt).getFullYear() !== new Date().getFullYear() && { year: 'numeric' }) }) : '—'}
                       </td>
+                      {/* Click the title to edit. Delete is inside the editor. */}
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                        <button className="c-btn" onClick={() => openEditor(c.slug)} disabled={busy}>Edit</button>
-                        {' '}
-                        <a className="c-btn" href={`https://www.firstclass.com.au/luxury-hotels/collections/${c.slug}?access=firstclass2025`} target="_blank" rel="noreferrer">View</a>
+                        <a className="c-btn" href={`https://www.firstclass.com.au/luxury-hotels/collections/${c.slug}?access=firstclass2025`}
+                          target="_blank" rel="noreferrer" aria-label={`View ${c.title} on the site`}>View</a>
                         {' '}
                         <a className="c-btn" href={`/console/rate-sheet?slug=${encodeURIComponent(c.slug)}`}
-                          title="Open the rate sheet for this collection">
+                          aria-label={`Rate sheet for ${c.title}`}>
                           <Activity size={13} /> Rate sheet
                         </a>
-                        {' '}
-                        <button className="c-btn c-btn-danger" onClick={() => remove(c)} disabled={busy}><Trash2 size={14} /></button>
                       </td>
                     </tr>
                   ))}
@@ -623,6 +623,7 @@ export default function CollectionsPage() {
       {editing && (
         <CollectionEditor
           value={editing} onChange={setEditing} onSave={saveAll} onCancel={closeEditor} busy={busy}
+          onDelete={editing.id ? () => remove({ id: editing.id!, title: editing.title } as CollectionListRow) : undefined}
           originalSlug={originalSlug}
         />
       )}
@@ -630,11 +631,12 @@ export default function CollectionsPage() {
   );
 }
 
-function CollectionEditor({ value, onChange, onSave, onCancel, busy, originalSlug }: {
+function CollectionEditor({ value, onChange, onSave, onCancel, onDelete, busy, originalSlug }: {
   value: CollectionFull;
   onChange: (v: CollectionFull) => void;
   onSave: () => void;
   onCancel: () => void;
+  onDelete?: () => void;
   busy: boolean;
   originalSlug: string | null;
 }) {
@@ -1286,6 +1288,18 @@ function CollectionEditor({ value, onChange, onSave, onCancel, busy, originalSlu
           {value.hotels.length === 0 && <div className="c-empty">No hotels yet — search above to add.</div>}
         </div>
       </div>
+      {/* Delete lives here, at the foot of the editor, not on the list: a list
+          row put it one misclick from Rate sheet. */}
+      {value.id && onDelete && (
+        <div style={{ borderTop: '1px solid var(--c-line-soft)', paddingTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 12.5, color: 'var(--c-fg-soft)' }}>
+            Taking it off the site for now? Set Status to draft and save instead.
+          </span>
+          <button className="c-btn c-btn-danger" onClick={onDelete} disabled={busy}>
+            <Trash2 size={14} /> Delete collection
+          </button>
+        </div>
+      )}
     </div>
   );
 }
