@@ -278,6 +278,42 @@ const TIER_LABELS: Record<StarChip, string> = {
 // 4★/5★ filter the real star_rating; 5★+/5★++ filter the curation luxury_tier.
 const isCurationTier = (t: StarChip | null): boolean =>
   t === '5plus' || t === '5plusplus';
+
+// Result-list sort + star filter. These work on the hits already loaded, unlike
+// the tier chips above which change what the search asks for. 'recommended'
+// is the backend's own order, untouched.
+type ResultSort = 'recommended' | 'net' | 'client' | 'stars' | 'name';
+const RESULT_SORTS: Array<{ value: ResultSort; label: string }> = [
+  { value: 'recommended', label: 'Recommended' },
+  { value: 'net',         label: 'Lowest net' },
+  { value: 'client',      label: 'Lowest client price' },
+  { value: 'stars',       label: 'Stars high→low' },
+  { value: 'name',        label: 'Name A–Z' },
+];
+type MinStars = 'any' | '4' | '5';
+const MIN_STARS: Array<{ value: MinStars; label: string }> = [
+  { value: 'any', label: 'Any stars' },
+  { value: '4',   label: '4★+' },
+  { value: '5',   label: '5★' },
+];
+
+// The AUD per-night figure a price sort compares, taken from the same quote
+// the card leads with (cheapest available sell). AUD only: comparing a USD
+// number against an AUD one would order the list wrongly. Null = no price to
+// sort on yet (still loading, unavailable, or no AUD figure), and those go last.
+function sortPriceAud(h: HotelHit, kind: 'net' | 'client'): number | null {
+  const p = h.priced;
+  if (!p || !p.available) return null;
+  const quotes: Array<Quote | NonNullable<HotelHit['priced']>> =
+    p.quotes && p.quotes.length > 0 ? p.quotes.filter(q => q.available) : [p];
+  const best = [...quotes].sort((a, b) => (a.sellTotal ?? Infinity) - (b.sellTotal ?? Infinity))[0];
+  if (!best) return null;
+  const isAud = (best.currency || '').toUpperCase() === 'AUD';
+  const v = kind === 'net'
+    ? (best.netNightlyAud ?? (isAud ? best.netNightly : undefined))
+    : (best.sellNightlyAud ?? (isAud ? best.sellNightly : undefined));
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
 type ProximityTier = 'in-terminal' | 'connected' | 'walkable' | 'short-shuttle' | 'off-airport';
 type HotelControl = {
   hotel_id?: number;
@@ -527,6 +563,10 @@ export default function ConsoleSearchPage() {
   const [filterSupplier,    setFilterSupplier]    = useState<'all' | 'ratehawk' | 'hummingbird'>('all');
   const [filterRefundable,  setFilterRefundable]  = useState(false);
   const [showUnavailable,   setShowUnavailable]   = useState(false);
+  // Sort + star filter for the loaded list. Kept in the URL (sort=, minStars=)
+  // so a refresh or a shared link reopens the list the way it was being read.
+  const [resultSort, setResultSort] = useState<ResultSort>('recommended');
+  const [minStars,   setMinStars]   = useState<MinStars>('any');
 
   // ─── B2B profile picker + 5★ tier chips (compose into the Meili filter
   //     that the hotel search posts). The picker loads saved profiles and
@@ -1703,6 +1743,10 @@ export default function ConsoleSearchPage() {
     }
     const cit = sp.get('citizenship');
     if (cit && /^[A-Z]{2}$/.test(cit)) setCitizenship(cit);
+    const sortParam = sp.get('sort');
+    if (RESULT_SORTS.some(o => o.value === sortParam)) setResultSort(sortParam as ResultSort);
+    const starsParam = sp.get('minStars');
+    if (MIN_STARS.some(o => o.value === starsParam)) setMinStars(starsParam as MinStars);
     const qParam = sp.get('q');
     if (qParam) setQ(qParam);
 
@@ -1734,7 +1778,8 @@ export default function ConsoleSearchPage() {
   // the "list pops in with junk, then prices dribble in" effect the
   // user flagged on /console/search.
   const filteredHits = useMemo(() => {
-    return hits.filter(h => {
+    const minStarsN = minStars === 'any' ? 0 : Number(minStars);
+    const kept = hits.filter(h => {
       // Guard sources: a malformed/undefined sources array here would throw in
       // render and blank the whole page. Coerce to [] defensively.
       if (filterSupplier !== 'all' && !(Array.isArray(h.sources) ? h.sources : []).some(s => String(s).trim().toLowerCase() === filterSupplier)) return false;
@@ -1743,9 +1788,31 @@ export default function ConsoleSearchPage() {
       if (!showUnavailable && h.priced === undefined) return false;
       if (!showUnavailable && h.priced !== undefined && !h.priced.available) return false;
       if (filterRefundable && h.priced && h.priced.available && !h.priced.refundable) return false;
+      // Unrated hotels (villas, apartments) drop out once a star floor is set.
+      if (minStarsN > 0 && !((h.starRating ?? 0) >= minStarsN)) return false;
       return true;
     });
-  }, [hits, filterSupplier, filterRefundable, showUnavailable]);
+    if (resultSort === 'recommended') return kept;
+    // Prices stream in, so a price sort only orders hotels whose price has
+    // landed; the rest sit after them in the backend's order and slot in as
+    // their price arrives. Ties keep the backend's order too (sort is stable,
+    // and the index breaks ties explicitly), so the list doesn't shuffle.
+    const keyOf = (h: HotelHit): number | string | null => {
+      if (resultSort === 'net' || resultSort === 'client') return sortPriceAud(h, resultSort);
+      if (resultSort === 'stars') return h.starRating ? -h.starRating : null;
+      return (h.name || '').trim().toLowerCase() || null;
+    };
+    return kept
+      .map((h, i) => ({ h, i, k: keyOf(h) }))
+      .sort((a, b) => {
+        if (a.k === null || b.k === null) return a.k === b.k ? a.i - b.i : (a.k === null ? 1 : -1);
+        const c = typeof a.k === 'number' && typeof b.k === 'number'
+          ? a.k - b.k
+          : String(a.k).localeCompare(String(b.k));
+        return c !== 0 ? c : a.i - b.i;
+      })
+      .map(x => x.h);
+  }, [hits, filterSupplier, filterRefundable, showUnavailable, minStars, resultSort]);
 
   // Count of hits still resolving — drives skeleton row count. A hotel whose
   // first probe failed transiently (retryable) is STILL resolving (a retry is
@@ -1914,6 +1981,32 @@ export default function ConsoleSearchPage() {
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: 'var(--c-fg-soft)' }}>
                 <input type="checkbox" checked={showUnavailable} onChange={(e) => setShowUnavailable(e.target.checked)} />
                 Show unavailable
+              </label>
+              <select
+                aria-label="Star rating"
+                value={minStars}
+                onChange={(e) => {
+                  const v = e.target.value as MinStars;
+                  setMinStars(v);
+                  syncUrl({ minStars: v === 'any' ? null : v });
+                }}
+                style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--c-line)', background: 'var(--c-bg)', color: 'var(--c-fg-soft)', fontFamily: 'inherit', cursor: 'pointer' }}
+              >
+                {MIN_STARS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--c-fg-soft)' }}>
+                Sort
+                <select
+                  value={resultSort}
+                  onChange={(e) => {
+                    const v = e.target.value as ResultSort;
+                    setResultSort(v);
+                    syncUrl({ sort: v === 'recommended' ? null : v });
+                  }}
+                  style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--c-line)', background: 'var(--c-bg)', color: 'var(--c-fg)', fontFamily: 'inherit', cursor: 'pointer' }}
+                >
+                  {RESULT_SORTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
               </label>
               <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', marginLeft: 'auto' }}>
                 {filteredHits.length} bookable
@@ -2164,14 +2257,6 @@ export default function ConsoleSearchPage() {
               </div>
             )}
 
-            {/* Hotel info section — appears above the rate list so the
-                consultant has context (description, amenities, policies)
-                while picking a rate to book. Renders the moment content
-                arrives; the rate table loads into its own skeleton below
-                so the drawer is never a blank spinner. */}
-            {!chosenRate && detailContent && (
-              <HotelInfo content={detailContent} />
-            )}
 
             {/* Rates load into a room-card skeleton so the consultant sees
                 the shell immediately rather than a lone "fetching" line. */}
@@ -2232,66 +2317,6 @@ export default function ConsoleSearchPage() {
                 )}
               </div>
             )}
-            {/* Discount scanner — how the cheapest HB discount moves across
-                the year for THIS hotel. Keyed by hotel id so its scan state
-                resets cleanly when the consultant bounces to another hotel. */}
-            {rates.length > 0 && detailHotel && (
-              <DiscountScanner
-                key={detailHotel.id}
-                hotelId={detailHotel.id}
-                rooms={rooms}
-                citizenship={citizenship}
-                defaultNights={Number(controlMap[detailHotel.id]?.package_nights) || 5}
-              />
-            )}
-            {/* RateHawk inventory attributes.
-                ETG exposes "directly contracted" ONLY as an `inventory` filter
-                on the content dump endpoint — hotel/info is byte-identical for
-                a direct and a non-direct property, so this cannot be read off
-                a hotel, and absolutely cannot be read off a RATE (the rate
-                object carries no contract field at all). It is therefore a
-                HOTEL-level fact from a dated snapshot, which is why the feed
-                date is on the face of it and not buried in a tooltip. Shown
-                only when RateHawk actually carries the property — for a
-                Hummingbird-only hotel the question is meaningless and the API
-                omits the block rather than reporting false. */}
-            {(() => {
-              const inv = (detailContent as any)?.ratehawk_inventory;
-              if (!inv) return null;
-              const stamp = inv.feed_date ? String(inv.feed_date).slice(0, 10) : null;
-              const attrPill = (strong: boolean) => ({
-                fontSize: 11.5, fontWeight: 600, padding: '3px 12px', borderRadius: 999,
-                whiteSpace: 'nowrap' as const,
-                border: strong ? '1px solid var(--c-accent)' : '1px solid var(--c-line)',
-                background: strong ? 'rgba(155,123,51,0.08)' : 'var(--c-bg)',
-                color: strong ? 'var(--c-accent)' : 'var(--c-fg-soft)',
-              });
-              return (
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', minWidth: 52 }}>RateHawk</span>
-                  <span
-                    style={attrPill(inv.direct)}
-                    title={inv.direct
-                      ? `In ETG's directly contracted inventory as at ${stamp || 'the last feed'}. This is a property-level flag from a dated snapshot — it does NOT mean any particular rate below is a direct-contract rate, which RateHawk's API never tells us.`
-                      : `Not in ETG's directly contracted inventory as at ${stamp || 'the last feed'}.`}
-                  >{inv.direct ? 'Direct contract' : 'Not direct'}</span>
-                  {inv.direct_fast && (
-                    <span
-                      style={attrPill(false)}
-                      title="Also in ETG's thinner direct_fast cut (chains and extranet only)"
-                    >Fast direct</span>
-                  )}
-                  {inv.chain && (
-                    <span style={attrPill(false)} title="Chain owner, per ETG's inventory feed">{inv.chain}</span>
-                  )}
-                  <span style={{ fontSize: 11, color: 'var(--c-fg-soft)' }}>
-                    {inv.etg_code}
-                    {inv.hid ? ` · hid ${inv.hid}` : ''}
-                    {stamp ? ` · feed ${stamp}` : ''}
-                  </span>
-                </div>
-              );
-            })()}
             {/* Supplier row. Always rendered, even for a single supplier —
                 a consultant quoting a Maldives villa needs to see WHOSE rates
                 these are, and that the other supplier came back empty rather
@@ -2375,7 +2400,8 @@ export default function ConsoleSearchPage() {
                     }).catch(() => {});
                   }
                 }}
-                marginTop={detailContent ? 18 : 0}
+                // Hotel info no longer sits above the rates, so no gap to clear.
+                marginTop={0}
                 control={detailHotel ? controlMap[detailHotel.id] : undefined}
                 rooms={rooms}
                 roomMap={roomMap}
@@ -2388,6 +2414,85 @@ export default function ConsoleSearchPage() {
                   if (detailHotel) void loadRatesFor(detailHotel, 'cug', undefined, { noCache: true });
                 }}
               />
+            )}
+
+            {/* Reference material sits BELOW the rates. Consultants open a
+                hotel to quote it, so the rates lead; hotel info, the discount
+                scanner and RateHawk's inventory flags are one click away in
+                collapsed sections. <details> only hides them, the components
+                still mount, so their loading is the same as before. */}
+            {/* RateHawk inventory attributes.
+                ETG exposes "directly contracted" ONLY as an `inventory` filter
+                on the content dump endpoint — hotel/info is byte-identical for
+                a direct and a non-direct property, so this cannot be read off
+                a hotel, and absolutely cannot be read off a RATE (the rate
+                object carries no contract field at all). It is therefore a
+                HOTEL-level fact from a dated snapshot, which is why the feed
+                date is on the face of it and not buried in a tooltip. Shown
+                only when RateHawk actually carries the property — for a
+                Hummingbird-only hotel the question is meaningless and the API
+                omits the block rather than reporting false. */}
+            {(() => {
+              const inv = (detailContent as any)?.ratehawk_inventory;
+              if (!inv) return null;
+              const stamp = inv.feed_date ? String(inv.feed_date).slice(0, 10) : null;
+              const attrPill = (strong: boolean) => ({
+                fontSize: 11.5, fontWeight: 600, padding: '3px 12px', borderRadius: 999,
+                whiteSpace: 'nowrap' as const,
+                border: strong ? '1px solid var(--c-accent)' : '1px solid var(--c-line)',
+                background: strong ? 'rgba(155,123,51,0.08)' : 'var(--c-bg)',
+                color: strong ? 'var(--c-accent)' : 'var(--c-fg-soft)',
+              });
+              return (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 18, marginBottom: 10 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-muted)', minWidth: 52 }}>RateHawk</span>
+                  <span
+                    style={attrPill(inv.direct)}
+                    title={inv.direct
+                      ? `In ETG's directly contracted inventory as at ${stamp || 'the last feed'}. This is a property-level flag from a dated snapshot — it does NOT mean any particular rate below is a direct-contract rate, which RateHawk's API never tells us.`
+                      : `Not in ETG's directly contracted inventory as at ${stamp || 'the last feed'}.`}
+                  >{inv.direct ? 'Direct contract' : 'Not direct'}</span>
+                  {inv.direct_fast && (
+                    <span
+                      style={attrPill(false)}
+                      title="Also in ETG's thinner direct_fast cut (chains and extranet only)"
+                    >Fast direct</span>
+                  )}
+                  {inv.chain && (
+                    <span style={attrPill(false)} title="Chain owner, per ETG's inventory feed">{inv.chain}</span>
+                  )}
+                  <span style={{ fontSize: 11, color: 'var(--c-fg-soft)' }}>
+                    {inv.etg_code}
+                    {inv.hid ? ` · hid ${inv.hid}` : ''}
+                    {stamp ? ` · feed ${stamp}` : ''}
+                  </span>
+                </div>
+              );
+            })()}
+            {!chosenRate && detailContent && (
+              <details style={{ marginTop: 18, borderTop: '1px solid var(--c-line)', paddingTop: 12 }}>
+                <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--c-fg)' }}>Hotel info</summary>
+                <div style={{ marginTop: 10 }}>
+                  <HotelInfo content={detailContent} />
+                </div>
+              </details>
+            )}
+            {/* Discount scanner — how the cheapest HB discount moves across
+                the year for THIS hotel. Keyed by hotel id so its scan state
+                resets cleanly when the consultant bounces to another hotel. */}
+            {rates.length > 0 && detailHotel && (
+              <details style={{ marginTop: 12, borderTop: '1px solid var(--c-line)', paddingTop: 12 }}>
+                <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--c-fg)' }}>Discount scanner</summary>
+                <div style={{ marginTop: 10 }}>
+                  <DiscountScanner
+                    key={detailHotel.id}
+                    hotelId={detailHotel.id}
+                    rooms={rooms}
+                    citizenship={citizenship}
+                    defaultNights={Number(controlMap[detailHotel.id]?.package_nights) || 5}
+                  />
+                </div>
+              </details>
             )}
 
             {/* Booking opens in BookingSidebar (rendered after the drawer). */}
@@ -4402,8 +4507,8 @@ function ControlBadge({ control }: { control: HotelControl }) {
 
 function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, showUnavailable }: { h: HotelHit; control?: HotelControl; onOpen: (supplier: string | null) => void; onPrefetch?: () => void; onCancelPrefetch?: () => void; showUnavailable: boolean }) {
   // "Why this price?" inline breakdown — clicking it must NOT open the drawer
-  // (the whole card is a button), so the trigger stops propagation and toggles
-  // this local popover instead.
+  // (a click anywhere on the card opens it), so the trigger stops propagation
+  // and toggles this local popover instead.
   const [showWhy, setShowWhy] = useState(false);
   // Use the per-supplier quotes when present; otherwise synthesise a single
   // quote from the legacy priced fields so single-supplier hotels render in
@@ -4438,8 +4543,13 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
   // the "Why this price?" breakdown). Transfer/meal make nightly misleading there.
   const isMaldives = /maldives/i.test(h.country || '');
 
+  // The card is a plain container, not a <button>: it holds its own buttons
+  // ("Why this price?" and its close), and a button inside a button is invalid
+  // and unreachable by keyboard. The hotel name is the real button for keyboard
+  // and screen-reader users; the container click stays so a mouse user can hit
+  // anywhere on the card, as before.
   return (
-    <button
+    <article
       onClick={() => onOpen(null)}
       onMouseEnter={onPrefetch}
       onMouseLeave={onCancelPrefetch}
@@ -4457,7 +4567,11 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
 
       {/* Hotel info */}
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.2 }}>{h.name}</div>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onOpen(null); }}
+          style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.2, textAlign: 'left', padding: 0, border: 0, background: 'none', color: 'var(--c-fg)', fontFamily: 'inherit', cursor: 'pointer', alignSelf: 'flex-start' }}
+        >{h.name}</button>
         <div style={{ fontSize: 12.5, color: 'var(--c-fg-soft)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <MapPin size={12} /> {[h.city, h.country].filter(Boolean).join(', ')}
@@ -4558,12 +4672,12 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
                 the little breakdown box instead of bubbling up and opening the
                 whole detail drawer. */}
             <div style={{ position: 'relative', alignSelf: 'flex-end' }}>
-              <span
-                role="button"
-                tabIndex={0}
-                onClick={(e) => { e.stopPropagation(); e.preventDefault(); setShowWhy(v => !v); }}
-                style={{ fontSize: 10.5, color: showWhy ? 'var(--c-accent)' : 'var(--c-fg-muted)', letterSpacing: '0.02em', fontWeight: 700, cursor: 'pointer', display: 'inline-block', textDecoration: 'underline dotted', textUnderlineOffset: 2 }}
-              >Why this price? ⓘ</span>
+              <button
+                type="button"
+                aria-expanded={showWhy}
+                onClick={(e) => { e.stopPropagation(); setShowWhy(v => !v); }}
+                style={{ fontSize: 10.5, color: showWhy ? 'var(--c-accent)' : 'var(--c-fg-muted)', letterSpacing: '0.02em', fontWeight: 700, cursor: 'pointer', display: 'inline-block', textDecoration: 'underline dotted', textUnderlineOffset: 2, padding: 0, border: 0, background: 'none', fontFamily: 'inherit' }}
+              >Why this price? ⓘ</button>
               {showWhy && (() => {
                 const nights = (best.sellTotalAud && best.sellNightlyAud)
                   ? Math.max(1, Math.round(best.sellTotalAud / best.sellNightlyAud)) : 1;
@@ -4652,11 +4766,12 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                       <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-fg)' }}>Why this “From” price</span>
-                      <span
-                        role="button"
-                        onClick={(e) => { e.stopPropagation(); e.preventDefault(); setShowWhy(false); }}
-                        style={{ cursor: 'pointer', color: 'var(--c-fg-soft)', display: 'inline-flex' }}
-                      ><X size={12} /></span>
+                      <button
+                        type="button"
+                        aria-label="Close price breakdown"
+                        onClick={(e) => { e.stopPropagation(); setShowWhy(false); }}
+                        style={{ cursor: 'pointer', color: 'var(--c-fg-soft)', display: 'inline-flex', padding: 2, border: 0, background: 'none' }}
+                      ><X size={12} /></button>
                     </div>
                     {rows.map(([k, v], i) => (
                       <div key={i} style={{ display: 'grid', gridTemplateColumns: '112px minmax(0, 1fr)', gap: 10, fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)', padding: '2px 0' }}>
@@ -4723,7 +4838,7 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
           </>
         )}
       </div>
-    </button>
+    </article>
   );
 }
 
@@ -5856,7 +5971,10 @@ function RoomGroupedRates({
                           )}
                         </td>
                         <td style={planTdStyle}>
-                          {r.ratePlan || 'nomeal'}
+                          {/* Readable meal name, not the supplier code. No plan at
+                              all means room only; a code we have no label for is
+                              shown as sent rather than guessed. */}
+                          {r.ratePlan ? (MEAL_PLAN_CHOICES.find((c) => c.value === r.ratePlan)?.label || r.ratePlan) : 'Room only'}
                           {/* The property's own rate name, when the supplier
                               sends it. Null today — RateHawk gates it behind
                               room_name_info — so this simply doesn't render
