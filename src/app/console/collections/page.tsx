@@ -298,6 +298,9 @@ export default function CollectionsPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [q, setQ] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'published' | 'draft'>('all');
+  // null = every country; '' = theme collections (no country).
+  const [countryFilter, setCountryFilter] = useState<string | null>(null);
   // The slug as loaded, so a rename can be spotted and warned about.
   const [originalSlug, setOriginalSlug] = useState<string | null>(null);
 
@@ -459,15 +462,30 @@ export default function CollectionsPage() {
   // a Ritz-Carlton in it.
   const filtered = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    if (!words.length) return list;
     return list.filter((c) => {
+      if (statusFilter !== 'all' && c.status !== statusFilter) return false;
+      if (countryFilter !== null && (c.country || '') !== countryFilter) return false;
+      if (!words.length) return true;
       const hay = [
         c.title, c.subtitle, c.slug, ...(c.previousSlugs || []), ...(c.tags || []),
         c.searchDestination, ...(c.hotelNames || []), ...(c.places || []), c.ruleText,
       ].filter(Boolean).join(' ').toLowerCase().replace(/-/g, ' ');
       return words.every((w) => hay.includes(w));
     });
-  }, [list, q]);
+  }, [list, q, statusFilter, countryFilter]);
+  // Counts for the filter controls, from the whole list so the numbers do not
+  // jump around as you narrow down.
+  const statusCounts = useMemo(() => ({
+    all: list.length,
+    published: list.filter((c) => c.status === 'published').length,
+    draft: list.filter((c) => c.status === 'draft').length,
+  }), [list]);
+  const countries = useMemo(() => {
+    const n = new Map<string, number>();
+    for (const c of list) n.set(c.country || '', (n.get(c.country || '') || 0) + 1);
+    return [...n.entries()].sort(([a], [b]) => (!a ? 1 : !b ? -1 : a.localeCompare(b)));
+  }, [list]);
+  const narrowed = !!q.trim() || statusFilter !== 'all' || countryFilter !== null;
   // Grouped by country, A–Z, so Tina finds "Peru" without scrolling the lot.
   // Collections with no country (themes: Ultra lux, Exclusive offers) go last.
   const groups = useMemo(() => {
@@ -477,6 +495,7 @@ export default function CollectionsPage() {
       if (!by.has(k)) by.set(k, []);
       by.get(k)!.push(c);
     }
+    for (const rows of by.values()) rows.sort((a, b) => a.title.localeCompare(b.title));
     return [...by.entries()].sort(([a], [b]) => (!a ? 1 : !b ? -1 : a.localeCompare(b)));
   }, [filtered]);
   const hotelHits = (c: CollectionListRow) => {
@@ -509,38 +528,60 @@ export default function CollectionsPage() {
               titles are editorial ("Australia's non-stop Maldives hotel
               ideas"), so scanning for one by eye is the slow part. */}
           {!loading && list.length > 0 && (
-            <div className="c-filter-row" style={{ marginBottom: 12 }}>
+            <div className="c-filter-row" style={{ marginBottom: 12, alignItems: 'center' }}>
               <input
                 className="c-input"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Search by title, hotel, brand, destination or tag…"
-                style={{ maxWidth: 380 }}
+                style={{ maxWidth: 340 }}
               />
+              <div className="c-seg" role="group" aria-label="Status">
+                {(['all', 'published', 'draft'] as const).map((s) => (
+                  <button key={s} aria-pressed={statusFilter === s} onClick={() => setStatusFilter(s)}>
+                    {s === 'all' ? 'All' : s === 'published' ? 'Published' : 'Draft'} <span>{statusCounts[s]}</span>
+                  </button>
+                ))}
+              </div>
+              <select
+                className="c-select"
+                aria-label="Country"
+                value={countryFilter ?? '*'}
+                onChange={(e) => setCountryFilter(e.target.value === '*' ? null : e.target.value)}
+                style={{ width: 'auto', minWidth: 170 }}
+              >
+                <option value="*">All countries</option>
+                {countries.map(([k, n]) => (
+                  <option key={k || 'themes'} value={k}>{k || 'Themes & others'} ({n})</option>
+                ))}
+              </select>
               <span style={{ fontSize: 12, color: 'var(--c-fg-soft)' }}>
-                {q.trim() ? `${filtered.length} of ${list.length}` : `${list.length} collection${list.length === 1 ? '' : 's'}`}
+                {narrowed ? `${filtered.length} of ${list.length}` : `${list.length} collection${list.length === 1 ? '' : 's'}`}
               </span>
-              {q.trim() && (
-                <button className="c-btn" onClick={() => setQ('')}><X size={13} /> Clear</button>
+              {narrowed && (
+                <button className="c-btn" onClick={() => { setQ(''); setStatusFilter('all'); setCountryFilter(null); }}>
+                  <X size={13} /> Clear
+                </button>
               )}
             </div>
           )}
           {loading ? <div className="c-loading">Loading…</div> : (
             list.length === 0 ? <div className="c-empty">No collections yet. Create one to get started.</div> :
-            filtered.length === 0 ? <div className="c-empty">No collection matches “{q}”.</div> : (
-              <table className="c-table">
-                <thead><tr><th>Title</th><th>Slug</th><th>Hotels</th><th>Status</th><th></th></tr></thead>
+            filtered.length === 0 ? <div className="c-empty">No collection matches these filters.</div> : (
+              <table className="c-table c-coll-table">
+                <thead><tr><th>Collection</th><th>Hotels</th><th>Status</th><th>Updated</th><th></th></tr></thead>
                 {groups.map(([country, rows]) => (
                 <tbody key={country || 'themes'}>
-                  <tr>
-                    <th colSpan={5} style={{ textAlign: 'left', paddingTop: 18, fontSize: 13 }}>
-                      {country || 'Themes & others'} <span style={{ fontWeight: 400, color: 'var(--c-fg-soft)' }}>({rows.length})</span>
+                  <tr className="c-group-row">
+                    <th colSpan={5}>
+                      {country || 'Themes & others'} <span>{rows.length}</span>
                     </th>
                   </tr>
                   {rows.map((c) => (
                     <tr key={c.id}>
                       <td>
-                        {c.title}
+                        <button className="c-title-link" onClick={() => openEditor(c.slug)} disabled={busy}>{c.title}</button>
+                        <div className="c-mono" style={{ fontSize: 11.5, color: 'var(--c-fg-soft)' }}>/{c.slug}</div>
                         {!!(c.tags || []).length && (
                           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
                             {(c.tags || []).map((t) => <span key={t} className="c-pill" style={{ fontSize: 10.5 }}>{t}</span>)}
@@ -552,9 +593,11 @@ export default function CollectionsPage() {
                           </div>
                         )}
                       </td>
-                      <td className="c-mono">{c.slug}</td>
                       <td>{c.hotelCount}</td>
                       <td><span className={`c-pill ${c.status === 'published' ? 'c-pill-success' : 'c-pill-warn'}`}>{c.status}</span></td>
+                      <td style={{ whiteSpace: 'nowrap', color: 'var(--c-fg-soft)' }}>
+                        {c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) : '—'}
+                      </td>
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <button className="c-btn" onClick={() => openEditor(c.slug)} disabled={busy}>Edit</button>
                         {' '}

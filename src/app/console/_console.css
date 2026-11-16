@@ -210,3 +210,28 @@
    on top rather than flickering off. Rows that carry a semantic inline tint
    (Recommended, Blocked) keep it — inline wins, which is the right outcome. */
 .console-shell .c-rate-row:hover { background: rgba(0,0,0,0.045); }
+
+/* Segmented filter (Collections status) */
+.c-seg { display: inline-flex; border: 1px solid var(--c-line); border-radius: 6px; overflow: hidden; }
+.c-seg button {
+  padding: 7px 12px; font-size: 13px; font-weight: 500; border: 0; background: var(--c-bg);
+  color: var(--c-fg-soft); cursor: pointer; border-left: 1px solid var(--c-line);
+}
+.c-seg button:first-child { border-left: 0; }
+.c-seg button span { color: var(--c-fg-muted); font-weight: 400; margin-left: 2px; }
+.c-seg button[aria-pressed="true"] { background: var(--c-accent-soft); color: var(--c-fg); }
+
+/* Collections list: compact rows, title opens the editor */
+.c-coll-table tbody td { padding: 9px 16px; vertical-align: middle; }
+.c-coll-table .c-btn { padding: 5px 10px; }
+.c-group-row th {
+  text-align: left; padding: 16px 16px 6px; font-size: 13px; font-weight: 700;
+  color: var(--c-fg); background: var(--c-bg); border-bottom: 1px solid var(--c-line);
+}
+.c-group-row th span { font-weight: 400; color: var(--c-fg-soft); margin-left: 4px; }
+.c-coll-table tbody tr.c-group-row:hover { background: transparent; }
+.c-title-link {
+  padding: 0; border: 0; background: none; font: inherit; font-weight: 600;
+  color: var(--c-fg); cursor: pointer; text-align: left;
+}
+.c-title-link:hover { color: var(--c-accent); text-decoration: underline; }
