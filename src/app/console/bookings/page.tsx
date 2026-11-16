@@ -90,6 +90,65 @@ const fmtCreatedAt = (iso?: string) => {
   } catch { return iso; }
 };
 
+// The cancellation step in force right now, from the penalty ladder captured
+// when the rate was sold. Shared by the list and the panel so the "Cancel by"
+// on a row is the same date the panel quotes.
+function currentPenalty(b: Pick<Booking, 'bookingDetails' | 'currency'>) {
+  const ladder = b.bookingDetails?.rateTerms?.cancellationPenalties;
+  if (!Array.isArray(ladder) || !ladder.length) return null;
+  const now = Date.now();
+  // The last step whose "from" has passed, else the opening one.
+  const step = ladder.filter((p: any) => !p.from || Date.parse(p.from) <= now).pop() || ladder[0];
+  if (!step || step.amount == null) return null;
+  return { amount: Number(step.amount), currency: step.currency || b.currency, until: step.until || null };
+}
+
+// A booking still waiting on the supplier is not live yet, so there is nothing
+// to cancel, resend or reprice.
+const isActive = (status: string) => status !== 'cancelled' && status !== 'awaiting_supplier_confirmation';
+
+// The free-cancellation deadline, only while it can still be used. A passed
+// deadline is history, not something to act on.
+function cancelBy(b: Booking): string | null {
+  if (!isActive(b.status)) return null;
+  const p = currentPenalty(b);
+  if (!p || p.amount > 0 || !p.until) return null;
+  const t = Date.parse(p.until);
+  return Number.isFinite(t) && t > Date.now() ? p.until : null;
+}
+
+const WEEK_MS = 7 * 86400000;
+// YYYY-MM-DD in Sydney, so "today" turns over at the consultant's midnight,
+// not UTC's, and compares directly with the stored check-in dates.
+const todaySydney = () => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
+const stayDay = (iso?: string) => String(iso || '').slice(0, 10);
+
+type View = 'all' | 'upcoming' | 'action' | 'cancelled';
+const VIEW_OPTIONS: Array<{ value: View; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'upcoming', label: 'Upcoming' },
+  { value: 'action', label: 'Needs action' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+
+const isUpcoming = (b: Booking, today: string) =>
+  isActive(b.status) && stayDay(b.bookingDetails?.searchParams?.checkIn) >= today;
+
+// "Needs action" is deliberately narrow: only things a consultant can do
+// something about today, on a stay that is not over yet. That is a booking
+// still waiting on the supplier, a confirmed booking the client has not paid
+// in full, or free cancellation ending within 7 days.
+function needsAction(b: Booking, today: string) {
+  const sp = b.bookingDetails?.searchParams || {};
+  const end = stayDay(sp.checkOut || sp.checkIn);
+  if (!end || end < today) return false;
+  if (b.status === 'awaiting_supplier_confirmation') return true;
+  const pay = b.payment?.status || 'unpaid';
+  if (b.status === 'confirmed' && (pay === 'unpaid' || pay === 'deposit')) return true;
+  const cb = cancelBy(b);
+  return !!cb && Date.parse(cb) - Date.now() <= WEEK_MS;
+}
+
 export default function ConsoleBookingsPage() {
   const [user, loading] = useAuthState(auth);
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -99,6 +158,19 @@ export default function ConsoleBookingsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [supplierFilter, setSupplierFilter] = useState('all');
   const [openId, setOpenId] = useState<string | null>(null);
+  const [view, setView] = useState<View>('all');
+  // The button that opened the panel, so closing it puts keyboard focus back
+  // where the consultant was instead of at the top of the page.
+  const openerRef = useRef<HTMLElement | null>(null);
+  const openRow = (rowId: string, opener: HTMLElement | null) => {
+    openerRef.current = opener;
+    setOpenId(rowId);
+  };
+  const closePanel = useCallback(() => {
+    setOpenId(null);
+    const el = openerRef.current;
+    if (el) requestAnimationFrame(() => el.focus());
+  }, []);
 
   // Extracted so the detail panel can refresh the list after a mutation
   // (cancel / guest edit) without a full page reload.
@@ -131,9 +203,25 @@ export default function ConsoleBookingsPage() {
     loadBookings();
   }, [user, loading, loadBookings]);
 
+  const today = todaySydney();
+  const inView = useCallback((b: Booking, v: View) =>
+    v === 'all' ? true
+      : v === 'upcoming' ? isUpcoming(b, today)
+      : v === 'action' ? needsAction(b, today)
+      : b.status === 'cancelled', [today]);
+
+  // Counts are of the whole list, not the filtered one, so they answer "how
+  // much is waiting" regardless of what the search box holds.
+  const viewCounts = useMemo(() => {
+    const c: Record<View, number> = { all: 0, upcoming: 0, action: 0, cancelled: 0 };
+    bookings.forEach((b) => VIEW_OPTIONS.forEach((o) => { if (inView(b, o.value)) c[o.value]++; }));
+    return c;
+  }, [bookings, inView]);
+
   const filtered = useMemo(() => {
     const s = search.trim().toLowerCase();
-    return bookings.filter((b) => {
+    const list = bookings.filter((b) => {
+      if (!inView(b, view)) return false;
       if (statusFilter !== 'all' && b.status !== statusFilter) return false;
       if (supplierFilter !== 'all' && b.supplierId !== supplierFilter) return false;
       if (!s) return true;
@@ -144,7 +232,14 @@ export default function ConsoleBookingsPage() {
       ].filter(Boolean).join(' ').toLowerCase();
       return haystack.includes(s);
     });
-  }, [bookings, search, statusFilter, supplierFilter]);
+    // Upcoming and Needs action are worked through in arrival order; All
+    // keeps the newest-booked-first order the list arrives in.
+    if (view === 'upcoming' || view === 'action') {
+      list.sort((a, b) => stayDay(a.bookingDetails?.searchParams?.checkIn)
+        .localeCompare(stayDay(b.bookingDetails?.searchParams?.checkIn)));
+    }
+    return list;
+  }, [bookings, search, statusFilter, supplierFilter, view, inView]);
 
   const suppliers = useMemo(() => {
     const set = new Set<string>();
@@ -152,7 +247,9 @@ export default function ConsoleBookingsPage() {
     return ['all', ...Array.from(set)];
   }, [bookings]);
 
-  const openBooking = filtered.find(b => (b.internalBookingId || b.bookingId) === openId) || null;
+  // Looked up in the full list, not the filtered one: typing in the search box
+  // used to close the panel the moment the open booking stopped matching.
+  const openBooking = bookings.find(b => (b.internalBookingId || b.bookingId) === openId) || null;
 
   return (
     <>
@@ -166,6 +263,13 @@ export default function ConsoleBookingsPage() {
       </div>
 
       <div className="c-filter-row">
+        <div className="c-seg" role="group" aria-label="Show">
+          {VIEW_OPTIONS.map((o) => (
+            <button key={o.value} type="button" aria-pressed={view === o.value} onClick={() => setView(o.value)}>
+              {o.label} <span>{viewCounts[o.value]}</span>
+            </button>
+          ))}
+        </div>
         <div style={{ flex: '1 1 240px', minWidth: 240, position: 'relative' }}>
           <Search
             size={14}
@@ -235,12 +339,23 @@ export default function ConsoleBookingsPage() {
                   return Math.round(ms / 86400000);
                 })();
                 return (
-                  <tr key={rowId} style={{ cursor: 'pointer' }} onClick={() => setOpenId(rowId)}>
+                  <tr key={rowId} style={{ cursor: 'pointer' }}
+                    onClick={(e) => openRow(rowId, e.currentTarget.querySelector('button'))}>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       {/* The Details button was a column of its own for one
                           action the whole row already does. Colouring the
-                          reference keeps that discoverable without the column. */}
-                      <div className="c-mono" style={{ color: 'var(--c-accent)', fontWeight: 600 }}>{rowId}</div>
+                          reference keeps that discoverable without the column.
+                          It is a real button so the keyboard and screen
+                          readers can open the booking too; the row click is
+                          kept for the mouse. */}
+                      <button
+                        type="button" className="c-mono"
+                        title="Our booking ref. Opens the booking."
+                        onClick={(e) => { e.stopPropagation(); openRow(rowId, e.currentTarget); }}
+                        style={{ background: 'none', border: 0, padding: 0, font: 'inherit', textAlign: 'left', cursor: 'pointer', color: 'var(--c-accent)', fontWeight: 600 }}
+                      >
+                        {rowId}
+                      </button>
                       {/* Supplier and when it was made were columns of their
                           own. They belong to the reference, and nobody sorts
                           or scans by them. */}
@@ -346,6 +461,20 @@ export default function ConsoleBookingsPage() {
                           <div style={{ fontSize: 11.5, fontWeight: 600, color: m.fg, marginTop: 3 }}>{m.text}</div>
                         );
                       })()}
+                      {/* The last moment the client can change their mind for
+                          free. Warn colour inside a week, when it is something
+                          to raise with them now rather than later. */}
+                      {(() => {
+                        const cb = cancelBy(b);
+                        if (!cb) return null;
+                        const soon = Date.parse(cb) - Date.now() <= WEEK_MS;
+                        return (
+                          <div style={{ fontSize: 11.5, marginTop: 2, color: soon ? '#b45309' : 'var(--c-fg-muted)', fontWeight: soon ? 600 : 400 }}
+                            title="Free cancellation ends (supplier's terms)">
+                            Cancel by {fmtCreatedShort(cb)}
+                          </div>
+                        );
+                      })()}
                     </td>
                   </tr>
                 );
@@ -358,7 +487,7 @@ export default function ConsoleBookingsPage() {
 
       <BookingDetailSidebar
         booking={openBooking}
-        onClose={() => setOpenId(null)}
+        onClose={closePanel}
         onChanged={loadBookings}
       />
     </>
@@ -423,12 +552,19 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
 
   const id = booking ? (booking.internalBookingId || booking.bookingId) : null;
 
-  // Close on ESC for keyboard-driven consultants.
+  // Close on ESC for keyboard-driven consultants, except while the edit form
+  // is open: one stray Esc used to throw away half-typed guest names.
   useEffect(() => {
-    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape' && !showEdit) onClose(); };
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
-  }, [onClose]);
+  }, [onClose, showEdit]);
+
+  // Move focus into the panel when it opens, so the keyboard and screen
+  // readers land on the booking rather than staying on the list behind it.
+  useEffect(() => {
+    if (id) ref.current?.focus();
+  }, [id]);
 
   // Fetch the FULL booking detail when the panel opens — the list row
   // doesn't carry the margin breakdown or audit history. This is what
@@ -459,7 +595,7 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
   const totalChildren = guests.reduce((s: number, r: any) => s + (r.children?.length || 0), 0) || (sp.childrenAges?.length ?? sp.children ?? 0);
   const pb = b.priceBreakdown || null;
   const isHB = b.supplierId === 'hummingbird';
-  const active = b.status !== 'cancelled' && b.status !== 'awaiting_supplier_confirmation';
+  const active = isActive(b.status);
   // "$523" reads as either currency depending on who is looking. Everything
   // here is money from two different sides of a trade, so the code is never
   // optional.
@@ -489,16 +625,7 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
   // What cancelling costs, from the penalty ladder captured when the rate was
   // sold. Reading it beforehand is the whole point: the supplier only tells us
   // the fee once the room is already gone.
-  const penaltyNow = (() => {
-    const ladder = b.bookingDetails?.rateTerms?.cancellationPenalties;
-    if (!Array.isArray(ladder) || !ladder.length) return null;
-    const now = Date.now();
-    // The step in force right now: the last one whose "from" has passed, else
-    // the opening one.
-    const active = ladder.filter((p: any) => !p.from || Date.parse(p.from) <= now).pop() || ladder[0];
-    if (!active || active.amount == null) return null;
-    return { amount: Number(active.amount), currency: active.currency || b.currency, until: active.until || null };
-  })();
+  const penaltyNow = currentPenalty(b);
 
   const handleCancel = async () => {
     const atRisk = b.totalAmount != null ? fmtMoney(b.totalAmount, b.currency) : 'the booking total';
@@ -788,8 +915,11 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
 
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 99 }} />
-      <div ref={ref} style={{
+      {/* A click outside does nothing while editing, for the same reason Esc
+          does nothing: the form is the work, and it should only go on purpose. */}
+      <div onClick={showEdit ? undefined : onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 99 }} />
+      <div ref={ref} role="dialog" aria-modal="true" aria-label={`Booking ${b.internalBookingId || b.bookingId}`} tabIndex={-1} style={{
+        outline: 'none',
         position: 'fixed', top: 0, right: 0, bottom: 0,
         // 560px was set before the panel carried payment, cancellation terms,
         // price watch and cost history. Those sections wrap at that width and
@@ -942,7 +1072,7 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
                 </span>
               )}
               <span style={{ fontSize: 12, color: 'var(--c-fg-muted)' }} title="What the guest quotes at the hotel">
-                Hotel confirmation:{' '}
+                Hotel conf:{' '}
                 {b.hotelConfirmation
                   ? <span className="c-mono" style={{ color: 'var(--c-fg)' }}>{b.hotelConfirmation}</span>
                   : <span>not sent by the hotel yet (give the guest the supplier ref)</span>}
@@ -1286,10 +1416,25 @@ function BookingDetailSidebar({ booking, onClose, onChanged }: { booking: Bookin
             {b.contactInfo?.address?.country && <KV k="Country" v={b.contactInfo.address.country} />}
           </Section>
 
+          {/* Same names as the list and the key under it. "Supplier ref" here
+              used to be bookingId, a different number from the "Supplier ref"
+              on the row (the invoice number), under the same name. */}
           <Section label="References">
-            <KV k="Internal ref" v={<span className="c-mono">{b.internalBookingId}</span>} />
-            <KV k="Supplier ref" v={<span className="c-mono">{b.bookingId}</span>} />
-            {b.confirmationNumber && <KV k="Supplier booking #" v={<span className="c-mono">{b.confirmationNumber}</span>} />}
+            <KV k="Our booking ref" v={<span className="c-mono">{b.internalBookingId}</span>} />
+            <KV k="Supplier ref" v={b.supplierReference
+              ? <span className="c-mono">{b.supplierReference}</span>
+              : <span style={{ color: 'var(--c-fg-muted)' }}>not known yet</span>} />
+            <KV k="Hotel conf" v={b.hotelConfirmation
+              ? <span className="c-mono">{b.hotelConfirmation}</span>
+              : <span style={{ color: 'var(--c-fg-muted)' }}>not sent by the hotel yet</span>} />
+            {b.supplierConfirmation && <KV k="Supplier confirmation" v={<span className="c-mono">{b.supplierConfirmation}</span>} />}
+            {/* bookingId and confirmationNumber carry the same supplier number
+                for RateHawk and Hummingbird; show both only if they ever differ. */}
+            {(b.bookingId || b.confirmationNumber) && (
+              <KV k="Supplier booking #" v={<span className="c-mono">
+                {Array.from(new Set([b.bookingId, b.confirmationNumber].filter(Boolean))).join(' / ')}
+              </span>} />
+            )}
           </Section>
 
           {b.specialRequests && (
@@ -1390,11 +1535,11 @@ function StatusPill({ status }: { status: string }) {
 // client should not live in someone's head.
 function ReferenceKey() {
   const rows: [string, string, string][] = [
-    ['Booking ref (BK-…)', 'Our own number.', 'Us and the client.'],
+    ['Our booking ref (BK-…)', 'Our own number.', 'Us and the client.'],
     ['Supplier ref', "The supplier's reservation number. RateHawk prints it on their invoice and on the voucher.", 'Reconciling invoices, talking to RateHawk support. The hotel can find the booking by it.'],
     ['Hotel conf', "The hotel's own confirmation number. The hotel sends it to the supplier, usually within 48 hours of booking, sometimes later or never.", 'Give this to the client to quote at the hotel. Until it arrives, give them the supplier ref.'],
     ['Supplier confirmation', 'The confirmation from the company RateHawk booked through. Not the hotel\'s.', 'Only if RateHawk support asks for it.'],
-    ['Supplier booking #', "The supplier's internal number for the room.", 'Nobody day to day; still searchable.'],
+    ['Supplier booking #', "The supplier's internal number for the room. For Hummingbird it is the same number as the supplier ref.", 'Nobody day to day; still searchable.'],
   ];
   return (
     <div style={{ marginTop: 20, fontSize: 12.5 }}>
