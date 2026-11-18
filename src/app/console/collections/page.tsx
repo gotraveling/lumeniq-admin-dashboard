@@ -850,6 +850,13 @@ function CollectionEditor({ value, onChange, onSave, onCancel, onDelete, busy, o
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <strong>{value.id ? `Edit: ${value.title || value.slug}` : 'New collection'}</strong>
         <div>
+          {/* View from inside the editor too: Tina looked for it here, the
+              list's View is out of sight once a collection is open. Shows the
+              saved page, so save first to see edits. */}
+          {value.id && value.slug && (
+            <><a className="c-btn" href={`https://www.firstclass.com.au/luxury-hotels/collections/${value.slug}?access=firstclass2025`}
+              target="_blank" rel="noreferrer">View page</a>{' '}</>
+          )}
           <button className="c-btn" onClick={onCancel} disabled={busy}><X size={14} /> Cancel</button>{' '}
           <button className="c-btn c-btn-primary" onClick={onSave} disabled={busy}><Save size={14} /> {busy ? 'Saving…' : 'Save'}</button>
         </div>
