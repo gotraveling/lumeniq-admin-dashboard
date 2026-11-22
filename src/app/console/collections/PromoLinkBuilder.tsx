@@ -139,6 +139,10 @@ export function PromoLinkBuilder({ slug }: { slug: string }) {
                 <button type="button" className="c-btn c-btn-primary" onClick={copy}><Copy size={14} /> {copied ? 'Copied' : 'Copy link'}</button>
                 <a className="c-btn" href={`${link}&${PREVIEW_ACCESS}`} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open</a>
               </div>
+              <span style={{ fontSize: 12, color: 'var(--c-warn)' }}>
+                Collection pages are not public yet. Until launch this link opens only for staff with the
+                preview access; use Open to preview it. Don&apos;t send it to customers before launch.
+              </span>
               <span style={{ fontSize: 11.5, color: 'var(--c-fg-soft)' }}>
                 Uses stays already priced: each week for about 4 months, 7-night stays to a year. A 1 or 2 night stay
                 around one exact date may show no price for some hotels.
