@@ -2218,7 +2218,7 @@ export default function ConsoleSearchPage() {
                       <label style={labelStyle}>Guests</label>
                       <GuestSelector rooms={rooms} onChange={setRooms} />
                     </div>
-                    <button className="c-btn c-btn-primary" onClick={() => { void loadRatesFor(detailHotel); setEditingSearch(false); }} disabled={ratesBusy}>
+                    <button className="c-btn c-btn-primary" onClick={() => { void loadRatesFor(detailHotel, 'cug', undefined, { noCache: true }); setEditingSearch(false); }} disabled={ratesBusy}>
                       {ratesBusy ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
                       Re-check
                     </button>
@@ -4522,10 +4522,6 @@ function ControlBadge({ control }: { control: HotelControl }) {
 }
 
 function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, showUnavailable }: { h: HotelHit; control?: HotelControl; onOpen: (supplier: string | null) => void; onPrefetch?: () => void; onCancelPrefetch?: () => void; showUnavailable: boolean }) {
-  // "Why this price?" inline breakdown — clicking it must NOT open the drawer
-  // (a click anywhere on the card opens it), so the trigger stops propagation
-  // and toggles this local popover instead.
-  const [showWhy, setShowWhy] = useState(false);
   // Use the per-supplier quotes when present; otherwise synthesise a single
   // quote from the legacy priced fields so single-supplier hotels render in
   // the same card (one unified layout for the whole list).
@@ -4682,131 +4678,13 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
           <span style={{ fontSize: 13, color: 'var(--c-fg-soft)', fontStyle: 'italic' }}>Price on request</span>
         ) : (
           <>
-            {/* "Why this price?" — CLICK to reveal the derivation inline
-                (NET → +markup% → SELL USD → × FX → AUD/nt → × nights = total),
-                straight from the rate's own fields. stopPropagation so it opens
-                the little breakdown box instead of bubbling up and opening the
-                whole detail drawer. */}
-            <div style={{ position: 'relative', alignSelf: 'flex-end' }}>
-              <button
-                type="button"
-                aria-expanded={showWhy}
-                onClick={(e) => { e.stopPropagation(); setShowWhy(v => !v); }}
-                style={{ fontSize: 10.5, color: showWhy ? 'var(--c-accent)' : 'var(--c-fg-muted)', letterSpacing: '0.02em', fontWeight: 700, cursor: 'pointer', display: 'inline-block', textDecoration: 'underline dotted', textUnderlineOffset: 2, padding: 0, border: 0, background: 'none', fontFamily: 'inherit' }}
-              >Why this price? ⓘ</button>
-              {showWhy && (() => {
-                const nights = (best.sellTotalAud && best.sellNightlyAud)
-                  ? Math.max(1, Math.round(best.sellTotalAud / best.sellNightlyAud)) : 1;
-                const rows: Array<[string, string]> = [];
-                // Which markup produced this %? A per-hotel override
-                // (control.markup_override_pct set) takes priority over the
-                // global rule — surface it so the consultant knows where to
-                // change it, instead of a generic "hotel override or global" note.
-                // Name the rule the ENGINE applied. This used to be inferred
-                // from control.markup_override_pct — a different table — so the
-                // popover could say "hotel override" while the engine was
-                // actually applying the global rule, or a rule written against
-                // the property's OTHER supplier id. That inference is exactly
-                // why Patina's markup looked unsaveable.
-                const markupSource = best.markupRuleId != null
-                  ? `rule ${best.markupRuleId}${best.markupRuleName ? ` · ${best.markupRuleName}` : ''}`
-                  : (control?.markup_override_pct != null && String(control.markup_override_pct).trim() !== ''
-                      ? 'hotel override' : 'global rule');
-                // Selection context: what this "From" was chosen over. Computed from
-                // all quotes the card already holds — cheapest wins, runner-up is the
-                // next-cheapest across suppliers (neutral wording, not a contest).
-                const avail = quotes.filter(q => q.available).sort((a, b) => (a.sellTotal ?? Infinity) - (b.sellTotal ?? Infinity));
-                const runnerUp = avail[1];
-                const considered = avail.reduce((n, q) => n + (q.ratesCount || 0), 0);
-                rows.push(['Supplier', String(best.supplier || '—')]);
-                rows.push(['Rate channel', 'Member (CUG)']);
-                if (considered > 1) rows.push(['Selected', `cheapest of ${considered} bookable rates`]);
-                if (runnerUp) {
-                  const rn = runnerUp.roomTypeName || runnerUp.ratePlan || runnerUp.supplier || 'another rate';
-                  const rp = runnerUp.sellNightlyAud ?? runnerUp.sellNightly;
-                  rows.push(['Next cheapest', rp != null
-                    ? `${rn} · ${fmtMoney(rp)} ${runnerUp.sellNightlyAud != null ? 'AUD' : (runnerUp.currency || 'USD')}/nt`
-                    : String(rn)]);
-                }
-                if (best.roomTypeName) rows.push(['Room', best.roomTypeName]);
-                if (best.ratePlan) rows.push(['Plan', best.ratePlan === 'nomeal' ? 'Room only' : best.ratePlan]);
-                {
-                  // Supplier date is the client's window; our buffered cut-off
-                  // is shown as a separate line so it is never mistaken for it.
-                  const c = cancellationCopy(best);
-                  rows.push(['Cancellation', c.headline]);
-                  if (c.note) rows.push(['Our cut-off', c.note.replace(/^our cut-off /, '')]);
-                }
-                if (best.breakfastIncluded) rows.push(['Breakfast', 'Included']);
-                if (best.transferLabel) rows.push(['Transfer', `Included: ${best.transferLabel}`]);
-                if (best.offers?.[0]?.name) {
-                  rows.push(['Offer', [best.offers[0].name, best.offers[0].code ? `code ${best.offers[0].code}` : null].filter(Boolean).join(' · ')]);
-                }
-                if (best.grossTotal && best.discountAmount) {
-                  const cur = best.currency || 'USD';
-                  rows.push(['Discount', `${fmtMoney(best.grossTotal)} gross − ${fmtMoney(best.discountAmount)} = ${fmtMoney(best.grossTotal - best.discountAmount)} ${cur} net`]);
-                }
-                if (best.rateKey) rows.push(['Rate key', best.rateKey]);
-                // audSource 'supplier' = RateHawk's AUD is their own contracted
-                // figure and the currency we asked for is a conversion that
-                // appears on no invoice — so the derivation runs in AUD and the
-                // request-currency numbers are not printed at all.
-                const audIsSupplier = best.audSource === 'supplier';
-                const nativeCur = best.currency || 'USD';
-                const netUnit  = audIsSupplier ? (best.netNightlyAud ?? best.netNightly) : best.netNightly;
-                const sellUnit = audIsSupplier ? (best.sellNightlyAud ?? best.sellNightly) : best.sellNightly;
-                const trailCur = audIsSupplier ? 'AUD' : nativeCur;
-                if (netUnit != null) rows.push(['NET (supplier cost)', `${fmtMoney(netUnit)} ${trailCur}`]);
-                if (best.markupPct != null && sellUnit != null)
-                  rows.push([`+ ${best.markupPct}% markup (${markupSource}) → sell`, `${fmtMoney(sellUnit)} ${trailCur}`]);
-                // A merged property has one hotel_id per supplier; say so when
-                // the winning rule lives on a different one than this rate.
-                if (best.markupViaCanonical && best.markupRuleHotelId != null)
-                  rows.push(['Markup set on', `hotel ${best.markupRuleHotelId} (same property, other supplier) — this rate is hotel ${best.markupMatchedHotelId}`]);
-                if (audIsSupplier)
-                  rows.push(['Billed in', 'AUD — the supplier\u2019s own contracted amount, not a conversion']);
-                else if (best.fxRate != null && best.sellNightlyAud != null)
-                  rows.push([`\u00d7 FX ${best.fxRate} (${nativeCur}\u2192AUD)`, `${fmtMoney(best.sellNightlyAud)} AUD / nt`]);
-                if (best.sellTotalAud != null)
-                  rows.push([`× ${nights} night${nights !== 1 ? 's' : ''}`, `${fmtMoney(best.sellTotalAud)} AUD total`]);
-                return (
-                  <div
-                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); }}
-                    style={{
-                      position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 30,
-                      width: 460, maxWidth: '92vw', textAlign: 'left', cursor: 'auto',
-                      userSelect: 'text', WebkitUserSelect: 'text',
-                      background: 'var(--c-bg)', border: '1px solid var(--c-line)', borderRadius: 8,
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: '10px 12px'
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-fg)' }}>Why this “From” price</span>
-                      <button
-                        type="button"
-                        aria-label="Close price breakdown"
-                        onClick={(e) => { e.stopPropagation(); setShowWhy(false); }}
-                        style={{ cursor: 'pointer', color: 'var(--c-fg-soft)', display: 'inline-flex', padding: 2, border: 0, background: 'none' }}
-                      ><X size={12} /></button>
-                    </div>
-                    {rows.map(([k, v], i) => (
-                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '112px minmax(0, 1fr)', gap: 10, fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)', padding: '2px 0' }}>
-                        <span style={{ color: 'var(--c-fg-muted)' }}>{k}</span>
-                        <span style={{ color: 'var(--c-fg)', fontWeight: 600, overflowWrap: 'anywhere' }}>{v}</span>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </div>
-            {/* Net leads. A consultant reads this list to work out what a stay
-                costs us and what it leaves; the client's price follows. Shown
-                in the currency the supplier actually invoices — RateHawk bills
-                our account in AUD, so their USD is a conversion we asked for
-                and is not printed. Hummingbird really does price in USD. */}
+            {/* Client price leads, net and markup under it (Tina, Nov 2026:
+                "13,078 AUD (net 11,761.09 + 11.2%)"). The whole card opens
+                the hotel; the full breakdown lives in the drawer. Shown in the
+                currency the supplier invoices: RateHawk bills us in AUD, so
+                its USD is a conversion we asked for and is not printed. */}
             {(() => {
               const audIsReal = best.audSource === 'supplier' || best.sellNightlyAud != null;
-              const showUsd = best.audSource !== 'supplier';
               const cur = audIsReal ? 'AUD' : (best.currency || 'USD');
               const netUnit  = audIsReal ? (best.netNightlyAud ?? best.netNightly) : best.netNightly;
               const netTotal = audIsReal ? (best.netTotalAud ?? best.netTotal) : best.netTotal;
@@ -4814,43 +4692,26 @@ function MultiSupplierCard({ h, control, onOpen, onPrefetch, onCancelPrefetch, s
               const sellTotal = audIsReal ? (best.sellTotalAud ?? best.sellTotal) : best.sellTotal;
               // Maldives: the package total is the meaningful figure, per-night
               // is misleading once transfers and meals are in it.
-              const headline = isMaldives ? (netTotal ?? netUnit) : netUnit;
-              const unitLabel = isMaldives ? 'total net' : 'net / nt';
-              // Nothing to lead with if the supplier gave us no net (public
-              // channel): fall back to the sell price rather than an empty card.
-              if (headline == null) {
-                return (
-                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
-                    {fmtMoney(isMaldives ? sellTotal : sellUnit)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> {cur} {isMaldives ? 'total' : '/ nt'}</span>
-                  </div>
-                );
-              }
+              const sell = isMaldives ? (sellTotal ?? sellUnit) : sellUnit;
+              const net = isMaldives ? (netTotal ?? netUnit) : netUnit;
               return (
                 <>
                   <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-accent)', fontFamily: 'var(--c-mono)', lineHeight: 1.15 }}>
-                    {fmtMoney(headline)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> {cur} {unitLabel}</span>
+                    {fmtMoney(sell)}<span style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'inherit' }}> {cur}{isMaldives ? ' total' : ' / nt'}</span>
                   </div>
-                  {!isMaldives && netTotal != null && netTotal !== netUnit && (
+                  {net != null && (
                     <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)' }}>
-                      {fmtMoney(netTotal)} {cur} total net
+                      (net {fmtMoney(net)}{best.markupPct != null ? ` + ${best.markupPct}%` : ''})
                     </div>
                   )}
-                  {sellUnit != null && (
-                    <div style={{ fontSize: 11.5, color: 'var(--c-fg-soft)', fontFamily: 'var(--c-mono)', marginTop: 2 }}>
-                      Client {fmtMoney(isMaldives ? (sellTotal ?? sellUnit) : sellUnit)} {cur}
-                      {!isMaldives && sellTotal != null && sellTotal !== sellUnit ? ` · ${fmtMoney(sellTotal)} total` : ''}
-                      {best.markupPct != null ? ` · +${best.markupPct}%` : ''}
-                    </div>
-                  )}
-                  {showUsd && best.netNightly != null && (
-                    <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
-                      {fmtMoney(isMaldives ? best.netTotal : best.netNightly)} {best.currency || 'USD'} net {isMaldives ? 'total' : '/ nt'}
+                  {!isMaldives && sellTotal != null && sellTotal !== sellUnit && (
+                    <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', fontFamily: 'var(--c-mono)' }}>
+                      {fmtMoney(sellTotal)} {cur} total
                     </div>
                   )}
                 </>
               );
             })()}
-            <div style={{ fontSize: 11, color: 'var(--c-accent)', fontWeight: 600, marginTop: 4 }}>Open →</div>
           </>
         )}
       </div>
@@ -5237,6 +5098,13 @@ function admIsEnhanced(r: AdminRate): boolean {
 function admSellTotal(r: AdminRate): number {
   return r.pricing?.sell?.totalAmount ?? Infinity;
 }
+// For ordering across suppliers: Hummingbird sells in USD and RateHawk in AUD,
+// so compare the AUD figure the drawer shows, not the raw supplier number.
+function admSellAud(r: AdminRate | undefined): number {
+  if (!r) return Infinity;
+  const aud = Number((r.pricing as any)?.aud?.totalAmount);
+  return aud > 0 ? aud : admSellTotal(r);
+}
 const admKey = (meal: string, transfer: string) => `${meal}|${transfer}`;
 interface AdminMatrix {
   meals: string[];
@@ -5495,32 +5363,12 @@ function RoomGroupedRates({
       // back to the full list rather than showing the consultant nothing.
       const visibleList = kept.length ? kept : displayList;
 
-      const sellTotals = visibleList
-        .map(r => r.pricing?.sell?.totalAmount)
-        .filter((v): v is number => typeof v === 'number' && v > 0);
-      const poolMin = sellTotals.length ? Math.min(...sellTotals) : 0;
-      const scored = visibleList.map(r => ({
-        r,
-        score: scoreRate({
-          pricing: {
-            sell: { totalAmount: r.pricing?.sell?.totalAmount, nightlyAmount: r.pricing?.sell?.nightlyAmount },
-            markup: { amount: r.pricing?.markup?.amount }
-          },
-          refundable: r.refundable,
-          cancellationDeadlineUtc: r.cancellationDeadlineUtc
-        }, poolMin, { isB2B: true })
-      }));
-      const byScore = [...scored].sort((a, b) => b.score - a.score);
-      // Recommend the lead-in (cheapest SELL), not the highest composite score —
-      // consultants expect the headline to be the cheapest bookable rate.
-      const recommendedKey = [...visibleList]
-        .sort((a, b) => admSellTotal(a) - admSellTotal(b))[0]?.rateKey || null;
-
-      // One row per plan now, so order by cheapest sell when comparing, else by
-      // composite score.
-      const ordered: AdminRate[] = comparing
-        ? [...visibleList].sort((a, b) => admSellTotal(a) - admSellTotal(b))
-        : byScore.map(s => s.r);
+      // Always cheapest first (Tina, Nov 2026: "always place them in order
+      // from low to high"). The composite score used to order them, which put
+      // a cheaper rate below a dearer one and read as a mistake. The
+      // recommended (lead-in) rate is simply the first.
+      const ordered: AdminRate[] = [...visibleList].sort((a, b) => admSellAud(a) - admSellAud(b));
+      const recommendedKey = ordered[0]?.rateKey || null;
       // Distinct suppliers in this (possibly merged) group — drives the
       // subtle "N suppliers" hint on merged cards.
       const supplierCount = new Set(
@@ -5541,6 +5389,12 @@ function RoomGroupedRates({
   const unsizedHidden = minSqm > 0 ? groups.filter(g => g.sqm == null).length : 0;
   const shownGroups = useMemo(() => {
     let out = minSqm > 0 ? groups.filter(g => g.sqm != null && g.sqm >= minSqm) : groups;
+    // Rooms in price order too: cheapest room first, by its cheapest rate.
+    const from = (g: { rates: AdminRate[] }) => {
+      const v = admSellAud(g.rates[0]);
+      return v > 0 ? v : Infinity;
+    };
+    out = [...out].sort((a, b) => from(a) - from(b));
     if (largestFirst) out = [...out].sort((a, b) => (b.sqm ?? -1) - (a.sqm ?? -1));
     return out;
   }, [groups, minSqm, largestFirst]);
