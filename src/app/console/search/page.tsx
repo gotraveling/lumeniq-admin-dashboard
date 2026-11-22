@@ -5389,12 +5389,6 @@ function RoomGroupedRates({
   const unsizedHidden = minSqm > 0 ? groups.filter(g => g.sqm == null).length : 0;
   const shownGroups = useMemo(() => {
     let out = minSqm > 0 ? groups.filter(g => g.sqm != null && g.sqm >= minSqm) : groups;
-    // Rooms in price order too: cheapest room first, by its cheapest rate.
-    const from = (g: { rates: AdminRate[] }) => {
-      const v = admSellAud(g.rates[0]);
-      return v > 0 ? v : Infinity;
-    };
-    out = [...out].sort((a, b) => from(a) - from(b));
     if (largestFirst) out = [...out].sort((a, b) => (b.sqm ?? -1) - (a.sqm ?? -1));
     return out;
   }, [groups, minSqm, largestFirst]);
@@ -5415,6 +5409,18 @@ function RoomGroupedRates({
     }
     return m;
   }, [presentation]);
+  // Rooms in price order (Tina, Nov 2026: "always place them in order from
+  // low to high"), by the rate each room card shows when collapsed: the
+  // meal/transfer default when the room has that choice, else its cheapest.
+  const orderedGroups = useMemo(() => {
+    const shownPrice = (g: { name: string; rates: AdminRate[] }) => {
+      const m = adminMatrixFromPresentation(presByName.get(g.name), g.rates);
+      const r = m ? (m.byCombo.get(admKey(m.defaultMeal || '', m.defaultTransfer || '')) || m.from) : g.rates[0];
+      const v = admSellAud(r || g.rates[0]);
+      return v > 0 ? v : Infinity;
+    };
+    return largestFirst ? shownGroups : [...shownGroups].sort((a, b) => shownPrice(a) - shownPrice(b));
+  }, [shownGroups, presByName, largestFirst]);
   // Room-photos lightbox — opened from a per-room "View photos" button.
   const [photoModal, setPhotoModal] = useState<{ name: string; images: string[] } | null>(null);
 
@@ -5492,7 +5498,7 @@ function RoomGroupedRates({
           )}
         </div>
       )}
-      {shownGroups.map((g) => {
+      {orderedGroups.map((g) => {
         // Every photo we hold for this room. roomImages carries the full set;
         // roomImage is just the first, which is why a room with 8 photos used
         // to read "1 photo". Deduped because the rates in a group share a room.
