@@ -91,6 +91,10 @@ export default function HotelEditorialPage() {
   const [availableTags, setAvailableTags] = useState<EditorialTag[]>([]);
   const [specialCapacity, setSpecialCapacity] = useState('');
   const [specialCapacitySaved, setSpecialCapacitySaved] = useState('');
+  // Extra services the hotel offers at a cost (e.g. Malé CIP arrival). The
+  // hotel page shows each title; tapping it opens the details.
+  const [services, setServices] = useState<{ title: string; details: string }[]>([]);
+  const [servicesSaved, setServicesSaved] = useState('[]');
 
   // Form states
   const [showMediaForm, setShowMediaForm] = useState(false);
@@ -177,6 +181,11 @@ export default function HotelEditorialPage() {
         setHotelTags(editorialData.data.tags || []);
         setSpecialCapacity(editorialData.data.special_capacity || '');
         setSpecialCapacitySaved(editorialData.data.special_capacity || '');
+        const svc = (editorialData.data.services || []).map((x: { title?: string; details?: string | null }) => ({
+          title: x.title || '', details: x.details || '',
+        }));
+        setServices(svc);
+        setServicesSaved(JSON.stringify(svc));
       }
 
       if (tagsData.success) {
@@ -323,6 +332,31 @@ export default function HotelEditorialPage() {
     } catch (error) {
       console.error('Error saving special capacity:', error);
       alert('Could not save special capacity');
+    }
+  };
+
+  const handleSaveServices = async () => {
+    if (!selectedHotel) return;
+    try {
+      const response = await fetch(`/api/admin/editorial/services?hotelId=${selectedHotel.hotel_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ services }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (response.ok && json.success) {
+        const saved = (json.data?.services || []).map((x: { title: string; details: string | null }) => ({
+          title: x.title, details: x.details || '',
+        }));
+        setServices(saved);
+        setServicesSaved(JSON.stringify(saved));
+        alert(saved.length ? `Services saved (${saved.length})` : 'Services cleared');
+      } else {
+        alert(json.error || 'Could not save services');
+      }
+    } catch (error) {
+      console.error('Error saving services:', error);
+      alert('Could not save services');
     }
   };
 
@@ -516,6 +550,62 @@ export default function HotelEditorialPage() {
               {/* Overrides Tab */}
               {activeTab === 'overrides' && (
                 <div className="space-y-6">
+                  <div className="rounded-lg border p-4">
+                    <label className="block text-sm font-medium mb-1">Services</label>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Extras the hotel offers, e.g. &quot;CIP Services available at an additional cost.&quot; The hotel
+                      page shows each line; guests tap it to read the details.
+                    </p>
+                    <div className="space-y-3">
+                      {services.map((svc, i) => (
+                        <div key={i} className="rounded border bg-gray-50 p-3 space-y-2">
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={svc.title}
+                              maxLength={160}
+                              onChange={(e) => setServices(services.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))}
+                              placeholder="Line shown on the page"
+                              className="flex-1 px-3 py-2 border rounded-lg bg-white"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setServices(services.filter((_, j) => j !== i))}
+                              className="px-3 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          <textarea
+                            value={svc.details}
+                            maxLength={2000}
+                            rows={3}
+                            onChange={(e) => setServices(services.map((x, j) => (j === i ? { ...x, details: e.target.value } : x)))}
+                            placeholder="Details shown when the guest taps it"
+                            className="w-full px-3 py-2 border rounded-lg bg-white"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setServices([...services, { title: '', details: '' }])}
+                        className="px-4 py-2 border rounded-lg hover:bg-gray-50"
+                      >
+                        Add service
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveServices}
+                        disabled={JSON.stringify(services) === servicesSaved}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40"
+                      >
+                        Save services
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="rounded-lg border p-4">
                     <label className="block text-sm font-medium mb-1">Special capacity</label>
                     <p className="text-xs text-gray-500 mb-2">
