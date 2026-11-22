@@ -650,6 +650,22 @@ export default function ConsoleSearchPage() {
   const [detailHotel, setDetailHotel]   = useState<HotelHit | null>(null);
   const [detailExpanded, setDetailExpanded] = useState(false);
   const [rates, setRates]               = useState<AdminRate[]>([]);
+  // The cheapest rate loaded in the drawer, for the markup helper. Read from
+  // the drawer's own rates so it follows a Re-check with new dates; the list
+  // result it used before kept the first search's figures (Tina, Waldorf,
+  // Nov 2026: 14-18 Dec figures stayed after switching to 10-14 Dec).
+  const drawerCheapest = useMemo(() => {
+    let best: { sell: number; net: number | null } | null = null;
+    for (const r of rates) {
+      const sell = Number(r.pricing?.aud?.totalAmount);
+      if (!(sell > 0)) continue;
+      if (!best || sell < best.sell) {
+        const net = Number(r.pricing?.net?.aud?.totalAmount);
+        best = { sell, net: net > 0 ? net : null };
+      }
+    }
+    return best;
+  }, [rates]);
   const [ratesBusy, setRatesBusy]       = useState(false);
   const [ratesErr, setRatesErr]         = useState<string | null>(null);
   // Cross-supplier room map for the open hotel: lookup keyed by
@@ -2224,8 +2240,8 @@ export default function ConsoleSearchPage() {
               hotelName={detailHotel.name}
               supplierStars={detailHotel.starRating ?? null}
               userEmail={user?.email || ''}
-              cheapestNetAud={detailHotel.priced?.netTotalAud ?? null}
-              cheapestSellAud={detailHotel.priced?.sellTotalAud ?? null}
+              cheapestNetAud={drawerCheapest?.net ?? detailHotel.priced?.netTotalAud ?? null}
+              cheapestSellAud={drawerCheapest?.sell ?? detailHotel.priced?.sellTotalAud ?? null}
               onSaved={(row, opts) => {
                 refreshControl(detailHotel.id, row);
                 // Markup changed → re-fetch rates bypassing the backend cache so
@@ -7308,15 +7324,15 @@ function PriceToMarkup({ netAud, sellAud, actionLabel = 'Use', busy, onApply }: 
   };
   const [price, setPrice] = useState(() => asMoney(sellAud));
   const [net, setNet] = useState(() => asMoney(netAud));
-  // Re-prime when the drawer moves to another hotel or new dates land, but
-  // never over something half-typed.
-  const [touched, setTouched] = useState(false);
+  // Re-prime whenever new figures arrive (another hotel, or a Re-check with
+  // new dates). Typing never changes these props, so nothing half-typed is
+  // lost; the old "touched" latch kept the first stay's figures after the
+  // dates changed (Tina, Waldorf, Nov 2026).
   useEffect(() => {
-    if (touched) return;
     setPrice(asMoney(sellAud));
     setNet(asMoney(netAud));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sellAud, netAud, touched]);
+  }, [sellAud, netAud]);
 
   const netNum = Number(net);
   const priceNum = Number(price);
@@ -7327,7 +7343,7 @@ function PriceToMarkup({ netAud, sellAud, actionLabel = 'Use', busy, onApply }: 
     <input
       className="c-input" type="number" step="0.01" aria-label={label}
       style={{ maxWidth: 104 }} placeholder="A$" value={value}
-      onChange={(e) => { setTouched(true); set(e.target.value); }}
+      onChange={(e) => set(e.target.value)}
     />
   );
 
