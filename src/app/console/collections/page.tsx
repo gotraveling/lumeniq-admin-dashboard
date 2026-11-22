@@ -12,6 +12,7 @@
  * with optional per-hotel editorial/offer overrides layered on top.
  */
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { PromoLinkBuilder } from './PromoLinkBuilder';
 import { FolderOpen, Plus, Trash2, ArrowUp, ArrowDown, Search, Save, X, RefreshCw, ChevronDown, ChevronUp, Activity } from 'lucide-react';
 
 const HOTEL_API = process.env.NEXT_PUBLIC_HOTEL_API_URL
@@ -861,6 +862,8 @@ function CollectionEditor({ value, onChange, onSave, onCancel, onDelete, busy, o
           <button className="c-btn c-btn-primary" onClick={onSave} disabled={busy}><Save size={14} /> {busy ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
+
+      {value.id && value.slug && <PromoLinkBuilder slug={value.slug} />}
 
       <div
         role="button"
