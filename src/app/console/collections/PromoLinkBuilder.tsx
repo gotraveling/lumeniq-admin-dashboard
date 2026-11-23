@@ -26,6 +26,9 @@ export function PromoLinkBuilder({ slug }: { slug: string }) {
   const [include, setInclude] = useState<string[]>([]);
   const [includeDraft, setIncludeDraft] = useState('');
   const [copied, setCopied] = useState(false);
+  // Heading over the hotels, e.g. "Best Offers for Ultimate December & January
+  // Maldives Holidays" (Tina, Nov 2026). Empty: the page shows the dates.
+  const [heading, setHeading] = useState('');
 
   const { link, problem } = useMemo(() => {
     const parts: string[] = [];
@@ -48,8 +51,10 @@ export function PromoLinkBuilder({ slug }: { slug: string }) {
       }
       parts.push(`include=${include.join(',')}`);
     }
+    const title = heading.replace(/\s+/g, ' ').trim();
+    if (title) parts.push(`title=${encodeURIComponent(title)}`);
     return { link: `${SITE}/luxury-hotels/collections/${slug}?${parts.join('&')}`, problem: null };
-  }, [mode, from, to, leaving, minNights, maxNights, include, slug]);
+  }, [mode, from, to, leaving, minNights, maxNights, include, heading, slug]);
 
   const addInclude = () => {
     if (includeDraft && !include.includes(includeDraft)) setInclude([...include, includeDraft].sort());
@@ -115,6 +120,11 @@ export function PromoLinkBuilder({ slug }: { slug: string }) {
               <input className="c-input" type="number" min={1} max={30} value={maxNights} onChange={(e) => setMaxNights(e.target.value)} placeholder="any" />
             </label>
           </div>
+
+          <label style={label}>Heading on the page (optional; without one it shows the dates)
+            <input className="c-input" value={heading} maxLength={120} onChange={(e) => setHeading(e.target.value)}
+              placeholder="Best Offers for Ultimate December & January Maldives Holidays" />
+          </label>
 
           <div style={label}>
             Nights the stay must include (e.g. 31 Dec for NYE)
