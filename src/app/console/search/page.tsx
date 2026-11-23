@@ -218,6 +218,10 @@ type AdminRate = {
      *  paid at the property in local money — never added to our total. */
     excludedAtHotel?: Array<{ currency: string; amount: number }>;
   } | null;
+  /** RateHawk's Maldives transfer paid at the resort. `type` (Seaplane...) is
+   *  named by the engine from Hummingbird's options for the same hotel, and
+   *  only when they all use one way of getting there. */
+  transferAtHotel?: { amount: number; currency: string; aud: number | null; type?: string } | null;
   pricing: {
     currency: string;
     net?: { totalAmount: number; nightlyAmount: number; aud?: AudBlock | null };
@@ -504,6 +508,16 @@ function normalizeRange(ci: string, co: string): { checkIn: string; checkOut: st
   }
 
   return { checkIn: inDate, checkOut: outDate, snapped };
+}
+
+/** Name of one charge paid at the hotel: "Transfer (seaplane)", "City tax".
+ *  Tina, Nov 2026: "list the transfer and city tax separately, and the type
+ *  of transfer". RateHawk sends them as "transfer_fee" and "city_tax". */
+function atHotelLabel(t: { name?: string; type?: string }, transferType?: string | null): string {
+  const raw = String(t.name || t.type || 'Tax');
+  if (/transfer/i.test(raw)) return transferType ? `Transfer (${transferType.toLowerCase()})` : 'Transfer';
+  const words = raw.replace(/_/g, ' ').trim().toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 export default function ConsoleSearchPage() {
@@ -6168,19 +6182,20 @@ function RoomGroupedRates({
                               // 2026-09-17: "city tax is not shown in the
                               // front.. we should, as consultants may be reading
                               // that rate to quote over the phone."
-                              const atHotel = r.taxes?.excludedAtHotel || [];
-                              const sameCur = r.taxes?.excludedTotal || 0;
-                              if (!atHotel.length && !sameCur) return null;
-                              const parts = [
-                                ...(sameCur ? [`${fmtMoney(sameCur)} ${r.pricing.currency}`] : []),
-                                ...atHotel.map(t => `${fmtMoney(t.amount)} ${t.currency}`),
-                              ];
+                              // One line per charge, named, in the money the
+                              // hotel asks for (Tina, Nov 2026: transfer and
+                              // city tax separately, with the transfer type).
+                              const items = r.taxes?.excluded || [];
+                              if (!items.length) return null;
+                              const parts = items.map(t =>
+                                `${atHotelLabel(t, r.transferAtHotel?.type)} ${fmtMoney(t.amount)} ${String(t.currency || r.pricing.currency).toUpperCase()}`);
                               return (
                                 <div
-                                  title="Excluded taxes and fees — the guest pays these at the hotel, they are not in the price above"
+                                  title="Paid by the guest at the hotel, not in the price above"
                                   style={{ fontSize: 10.5, color: 'var(--c-warn)', marginTop: 2, whiteSpace: 'nowrap' }}
                                 >
-                                  + {parts.join(' + ')} at hotel
+                                  {parts.map((p, i) => <div key={i}>+ {p}</div>)}
+                                  <div>at hotel</div>
                                 </div>
                               );
                             })()}
@@ -6822,21 +6837,20 @@ function BookingSidebar(props: {
                       </span>
                     </div>
                   </div>
-                  {hasExcluded && row(
-                    'Plus, the guest pays at the hotel',
+                  {hasExcluded && excluded.map((t, i) => <React.Fragment key={`ex-${i}`}>{row(
+                    i === 0 ? `Plus, at the hotel: ${atHotelLabel(t, r.transferAtHotel?.type)}` : atHotelLabel(t, r.transferAtHotel?.type),
                     // Same rule as the included taxes: a fee quoted in the
                     // currency we asked RateHawk for is our money in disguise
                     // and converts with the rate. A fee in any other currency
                     // is what the property actually charges at the desk.
-                    excluded.map(t => inDisplayCur(t)
+                    inDisplayCur(t)
                       ? `${fmtMoney((t.amount || 0) * taxScale)} ${cur}`
-                      : `${fmtMoney(t.amount)} ${String(t.currency).toUpperCase()}`
-                    ).join(' + '),
-                    { color: 'var(--c-warn)' }
-                  )}
+                      : `${fmtMoney(t.amount)} ${String(t.currency).toUpperCase()}`,
+                    { color: 'var(--c-warn)', paddingLeft: i === 0 ? 0 : 12 }
+                  )}</React.Fragment>)}
                   {hasExcluded && (
                     <div style={{ fontSize: 10.5, color: 'var(--c-fg-muted)', paddingLeft: 12 }}>
-                      {excluded.map(t => prettify(t)).join(' · ')}, settled at the property
+                      Settled at the property
                     </div>
                   )}
                   {!hasIncluded && !hasExcluded && (
