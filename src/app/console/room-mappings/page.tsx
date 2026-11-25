@@ -15,6 +15,7 @@
  */
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { viaResizer } from '@/lib/imageUrl';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
 import { Link2, Check, X, Save, RefreshCw, Search, ExternalLink } from 'lucide-react';
@@ -43,7 +44,12 @@ interface MappingRow {
   updated_at?: string;
   updated_by?: string | null;
 }
-type Rooms = { hummingbird?: string[]; ratehawk?: string[] };
+type Rooms = {
+  hummingbird?: string[];
+  ratehawk?: string[];
+  /** Room photos by supplier, then room name. */
+  photos?: Record<string, Record<string, string[]>>;
+};
 
 const MATCHED = new Set(['auto_high', 'auto_med', 'confirmed', 'manual']);
 const SUPPLIER_LABEL: Record<string, string> = { hummingbird: 'Hummingbird', ratehawk: 'RateHawk' };
@@ -242,7 +248,7 @@ export default function RoomMappingsPage() {
                     hint="The system thinks these are the same room. Is it right?"
                     rows={toCheck}
                     render={(row) => (
-                      <PairRow key={row.id} row={row}>
+                      <PairRow key={row.id} row={row} photos={rooms.photos}>
                         <button className="c-btn c-btn-primary" onClick={() => saveRow(row.id, { status: 'confirmed' })}>
                           <Check size={13} /> Same room
                         </button>
@@ -258,7 +264,7 @@ export default function RoomMappingsPage() {
                     rows={noMatch}
                     render={(row) => (
                       <PickRow key={row.id} row={row} rhOptions={rhOptions} hbOptions={rooms.hummingbird || []}
-                               used={usedRh} onSave={saveRow} />
+                               used={usedRh} onSave={saveRow} photos={rooms.photos} />
                     )}
                   />
                   <Section
@@ -266,7 +272,7 @@ export default function RoomMappingsPage() {
                     hint="Shown as one room in search."
                     rows={matched}
                     render={(row) => (
-                      <PairRow key={row.id} row={row} note={matchedBy(row)}>
+                      <PairRow key={row.id} row={row} note={matchedBy(row)} photos={rooms.photos}>
                         <button className="c-btn" onClick={() => saveRow(row.id, { status: 'rejected' })}>
                           <X size={13} /> Not the same
                         </button>
@@ -279,7 +285,7 @@ export default function RoomMappingsPage() {
                     rows={notSame}
                     render={(row) => (
                       <PickRow key={row.id} row={row} rhOptions={rhOptions} hbOptions={rooms.hummingbird || []}
-                               used={usedRh} onSave={saveRow} />
+                               used={usedRh} onSave={saveRow} photos={rooms.photos} />
                     )}
                   />
                 </>
@@ -305,20 +311,53 @@ function Section({ title, hint, rows, render }: {
   );
 }
 
-function RoomName({ supplier, name }: { supplier: string; name: string | null }) {
+type Photos = Rooms['photos'];
+
+// Exact room name first. RateHawk rate names can add a bed note to the room
+// name ("… (full double bed) (bed type is subject to availability)"), so fall
+// back to the longest room name the matched name starts with.
+function photosFor(bySupplier: Record<string, string[]> | undefined, name: string): string[] | undefined {
+  if (!bySupplier) return undefined;
+  if (bySupplier[name]) return bySupplier[name];
+  const key = Object.keys(bySupplier)
+    .filter((k) => name.startsWith(k))
+    .sort((a, b) => b.length - a.length)[0];
+  return key ? bySupplier[key] : undefined;
+}
+
+// Up to six of the supplier's own photos for this room, so the two rooms can be
+// compared by eye before saying they are the same. Click opens the full photo.
+function RoomPhotos({ urls }: { urls?: string[] }) {
+  if (!urls?.length) return <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginTop: 4 }}>No photos</div>;
   return (
-    <div style={{ flex: '1 1 220px', minWidth: 0 }}>
-      <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{supplier}</div>
-      <div style={{ fontSize: 13.5 }}>{name || '—'}</div>
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>
+      {urls.map((u) => (
+        <a key={u} href={u} target="_blank" rel="noreferrer">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={viaResizer(u, 400)} alt="" loading="lazy"
+               style={{ width: 96, height: 64, objectFit: 'cover', borderRadius: 4, background: 'var(--c-line)' }} />
+        </a>
+      ))}
     </div>
   );
 }
 
-function PairRow({ row, note, children }: { row: MappingRow; note?: string; children: React.ReactNode }) {
+function RoomName({ supplier, name, photos }: { supplier: string; name: string | null; photos?: Photos }) {
+  const key = supplier === 'Hummingbird' ? 'hummingbird' : 'ratehawk';
   return (
-    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--c-line)', paddingTop: 8 }}>
-      <RoomName supplier="Hummingbird" name={row.hb_room_name} />
-      <RoomName supplier="RateHawk" name={row.rh_room_name} />
+    <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+      <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{supplier}</div>
+      <div style={{ fontSize: 13.5 }}>{name || '—'}</div>
+      {photos && name ? <RoomPhotos urls={photosFor(photos[key], name)} /> : null}
+    </div>
+  );
+}
+
+function PairRow({ row, note, photos, children }: { row: MappingRow; note?: string; photos?: Photos; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', borderTop: '1px solid var(--c-line)', paddingTop: 8 }}>
+      <RoomName supplier="Hummingbird" name={row.hb_room_name} photos={photos} />
+      <RoomName supplier="RateHawk" name={row.rh_room_name} photos={photos} />
       {note && <span className="c-pill c-pill-muted">{note}</span>}
       <div style={{ display: 'flex', gap: 6 }}>{children}</div>
     </div>
@@ -327,16 +366,16 @@ function PairRow({ row, note, children }: { row: MappingRow; note?: string; chil
 
 // A room without a partner: choose one from the other supplier's list. Saving
 // stores the pair as picked by hand (manual), which search trusts.
-function PickRow({ row, rhOptions, hbOptions, used, onSave }: {
-  row: MappingRow; rhOptions: string[]; hbOptions: string[]; used: Set<string | null>;
+function PickRow({ row, rhOptions, hbOptions, used, onSave, photos }: {
+  row: MappingRow; rhOptions: string[]; hbOptions: string[]; used: Set<string | null>; photos?: Photos;
   onSave: (id: number, patch: Partial<MappingRow>) => void;
 }) {
   const pickRh = !!row.hb_room_name;            // usual case: HB room needs a RateHawk partner
   const options = pickRh ? rhOptions : hbOptions;
   const [choice, setChoice] = useState('');
   return (
-    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--c-line)', paddingTop: 8 }}>
-      {pickRh ? <RoomName supplier="Hummingbird" name={row.hb_room_name} /> : null}
+    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', borderTop: '1px solid var(--c-line)', paddingTop: 8 }}>
+      {pickRh ? <RoomName supplier="Hummingbird" name={row.hb_room_name} photos={photos} /> : null}
       <div style={{ flex: '1 1 220px', minWidth: 0 }}>
         <div style={{ fontSize: 11, color: 'var(--c-fg-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
           {pickRh ? 'RateHawk' : 'Hummingbird'}
@@ -349,8 +388,9 @@ function PickRow({ row, rhOptions, hbOptions, used, onSave }: {
             <option key={n} value={n}>{n}{pickRh && used.has(n) ? ' (already matched)' : ''}</option>
           ))}
         </select>
+        {choice && photos ? <RoomPhotos urls={photosFor(photos[pickRh ? 'ratehawk' : 'hummingbird'], choice)} /> : null}
       </div>
-      {!pickRh ? <RoomName supplier="RateHawk" name={row.rh_room_name} /> : null}
+      {!pickRh ? <RoomName supplier="RateHawk" name={row.rh_room_name} photos={photos} /> : null}
       <button
         className="c-btn c-btn-primary"
         disabled={!choice}
