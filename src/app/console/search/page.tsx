@@ -6147,9 +6147,18 @@ function RoomGroupedRates({
                                 Display only — booking basis is still USD sell. */}
                             {r.pricing.aud?.totalAmount != null ? (
                               <>
+                                {/* A RateHawk transfer paid at the resort counts in the
+                                    total, the way Hummingbird's bundled transfer does,
+                                    so the two suppliers' rows compare like for like
+                                    (Tina, 25 Nov 2026). */}
                                 <div style={{ fontWeight: 700, color: 'var(--c-accent)', fontSize: 14 }}>
-                                  {fmtMoney(r.pricing.aud.totalAmount)} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>AUD total</span>
+                                  {fmtMoney((r.pricing.aud.totalAmount ?? 0) + (r.transferAtHotel?.aud ?? 0))} <span style={{ color: 'var(--c-fg-muted)', fontSize: 10.5, fontWeight: 600 }}>AUD total</span>
                                 </div>
+                                {r.transferAtHotel?.aud != null && (
+                                  <div style={{ color: 'var(--c-fg-soft)', fontSize: 10.5 }}>
+                                    incl. {r.transferAtHotel.type ? `${r.transferAtHotel.type.toLowerCase()} ` : ''}transfer {fmtMoney(r.transferAtHotel.amount)} {r.transferAtHotel.currency} paid at hotel
+                                  </div>
+                                )}
                                 {nativeIsReal && (
                                   <div style={{ color: 'var(--c-fg-soft)', fontSize: 11, fontWeight: 500 }}>
                                     {fmtMoney(r.pricing.sell?.totalAmount)} {r.pricing.currency}
@@ -6185,7 +6194,9 @@ function RoomGroupedRates({
                               // One line per charge, named, in the money the
                               // hotel asks for (Tina, Nov 2026: transfer and
                               // city tax separately, with the transfer type).
-                              const items = r.taxes?.excluded || [];
+                              // The at-hotel transfer is already in the AUD total above.
+                              const items = (r.taxes?.excluded || []).filter(t =>
+                                !(r.transferAtHotel?.aud != null && r.pricing.aud && /transfer/i.test(`${t.type || ''} ${t.name || ''}`)));
                               if (!items.length) return null;
                               const parts = items.map(t =>
                                 `${atHotelLabel(t, r.transferAtHotel?.type)} ${fmtMoney(t.amount)} ${String(t.currency || r.pricing.currency).toUpperCase()}`);
