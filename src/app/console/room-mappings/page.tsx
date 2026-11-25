@@ -73,6 +73,7 @@ export default function RoomMappingsPage() {
   const [rooms, setRooms] = useState<Rooms>({});
   const [loadingRows, setLoadingRows] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [content, setContent] = useState<RoomContent>({ rooms: {} });
 
   const loadHotels = useCallback(async () => {
     setLoadingHotels(true); setError(null);
@@ -89,14 +90,16 @@ export default function RoomMappingsPage() {
   const loadRows = useCallback(async (hotelId: number) => {
     setLoadingRows(true); setError(null);
     try {
-      const [r, rr] = await Promise.all([
+      const [r, rr, rc] = await Promise.all([
         fetch(`/api/admin/room-mappings?hotelId=${hotelId}`, { cache: 'no-store' }),
         fetch(`/api/admin/room-mappings/rooms?hotelId=${hotelId}`, { cache: 'no-store' }),
+        fetch(`/api/admin/room-mappings/content?hotelId=${hotelId}`, { cache: 'no-store' }),
       ]);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setRows(Array.isArray(d) ? d : []);
       setRooms(rr.ok ? await rr.json() : {});
+      setContent(rc.ok ? await rc.json() : { rooms: {} });
     } catch (e) { setError((e as Error).message); }
     finally { setLoadingRows(false); }
   }, []);
@@ -106,6 +109,35 @@ export default function RoomMappingsPage() {
   function pickHotel(hotelId: number) {
     setSelected(hotelId);
     loadRows(hotelId);
+    // Keep the hotel in the address so the page can be linked straight to it.
+    const sp = new URLSearchParams(window.location.search);
+    sp.set('hotelId', String(hotelId));
+    window.history.replaceState(null, '', `${window.location.pathname}?${sp.toString()}`);
+  }
+
+  // Opened from a link (?hotelId=…, any supplier id of the hotel): go straight
+  // to that hotel, no searching (Tina, 25 Nov 2026).
+  useEffect(() => {
+    const id = parseInt(new URLSearchParams(window.location.search).get('hotelId') || '', 10);
+    if (Number.isInteger(id)) pickHotel(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A person writes a room's description (or clears it).
+  async function saveDescription(roomName: string, description: string) {
+    if (selected == null) return;
+    setError(null);
+    try {
+      const r = await fetch('/api/admin/room-mappings/content', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hotelId: selected, room_name: roomName, description, updated_by: user?.email || 'console' }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      const rc = await fetch(`/api/admin/room-mappings/content?hotelId=${selected}`, { cache: 'no-store' });
+      if (rc.ok) setContent(await rc.json());
+    } catch (e) { setError((e as Error).message); }
   }
 
   // PUT a single row. Patch carries only the changed keys; the API bumps
@@ -133,7 +165,8 @@ export default function RoomMappingsPage() {
       && (!q || [h.name, h.city, h.country].some((v) => v?.toLowerCase().includes(q))));
   }, [hotels, filter, onlyWork]);
 
-  const hotel = hotels.find((h) => h.hotel_id === selected);
+  const hotel = hotels.find((h) => h.hotel_id === selected)
+    || hotels.find((h) => rows.some((r) => r.hotel_id === h.hotel_id));
   const toCheck = rows.filter((r) => r.status === 'review_low');
   const noMatch = rows.filter((r) => r.status === 'hb_only' || r.status === 'rh_only');
   const matched = rows.filter((r) => MATCHED.has(r.status));
@@ -225,9 +258,9 @@ export default function RoomMappingsPage() {
               <div className="c-card" style={{ padding: 14, marginBottom: 14 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                   <div>
-                    <div style={{ fontSize: 17, fontWeight: 600 }}>{hotel?.name || `Hotel #${selected}`}</div>
+                    <div style={{ fontSize: 17, fontWeight: 600 }}>{hotel?.name || content.hotel?.name || `Hotel #${selected}`}</div>
                     <div className="c-page-sub">
-                      {[hotel?.city, hotel?.country].filter(Boolean).join(', ')}
+                      {[hotel?.city || content.hotel?.city, hotel?.country || content.hotel?.country].filter(Boolean).join(', ')}
                       {hotel?.suppliers?.length ? ` · sold by ${hotel.suppliers.map((s) => SUPPLIER_LABEL[s] || s).join(' and ')}` : ''}
                     </div>
                   </div>
@@ -239,10 +272,9 @@ export default function RoomMappingsPage() {
 
               {loadingRows ? (
                 <div className="c-loading">Loading rooms…</div>
-              ) : rows.length === 0 ? (
-                <div className="c-empty">No rooms for this hotel.</div>
               ) : (
                 <>
+                  {rows.length === 0 && <div className="c-empty" style={{ marginBottom: 14 }}>No rooms to match for this hotel.</div>}
                   <Section
                     title={`To check (${toCheck.length})`}
                     hint="The system thinks these are the same room. Is it right?"
@@ -288,6 +320,7 @@ export default function RoomMappingsPage() {
                                used={usedRh} onSave={saveRow} photos={rooms.photos} />
                     )}
                   />
+                  <Descriptions rooms={rooms} content={content} onSave={saveDescription} />
                 </>
               )}
             </>
@@ -312,6 +345,77 @@ function Section({ title, hint, rows, render }: {
 }
 
 type Photos = Rooms['photos'];
+
+type RoomContent = {
+  rooms: Record<string, { description: string; source: string }>;
+  hotel?: { name?: string; city?: string; country?: string } | null;
+};
+const SOURCE_LABEL: Record<string, string> = { hummingbird: 'From Hummingbird', ratehawk: 'From RateHawk', manual: 'Written by us' };
+
+// Every room the suppliers list, with the description the hotel page shows
+// when the live supplier sends none. A matched room shares its partner's text.
+// Rooms with no text are listed first: those are the ones to write.
+function Descriptions({ rooms, content, onSave }: {
+  rooms: Rooms; content: RoomContent; onSave: (roomName: string, description: string) => Promise<void>;
+}) {
+  const list = [
+    ...(rooms.hummingbird || []).map((n) => ({ n, s: 'Hummingbird' })),
+    ...(rooms.ratehawk || []).map((n) => ({ n, s: 'RateHawk' })),
+  ].sort((a, b) => Number(!!content.rooms[a.n]) - Number(!!content.rooms[b.n]));
+  if (!list.length) return null;
+  const missing = list.filter((x) => !content.rooms[x.n]).length;
+  return (
+    <div className="c-card" style={{ padding: 14, marginBottom: 14 }}>
+      <div style={{ fontWeight: 600 }}>Room descriptions ({missing} without)</div>
+      <div className="c-page-sub" style={{ marginBottom: 10 }}>
+        Shown on the hotel page when the supplier sends none. Matching a room above gives it the other supplier&apos;s text.
+      </div>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {list.map(({ n, s }) => <DescriptionRow key={`${s}:${n}`} name={n} supplier={s} current={content.rooms[n]} onSave={onSave} />)}
+      </div>
+    </div>
+  );
+}
+
+function DescriptionRow({ name, supplier, current, onSave }: {
+  name: string; supplier: string; current?: { description: string; source: string };
+  onSave: (roomName: string, description: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(current?.description || '');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (!editing) setText(current?.description || ''); }, [current, editing]);
+  return (
+    <div style={{ borderTop: '1px solid var(--c-line)', paddingTop: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+        <div>
+          <span style={{ fontSize: 11, color: 'var(--c-fg-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginRight: 8 }}>{supplier}</span>
+          <span style={{ fontSize: 13.5, fontWeight: 600 }}>{name}</span>
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {current && <span className="c-pill c-pill-muted">{SOURCE_LABEL[current.source] || current.source}</span>}
+          {!current && <span className="c-pill c-pill-warn">No description</span>}
+          {!editing && <button className="c-btn" onClick={() => setEditing(true)}>{current ? 'Edit' : 'Write one'}</button>}
+        </div>
+      </div>
+      {editing ? (
+        <div style={{ marginTop: 6 }}>
+          <textarea className="c-input" rows={4} style={{ width: '100%' }} value={text} onChange={(e) => setText(e.target.value)} />
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <button className="c-btn c-btn-primary" disabled={saving} onClick={async () => {
+              setSaving(true); await onSave(name, text); setSaving(false); setEditing(false);
+            }}><Save size={13} /> Save</button>
+            <button className="c-btn" onClick={() => setEditing(false)}>Cancel</button>
+          </div>
+        </div>
+      ) : current ? (
+        <div style={{ fontSize: 13, color: 'var(--c-fg-soft)', marginTop: 4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+          {current.description.replace(/<[^>]+>/g, ' ')}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 // Exact room name first. RateHawk rate names can add a bed note to the room
 // name ("… (full double bed) (bed type is subject to availability)"), so fall
