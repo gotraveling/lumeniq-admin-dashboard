@@ -14,12 +14,15 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
-type Point = { day: string | null; aud: number | null; idx: number };
+type Point = {
+  day: string | null; aud: number | null; idx: number; pct?: number | null;
+  stays?: number; staysMoved?: number; staysSwitched?: number; switchedFrom?: string | null; switchedTo?: string | null;
+};
 type Hotel = {
   hotelId: number; name: string | null; city: string | null; stars: number | null; supplier: string | null;
   nightlyAud: number | null; changePct: number | null; change7Pct: number | null;
   daysTracked: number; moveDays: number; typicalMovePct: number | null;
-  biggestDayPct: number | null; biggestDropPct: number | null; series: Point[];
+  biggestDayPct: number | null; biggestDropPct: number | null; series: Point[]; lastChange: Point | null;
 };
 type Data = { days: number; movePct: number; up: number; down: number; steady: number; hotels: Hotel[] };
 type Sort = 'change' | 'often' | 'week' | 'name';
@@ -32,7 +35,20 @@ const tone = (pct: number | null | undefined, flat = 1) => (pct == null || Math.
 const pctText = (pct: number | null | undefined) =>
   pct == null ? '—' : Math.abs(pct) < 0.05 ? '0%' : `${pct > 0 ? '▲ +' : '▼ −'}${Math.abs(pct).toFixed(1)}%`;
 const aud = (n: number | null | undefined) => (n == null ? '—' : `A$${Math.round(n).toLocaleString('en-AU')}`);
-const day = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+const day = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+const SUP: Record<string, string> = { ratehawk: 'r.h.', hummingbird: 'h.b.', hotelbeds: 'Hotelbeds' };
+const sup = (s?: string | null) => (s ? SUP[s] || s : '?');
+
+/** What we can see about one day's change. Suppliers never say why. */
+function whatMoved(p: Point) {
+  const of = p.stays || 0;
+  const moved = p.staysMoved || 0;
+  const share = of ? moved / of : 0;
+  const reach = share >= 0.6 ? 'most dates' : share >= 0.25 ? 'some dates' : 'a few dates';
+  const parts = [`${reach} (${moved} of ${of} stays)`];
+  if (of && (p.staysSwitched || 0) / of >= 0.3) parts.push(`cheapest supplier switched ${sup(p.switchedFrom)} → ${sup(p.switchedTo)}`);
+  return parts.join(', ');
+}
 const starText = (s: number | null) => (s == null ? '' : s > 5 ? '5+★' : `${s}★`);
 
 function Spark({ series, color }: { series: Point[]; color: string }) {
@@ -55,7 +71,7 @@ function OftenBar({ moved, of }: { moved: number; of: number }) {
   const share = of ? moved / of : 0;
   return (
     <div title={`Price moved on ${moved} of ${of} days`}>
-      <div style={{ fontSize: 12.5 }}>{moved} of {of} days</div>
+      <div style={{ fontSize: 11.5, color: FLAT }}>moved on {moved} of {of} days</div>
       <div style={{ width: 90, height: 5, borderRadius: 3, background: 'var(--c-border, #e5e5e5)', marginTop: 3 }}>
         <div style={{ width: `${Math.round(share * 100)}%`, height: '100%', borderRadius: 3, background: share > 0.5 ? '#c27c0e' : FLAT }} />
       </div>
@@ -63,26 +79,62 @@ function OftenBar({ moved, of }: { moved: number; of: number }) {
   );
 }
 
+function ChartTip({ active, payload }: any) {
+  const p: Point | undefined = active && payload && payload[0] && payload[0].payload.p;
+  if (!p || !p.day) return null;
+  return (
+    <div style={{ background: '#fff', border: '1px solid var(--c-border, #ddd)', borderRadius: 6, padding: '6px 10px', fontSize: 12.5 }}>
+      <div style={{ fontWeight: 700 }}>{day(p.day)}</div>
+      <div>{aud(p.aud)} a night for the same stays</div>
+      {p.pct != null && <div style={{ color: tone(p.pct), fontWeight: 600 }}>{pctText(p.pct)} on the day before</div>}
+      {p.stays ? <div style={{ color: FLAT }}>{whatMoved(p)}</div> : null}
+    </div>
+  );
+}
+
 function BigChart({ h }: { h: Hotel }) {
-  const rows = h.series.filter(p => p.day && p.aud != null).map(p => ({ day: day(p.day as string), aud: p.aud }));
+  const pts = h.series.filter(p => p.day && p.aud != null);
+  const rows = pts.map(p => ({ day: day(p.day as string), aud: p.aud, p }));
   const color = tone(h.changePct);
+  const changes = pts.filter(p => Math.abs(p.pct || 0) > 1).reverse();
   return (
     <div style={{ padding: '8px 4px 4px' }}>
-      <div style={{ height: 220 }}>
+      <div style={{ height: 240 }}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={rows} margin={{ top: 8, right: 16, bottom: 0, left: 8 }}>
             <CartesianGrid stroke="var(--c-border, #eee)" vertical={false} />
-            <XAxis dataKey="day" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={24} />
+            <XAxis dataKey="day" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={16} />
             <YAxis tick={{ fontSize: 11 }} width={70} domain={['auto', 'auto']} tickFormatter={(n: number) => aud(n)} />
-            <Tooltip formatter={(n: number) => [`${aud(n)} a night`, 'Same stays']} />
-            <Line type="monotone" dataKey="aud" stroke={color} strokeWidth={2} dot={false} isAnimationActive={false} />
+            <Tooltip content={<ChartTip />} />
+            <Line type="linear" dataKey="aud" stroke={color} strokeWidth={2} dot={{ r: 2.5, fill: color }} activeDot={{ r: 5 }} isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>
       <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginTop: 4 }}>
-        Biggest one-day rise {pctText(h.biggestDayPct)}, biggest one-day drop {pctText(h.biggestDropPct)}.
-        A typical day moves {h.typicalMovePct ?? '—'}%. Prices in A$ at today&apos;s exchange rate, so the line is the supplier&apos;s price, never the exchange rate.
+        One price a day: the refresh runs every 6 hours and the day keeps its last one. Each point is the same stays compared with the day before.
+        Prices in A$ at today&apos;s exchange rate, so the line is the supplier&apos;s price, never the exchange rate. Hover a point for that day.
       </div>
+      {changes.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700 }}>Changes, newest first</div>
+          <table style={{ fontSize: 12.5, marginTop: 4, borderCollapse: 'collapse' }}>
+            <tbody>
+              {changes.map(p => (
+                <tr key={p.day as string}>
+                  <td style={{ padding: '2px 14px 2px 0', whiteSpace: 'nowrap' }}>{day(p.day as string)}</td>
+                  <td style={{ padding: '2px 14px 2px 0', whiteSpace: 'nowrap', color: tone(p.pct), fontWeight: 600 }}>{pctText(p.pct)}</td>
+                  <td style={{ padding: '2px 14px 2px 0', whiteSpace: 'nowrap' }}>{aud(p.aud)} a night</td>
+                  <td style={{ padding: '2px 0', color: 'var(--c-fg-muted)' }}>{whatMoved(p)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)', marginTop: 4 }}>
+            Suppliers don&apos;t say why a price moves. Most dates moving together usually means the hotel changed its prices.
+            A few dates moving usually means those dates are filling up or an offer started or ended.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -130,7 +182,7 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
       <div style={{ fontSize: 13, color: 'var(--c-fg-muted)', marginTop: 2, maxWidth: 820 }}>
         Each line follows the same stays day by day, so a stay dropping off the list never counts as a move.
         <b style={{ color: UP }}> Red</b> = dearer for the guest, <b style={{ color: DOWN }}>green</b> = cheaper.
-        Hotels that move often are the ones whose cards go out of date between refreshes. Click a hotel for its chart.
+        Hotels that move often are the ones whose cards go out of date between refreshes. Click a hotel for its chart and the date of each change.
       </div>
 
       {err && <div className="c-error" style={{ marginTop: 10 }}>{err}</div>}
@@ -159,7 +211,7 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
 
           <table className="c-table" style={{ marginTop: 10 }}>
             <thead>
-              <tr><th>Hotel</th><th>Price line</th><th>{span} days</th><th>Last 7 days</th><th>Moved on</th><th>Now, a night</th></tr>
+              <tr><th>Hotel</th><th>Price line</th><th>{span} days</th><th>Last 7 days</th><th>Last change</th><th>Now, a night</th></tr>
             </thead>
             <tbody>
               {shown.map(h => {
@@ -178,7 +230,14 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
                       <td><Spark series={h.series} color={color} /></td>
                       <td style={{ color, fontWeight: 700, whiteSpace: 'nowrap' }}>{pctText(h.changePct)}</td>
                       <td style={{ color: tone(h.change7Pct), whiteSpace: 'nowrap' }}>{pctText(h.change7Pct)}</td>
-                      <td><OftenBar moved={h.moveDays} of={h.daysTracked} /></td>
+                      <td>
+                        {h.lastChange?.day ? (
+                          <div style={{ fontSize: 12.5, whiteSpace: 'nowrap' }}>
+                            {day(h.lastChange.day)} <span style={{ color: tone(h.lastChange.pct), fontWeight: 600 }}>{pctText(h.lastChange.pct)}</span>
+                          </div>
+                        ) : <div style={{ fontSize: 12.5, color: FLAT }}>no change</div>}
+                        <OftenBar moved={h.moveDays} of={h.daysTracked} />
+                      </td>
                       <td style={{ whiteSpace: 'nowrap' }}>{aud(h.nightlyAud)}</td>
                     </tr>
                     {isOpen && (
