@@ -35,6 +35,13 @@ const CAUSE: Record<Cause, { label: string; note: string; ours: boolean }> = {
   unchecked:                { label: 'Page not read', note: 'The page did not answer in time. Not counted.', ours: false },
 };
 
+// Same colours as the price lines below: red = dearer for the guest, green = cheaper.
+const CAUSE_COLOR: Partial<Record<Cause, string>> = {
+  card_supplier_price_up: 'var(--c-danger, #a51919)',
+  card_supplier_price_down: 'var(--c-success, #046a4a)',
+};
+const diffColor = (d: number | null) => (d == null || d === 0 ? undefined : d > 0 ? 'var(--c-danger, #a51919)' : 'var(--c-success, #046a4a)');
+
 const aud = (n: number | null | undefined) => (n == null ? '—' : `A$${Math.round(n).toLocaleString('en-AU')}`);
 const day = (d?: string | null) => (d ? new Date(`${d.slice(0, 10)}T00:00:00Z`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'UTC' }) : '—');
 const when = (d: string) => new Date(d).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
@@ -94,7 +101,7 @@ export default function CardChecksPage() {
             <Stat label="Checks" value={String(total)} />
             <Stat label="Same price" value={total ? `${Math.round((matched / total) * 100)}%` : '—'} />
             {counted.filter(c => c.cause !== 'match').map(c => (
-              <Stat key={c.cause} label={CAUSE[c.cause]?.label || c.cause} value={String(c.n)} warn={CAUSE[c.cause]?.ours} title={CAUSE[c.cause]?.note} />
+              <Stat key={c.cause} label={CAUSE[c.cause]?.label || c.cause} value={String(c.n)} warn={CAUSE[c.cause]?.ours} color={CAUSE_COLOR[c.cause]} title={CAUSE[c.cause]?.note} />
             ))}
           </section>
           {total === 0 && (
@@ -125,11 +132,11 @@ export default function CardChecksPage() {
                         <td style={{ whiteSpace: 'nowrap' }}>
                           {aud(r.page_aud)} {sup(r.page_supplier)}
                           {r.diff_aud != null && (
-                            <div style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>{r.diff_aud > 0 ? '+' : '−'}{aud(Math.abs(r.diff_aud))} vs card</div>
+                            <div style={{ fontSize: 11.5, fontWeight: 600, color: diffColor(r.diff_aud) }}>{r.diff_aud > 0 ? '▲ +' : '▼ −'}{aud(Math.abs(r.diff_aud))} vs card</div>
                           )}
                         </td>
                         <td style={{ whiteSpace: 'nowrap' }}>{r.card_supplier_page_aud != null ? aud(r.card_supplier_page_aud) : 'no rooms'}</td>
-                        <td style={{ fontSize: 12.5, color: c?.ours ? 'var(--c-danger, #b4232a)' : undefined, fontWeight: c?.ours ? 700 : undefined }} title={c?.note}>
+                        <td style={{ fontSize: 12.5, color: c?.ours ? 'var(--c-danger, #b4232a)' : CAUSE_COLOR[r.cause], fontWeight: c?.ours || CAUSE_COLOR[r.cause] ? 700 : undefined }} title={c?.note}>
                           {c?.label || r.cause}
                         </td>
                       </tr>
@@ -153,7 +160,7 @@ export default function CardChecksPage() {
                       <td>{h.hotel_name || `Hotel #${h.hotel_id}`}</td>
                       <td>{h.checks}</td>
                       <td style={{ fontWeight: h.mismatches ? 700 : undefined }}>{h.mismatches}</td>
-                      <td>{h.usual_cause ? CAUSE[h.usual_cause]?.label || h.usual_cause : '—'}</td>
+                      <td style={{ color: h.usual_cause ? CAUSE_COLOR[h.usual_cause] : undefined }}>{h.usual_cause ? CAUSE[h.usual_cause]?.label || h.usual_cause : '—'}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>{when(h.last_checked)}</td>
                     </tr>
                   ))}
@@ -173,11 +180,11 @@ export default function CardChecksPage() {
   );
 }
 
-function Stat({ label, value, warn, title }: { label: string; value: string; warn?: boolean; title?: string }) {
+function Stat({ label, value, warn, color, title }: { label: string; value: string; warn?: boolean; color?: string; title?: string }) {
   return (
     <div title={title} style={{ border: '1px solid var(--c-border)', borderRadius: 8, padding: '8px 12px', minWidth: 120 }}>
       <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: warn ? 'var(--c-danger, #b4232a)' : undefined }}>{value}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: warn ? 'var(--c-danger, #b4232a)' : color }}>{value}</div>
     </div>
   );
 }
