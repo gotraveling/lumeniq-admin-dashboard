@@ -144,11 +144,27 @@ interface CollectionFull {
   campaignMinStay?: number | null; campaignPackageNights?: number | null;
   campaignAdvertiseFrom?: string | null; campaignAdvertiseTo?: string | null;
   travelGuideLabel?: string; travelGuideUrl?: string;
+  /** Load More list under the curated hotels (null = off). Absent when the
+   *  hotel-api predates it, and then never sent back on save. */
+  moreRule?: MoreRule | null;
   status: 'draft' | 'published'; hotels: CollectionHotel[];
   sections?: CollectionSection[];
   tags?: string[];
 }
 /** A named group on the page, e.g. "Turkish Airlines free stopover hotels". */
+interface MoreRule {
+  meiliFilters: string[]; minStars: number | null; excludePropertyTypes: string[]; batch: number;
+}
+/** Small, cheap property types left out of a luxury Load More list by default. */
+const MORE_DEFAULT_EXCLUDE = ['Guesthouse', 'BNB', 'Apartment', 'Mini-hotel', 'Cottages_and_Houses'];
+/** "country = Maldives" / 'country = "Sri Lanka"' → the country, else null. */
+function moreCountry(rule?: MoreRule | null): string | null {
+  const f = rule?.meiliFilters || [];
+  if (f.length !== 1) return null;
+  const m = f[0].match(/^country\s*=\s*"?([^"]+?)"?\s*$/i);
+  return m ? m[1] : null;
+}
+
 interface CollectionSection {
   /** Absent until saved — the API hands back the id it created. */
   id?: number;
@@ -377,6 +393,9 @@ export default function CollectionsPage() {
         travelGuideLabel: editing.travelGuideLabel || null,
         travelGuideUrl: editing.travelGuideUrl || null,
         tags: editing.tags || [],
+        // Only when the API sent it: an older hotel-api would otherwise have
+        // its rule cleared by a save that never saw it.
+        ...('moreRule' in editing ? { moreRule: editing.moreRule ?? null } : {}),
       };
       const renamed = !!editing.id && !!originalSlug && slugify(editing.slug) !== originalSlug;
       if (renamed && !confirm(
@@ -947,6 +966,8 @@ function CollectionEditor({ value, onChange, onSave, onCancel, onDelete, busy, o
               onChange={(e) => set({ campaignAdvertiseTo: e.target.value || null })} />
           </Field>
         </div>
+        {'moreRule' in value && <MoreRuleField value={value.moreRule ?? null} destination={value.searchDestination || ''}
+          onChange={(moreRule) => set({ moreRule })} />}
         <Field label="Intro paragraphs (leave a blank line between paragraphs)">
           <IntroEditor
             key={value.id ?? 'new'}
@@ -1986,5 +2007,65 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="c-label">{label}</span>
       {children}
     </label>
+  );
+}
+
+
+/**
+ * "Load More" under the curated hotels (Tina, Nov 2026): more hotels in one
+ * country, rated N stars and up, cheapest first. Hotels already on the page,
+ * hidden or paused hotels and hotels switched off in Hotel Visibility never
+ * show. A rule typed some other way (not a single country) is kept as it is.
+ */
+function MoreRuleField({ value, destination, onChange }: {
+  value: MoreRule | null; destination: string; onChange: (r: MoreRule | null) => void;
+}) {
+  const on = !!value;
+  const country = moreCountry(value);
+  const custom = on && country == null;
+  const make = (patch: Partial<{ country: string; minStars: number | null; batch: number }>): MoreRule => {
+    const c = patch.country ?? country ?? destination;
+    return {
+      meiliFilters: custom && patch.country === undefined ? value!.meiliFilters : [`country = "${String(c).replace(/"/g, '')}"`],
+      minStars: patch.minStars !== undefined ? patch.minStars : (value?.minStars ?? 4),
+      excludePropertyTypes: value?.excludePropertyTypes ?? MORE_DEFAULT_EXCLUDE,
+      batch: patch.batch ?? value?.batch ?? 10,
+    };
+  };
+  return (
+    <div style={{ border: '1px solid var(--c-border)', borderRadius: 8, padding: 12 }}>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, fontWeight: 600 }}>
+        <input type="checkbox" checked={on} disabled={!on && !destination}
+          onChange={(e) => onChange(e.target.checked ? make({ country: destination }) : null)} />
+        Load More button under the hotels — more hotels in a country, cheapest first
+      </label>
+      {!on && !destination && (
+        <div style={{ fontSize: 12, color: 'var(--c-fg-muted)', marginTop: 4 }}>Set the search destination above first.</div>
+      )}
+      {on && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginTop: 10 }}>
+          <Field label={custom ? 'Which hotels (custom rule)' : 'Country'}>
+            {custom
+              ? <input className="c-input" value={value!.meiliFilters.join(' AND ')} readOnly />
+              : <input className="c-input" value={country || ''} onChange={(e) => onChange(make({ country: e.target.value }))} placeholder="Maldives" />}
+          </Field>
+          <Field label="Stars and up">
+            <select className="c-input" value={value!.minStars ?? ''} onChange={(e) => onChange(make({ minStars: e.target.value === '' ? null : Number(e.target.value) }))}>
+              <option value="">Any</option>
+              {[3, 4, 4.5, 5].map((n) => <option key={n} value={n}>{n}★</option>)}
+            </select>
+          </Field>
+          <Field label="Hotels per click">
+            <input className="c-input" type="number" min={1} max={50} value={value!.batch}
+              onChange={(e) => onChange(make({ batch: Math.max(1, Math.min(50, Number(e.target.value) || 10)) }))} />
+          </Field>
+          <div style={{ gridColumn: '1 / -1', fontSize: 12, color: 'var(--c-fg-muted)' }}>
+            Leaves out hotels already on this page, hidden or paused hotels, hotels with no photos
+            {value!.excludePropertyTypes.length ? `, and ${value!.excludePropertyTypes.join(', ').replace(/_/g, ' ')}` : ''}.
+            Prices for new hotels arrive with the next price refresh (every 6 hours).
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

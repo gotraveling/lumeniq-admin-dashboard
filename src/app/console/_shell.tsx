@@ -23,7 +23,7 @@ import {
   SlidersHorizontal,
   Link2,
   Tag,
-  LayoutList, TrendingDown, Activity, MapPin, FlaskConical} from 'lucide-react';
+  LayoutList, TrendingDown, Activity, MapPin, FlaskConical, Heart} from 'lucide-react';
 import { certifierMayOpen } from '@/lib/certifierPolicy';
 
 /**
@@ -70,6 +70,7 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string; 
     items: [
       { href: '/console/pages',            label: 'Pages',             icon: LayoutList, adminOnly: true },
       { href: '/console/collections',      label: 'Collections',       icon: FolderOpen, adminOnly: true },
+      { href: '/console/interests',        label: 'Hotel Interests',   icon: Heart, adminOnly: true },
       { href: '/console/room-mappings',    label: 'Room Mappings',     icon: Link2, adminOnly: true },
       { href: '/console/profiles',         label: 'Profiles',          icon: SlidersHorizontal, adminOnly: true },
       { href: '/console/editorial',        label: 'Editorial Content', icon: Sparkles, adminOnly: true },
