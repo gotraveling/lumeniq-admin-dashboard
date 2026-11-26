@@ -43,6 +43,9 @@ const CAUSE_COLOR: Partial<Record<Cause, string>> = {
 const diffColor = (d: number | null) => (d == null || d === 0 ? undefined : d > 0 ? 'var(--c-danger, #a51919)' : 'var(--c-success, #046a4a)');
 
 const aud = (n: number | null | undefined) => (n == null ? '—' : `A$${Math.round(n).toLocaleString('en-AU')}`);
+// Numbers right-aligned on tabular figures so digits stack down a column; headers wrap at the bottom.
+const NUM = { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } as const;
+const TH = { verticalAlign: 'bottom', whiteSpace: 'normal' } as const;
 const day = (d?: string | null) => (d ? new Date(`${d.slice(0, 10)}T00:00:00Z`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'UTC' }) : '—');
 const when = (d: string) => new Date(d).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 const hoursBetween = (a?: string | null, b?: string | null) => {
@@ -82,7 +85,7 @@ export default function CardChecksPage() {
         <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Card vs page checks</h1>
         <label style={{ fontSize: 13 }}>
           Last{' '}
-          <select className="c-input" value={days} onChange={e => setDays(Number(e.target.value))}>
+          <select className="c-input" style={{ width: 'auto' }} value={days} onChange={e => setDays(Number(e.target.value))}>
             {[1, 7, 14, 30, 90].map(d => <option key={d} value={d}>{d === 1 ? '24 hours' : `${d} days`}</option>)}
           </select>
         </label>
@@ -97,7 +100,7 @@ export default function CardChecksPage() {
 
       {data && (
         <>
-          <section style={{ marginTop: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <section style={{ marginTop: 16, display: 'flex', gap: '12px 36px', flexWrap: 'wrap' }}>
             <Stat label="Checks" value={String(total)} />
             <Stat label="Same price" value={total ? `${Math.round((matched / total) * 100)}%` : '—'} />
             {counted.filter(c => c.cause !== 'match').map(c => (
@@ -113,29 +116,37 @@ export default function CardChecksPage() {
           {data.recent.length > 0 && (
             <section style={{ marginTop: 24 }}>
               <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 8px' }}>When they differed</h2>
-              <table className="c-table">
+              <table className="c-table" style={{ tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col style={{ width: 130 }} /><col /><col style={{ width: 130 }} /><col style={{ width: 140 }} />
+                  <col style={{ width: 160 }} /><col style={{ width: 150 }} /><col style={{ width: 200 }} />
+                </colgroup>
                 <thead>
-                  <tr><th>Checked</th><th>Hotel</th><th>Stay</th><th>Card</th><th>Page now</th><th>Card supplier on the page now</th><th>Why</th></tr>
+                  <tr>
+                    <th style={TH}>Checked</th><th style={TH}>Hotel</th><th style={TH}>Stay</th>
+                    <th style={{ ...TH, ...NUM }}>Card</th><th style={{ ...TH, ...NUM }}>Page now</th>
+                    <th style={{ ...TH, ...NUM }}>Card supplier on the page now</th><th style={TH}>Why</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {data.recent.map(r => {
                     const c = CAUSE[r.cause];
                     return (
                       <tr key={r.id}>
-                        <td style={{ whiteSpace: 'nowrap' }}>{when(r.checked_at)}</td>
+                        <td style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{when(r.checked_at)}</td>
                         <td>{r.hotel_name || `Hotel #${r.hotel_id}`}</td>
-                        <td style={{ whiteSpace: 'nowrap' }}>{day(r.check_in)} – {day(r.check_out)}</td>
-                        <td style={{ whiteSpace: 'nowrap' }}>
+                        <td style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{day(r.check_in)} – {day(r.check_out)}</td>
+                        <td style={{ ...NUM, whiteSpace: 'nowrap' }}>
                           {aud(r.card_aud)} {sup(r.card_supplier)}
                           <div style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>{age(hoursBetween(r.card_saved_at, r.checked_at))}</div>
                         </td>
-                        <td style={{ whiteSpace: 'nowrap' }}>
+                        <td style={{ ...NUM, whiteSpace: 'nowrap' }}>
                           {aud(r.page_aud)} {sup(r.page_supplier)}
                           {r.diff_aud != null && (
                             <div style={{ fontSize: 11.5, fontWeight: 600, color: diffColor(r.diff_aud) }}>{r.diff_aud > 0 ? '▲ +' : '▼ −'}{aud(Math.abs(r.diff_aud))} vs card</div>
                           )}
                         </td>
-                        <td style={{ whiteSpace: 'nowrap' }}>{r.card_supplier_page_aud != null ? aud(r.card_supplier_page_aud) : 'no rooms'}</td>
+                        <td style={{ ...NUM, whiteSpace: 'nowrap' }}>{r.card_supplier_page_aud != null ? aud(r.card_supplier_page_aud) : 'no rooms'}</td>
                         <td style={{ fontSize: 12.5, color: c?.ours ? 'var(--c-danger, #b4232a)' : CAUSE_COLOR[r.cause], fontWeight: c?.ours || CAUSE_COLOR[r.cause] ? 700 : undefined }} title={c?.note}>
                           {c?.label || r.cause}
                         </td>
@@ -152,16 +163,17 @@ export default function CardChecksPage() {
           {data.byHotel.length > 0 && (
             <section style={{ marginTop: 24 }}>
               <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 8px' }}>By hotel</h2>
-              <table className="c-table">
-                <thead><tr><th>Hotel</th><th>Checks</th><th>Differed</th><th>Usual reason</th><th>Last checked</th></tr></thead>
+              <table className="c-table" style={{ tableLayout: 'fixed' }}>
+                <colgroup><col /><col style={{ width: 120 }} /><col style={{ width: 120 }} /><col style={{ width: 240 }} /><col style={{ width: 150 }} /></colgroup>
+                <thead><tr><th style={TH}>Hotel</th><th style={{ ...TH, ...NUM }}>Checks</th><th style={{ ...TH, ...NUM }}>Differed</th><th style={TH}>Usual reason</th><th style={TH}>Last checked</th></tr></thead>
                 <tbody>
                   {data.byHotel.map(h => (
                     <tr key={h.hotel_id}>
                       <td>{h.hotel_name || `Hotel #${h.hotel_id}`}</td>
-                      <td>{h.checks}</td>
-                      <td style={{ fontWeight: h.mismatches ? 700 : undefined }}>{h.mismatches}</td>
+                      <td style={NUM}>{h.checks}</td>
+                      <td style={{ ...NUM, fontWeight: h.mismatches ? 700 : undefined }}>{h.mismatches}</td>
                       <td style={{ color: h.usual_cause ? CAUSE_COLOR[h.usual_cause] : undefined }}>{h.usual_cause ? CAUSE[h.usual_cause]?.label || h.usual_cause : '—'}</td>
-                      <td style={{ whiteSpace: 'nowrap' }}>{when(h.last_checked)}</td>
+                      <td style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{when(h.last_checked)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -182,9 +194,9 @@ export default function CardChecksPage() {
 
 function Stat({ label, value, warn, color, title }: { label: string; value: string; warn?: boolean; color?: string; title?: string }) {
   return (
-    <div title={title} style={{ border: '1px solid var(--c-border)', borderRadius: 8, padding: '8px 12px', minWidth: 120 }}>
+    <div title={title}>
       <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: warn ? 'var(--c-danger, #b4232a)' : color }}>{value}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.3, fontVariantNumeric: 'tabular-nums', color: warn ? 'var(--c-danger, #b4232a)' : color }}>{value}</div>
     </div>
   );
 }

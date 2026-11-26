@@ -30,6 +30,10 @@ type Sort = 'change' | 'often' | 'week' | 'name';
 const UP = 'var(--c-danger, #a51919)';
 const DOWN = 'var(--c-success, #046a4a)';
 const FLAT = 'var(--c-fg-muted, #5a5a5a)';
+// Numbers right-aligned on tabular figures; every cell centred so sparklines and two-line cells share a middle.
+const NUM = { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } as const;
+const TH = { verticalAlign: 'bottom', whiteSpace: 'normal' } as const;
+const TD = { verticalAlign: 'middle' } as const;
 
 const tone = (pct: number | null | undefined, flat = 1) => (pct == null || Math.abs(pct) <= flat ? FLAT : pct > 0 ? UP : DOWN);
 const pctText = (pct: number | null | undefined) =>
@@ -129,9 +133,9 @@ function BigChart({ h }: { h: Hotel }) {
             <tbody>
               {changes.map(p => (
                 <tr key={p.day as string}>
-                  <td style={{ padding: '2px 14px 2px 0', whiteSpace: 'nowrap' }}>{day(p.day as string)}</td>
-                  <td style={{ padding: '2px 14px 2px 0', whiteSpace: 'nowrap', color: tone(p.pct), fontWeight: 600 }}>{pctText(p.pct)}</td>
-                  <td style={{ padding: '2px 14px 2px 0', whiteSpace: 'nowrap' }}>{aud(p.aud)} a night</td>
+                  <td style={{ padding: '2px 14px 2px 0', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{day(p.day as string)}</td>
+                  <td style={{ ...NUM, padding: '2px 14px 2px 0', whiteSpace: 'nowrap', color: tone(p.pct), fontWeight: 600 }}>{pctText(p.pct)}</td>
+                  <td style={{ ...NUM, padding: '2px 14px 2px 0', whiteSpace: 'nowrap' }}>{aud(p.aud)} a night</td>
                   <td style={{ padding: '2px 0', color: 'var(--c-fg-muted)' }}>{whatMoved(p)}</td>
                 </tr>
               ))}
@@ -223,31 +227,31 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
 
       {data && (
         <>
-          <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ marginTop: 12, display: 'flex', gap: '12px 36px', flexWrap: 'wrap' }}>
             <Tile label="Got dearer" value={counts.up} color={UP} />
             <Tile label="Got cheaper" value={counts.down} color={DOWN} />
             <Tile label={`Steady (within ${flat}%)`} value={counts.steady} color={FLAT} />
           </div>
 
           <div style={{ marginTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <input className="c-input" placeholder="Find a hotel or city" value={q} onChange={e => setQ(e.target.value)} style={{ width: 220 }} />
-            <select className="c-input" value={coll} onChange={e => setColl(e.target.value)} aria-label="Collection">
+            <input className="c-input" placeholder="Find a hotel or city" value={q} onChange={e => setQ(e.target.value)} style={{ width: 220 }} aria-label="Find a hotel or city" />
+            <select className="c-input" style={{ width: 'auto' }} value={coll} onChange={e => setColl(e.target.value)} aria-label="Collection">
               <option value="">All collections</option>
               {options.colls.map(c => <option key={c} value={c}>{c}</option>)}
               <option value="__none">Not in a collection (Load More)</option>
             </select>
-            <select className="c-input" value={country} onChange={e => setCountry(e.target.value)} aria-label="Country">
+            <select className="c-input" style={{ width: 'auto' }} value={country} onChange={e => setCountry(e.target.value)} aria-label="Country">
               <option value="">All countries</option>
               {options.countries.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
-            <select className="c-input" value={stars} onChange={e => setStars(e.target.value)} aria-label="Stars">
+            <select className="c-input" style={{ width: 'auto' }} value={stars} onChange={e => setStars(e.target.value)} aria-label="Stars">
               <option value="">All stars</option>
               {options.starSet.map(st => <option key={st} value={st}>{st}★</option>)}
             </select>
             {narrowed && <button className="c-btn" onClick={() => { setQ(''); setColl(''); setCountry(''); setStars(''); }}>Clear</button>}
-            <label style={{ fontSize: 13 }}>
-              Sort by{' '}
-              <select className="c-input" value={sort} onChange={e => setSort(e.target.value as Sort)}>
+            <label style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+              Sort by
+              <select className="c-input" style={{ width: 'auto' }} value={sort} onChange={e => setSort(e.target.value as Sort)}>
                 <option value="change">Biggest change over {span} days</option>
                 <option value="week">Biggest change this week</option>
                 <option value="often">Moves most often</option>
@@ -257,9 +261,16 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
           </div>
 
           {narrowed && <div style={{ marginTop: 8, fontSize: 12.5, color: FLAT }}>{rows.length} of {data.hotels.length} hotels</div>}
-          <table className="c-table" style={{ marginTop: 10 }}>
+          <table className="c-table" style={{ marginTop: 10, tableLayout: 'fixed' }}>
+            <colgroup>
+              <col /><col style={{ width: 182 }} /><col style={{ width: 120 }} /><col style={{ width: 120 }} />
+              <col style={{ width: 200 }} /><col style={{ width: 130 }} />
+            </colgroup>
             <thead>
-              <tr><th>Hotel</th><th>Price line</th><th>{span} days</th><th>Last 7 days</th><th>Last change</th><th>Now, a night</th></tr>
+              <tr>
+                <th style={TH}>Hotel</th><th style={TH}>Price line</th><th style={{ ...TH, ...NUM }}>{span} days</th>
+                <th style={{ ...TH, ...NUM }}>Last 7 days</th><th style={TH}>Last change</th><th style={{ ...TH, ...NUM }}>Now, a night</th>
+              </tr>
             </thead>
             <tbody>
               {shown.map(h => {
@@ -268,25 +279,25 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
                 return (
                   <Fragment key={h.hotelId}>
                     <tr onClick={() => setOpen(isOpen ? null : h.hotelId)} style={{ cursor: 'pointer' }}>
-                      <td>
+                      <td style={TD}>
                         <div style={{ fontWeight: 600 }}>{h.name || `Hotel #${h.hotelId}`}</div>
                         <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>
                           {[h.city, countryName(h.country), starText(h.stars)].filter(Boolean).join(' · ')}
                           {differed.has(h.hotelId) && <span style={{ marginLeft: 6, color: UP, fontWeight: 600 }}>card differed</span>}
                         </div>
                       </td>
-                      <td><Spark series={h.series} color={color} /></td>
-                      <td style={{ color, fontWeight: 700, whiteSpace: 'nowrap' }}>{pctText(h.changePct)}</td>
-                      <td style={{ color: tone(h.change7Pct), whiteSpace: 'nowrap' }}>{pctText(h.change7Pct)}</td>
-                      <td>
+                      <td style={TD}><Spark series={h.series} color={color} /></td>
+                      <td style={{ ...TD, ...NUM, color, fontWeight: 700, whiteSpace: 'nowrap' }}>{pctText(h.changePct)}</td>
+                      <td style={{ ...TD, ...NUM, color: tone(h.change7Pct), whiteSpace: 'nowrap' }}>{pctText(h.change7Pct)}</td>
+                      <td style={TD}>
                         {h.lastChange?.day ? (
-                          <div style={{ fontSize: 12.5, whiteSpace: 'nowrap' }}>
+                          <div style={{ fontSize: 12.5, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
                             {day(h.lastChange.day)} <span style={{ color: tone(h.lastChange.pct), fontWeight: 600 }}>{pctText(h.lastChange.pct)}</span>
                           </div>
                         ) : <div style={{ fontSize: 12.5, color: FLAT }}>no change</div>}
                         <OftenBar moved={h.moveDays} of={h.daysTracked} />
                       </td>
-                      <td style={{ whiteSpace: 'nowrap' }}>{aud(h.nightlyAud)}</td>
+                      <td style={{ ...TD, ...NUM, whiteSpace: 'nowrap' }}>{aud(h.nightlyAud)}</td>
                     </tr>
                     {isOpen && (
                       <tr><td colSpan={6} style={{ background: 'var(--c-bg-hover, #fafafa)' }}><BigChart h={h} /></td></tr>
@@ -307,9 +318,9 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
 
 function Tile({ label, value, color }: { label: string; value: number; color: string }) {
   return (
-    <div style={{ border: '1px solid var(--c-border)', borderRadius: 8, padding: '8px 12px', minWidth: 120 }}>
+    <div>
       <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 700, color }}>{value}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.3, fontVariantNumeric: 'tabular-nums', color }}>{value}</div>
     </div>
   );
 }
