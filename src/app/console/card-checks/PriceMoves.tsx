@@ -19,7 +19,7 @@ type Point = {
   stays?: number; staysMoved?: number; staysSwitched?: number; switchedFrom?: string | null; switchedTo?: string | null;
 };
 type Hotel = {
-  hotelId: number; name: string | null; city: string | null; stars: number | null; supplier: string | null;
+  hotelId: number; name: string | null; city: string | null; country: string | null; collections: string[]; stars: number | null; supplier: string | null;
   nightlyAud: number | null; changePct: number | null; change7Pct: number | null;
   daysTracked: number; moveDays: number; typicalMovePct: number | null;
   biggestDayPct: number | null; biggestDropPct: number | null; series: Point[]; lastChange: Point | null;
@@ -49,6 +49,14 @@ function whatMoved(p: Point) {
   if (of && (p.staysSwitched || 0) / of >= 0.3) parts.push(`cheapest supplier switched ${sup(p.switchedFrom)} → ${sup(p.switchedTo)}`);
   return parts.join(', ');
 }
+// Some suppliers give a country code (MV), most give the name.
+const countryName = (c: string | null) => {
+  if (!c) return '';
+  if (/^[A-Za-z]{2}$/.test(c)) {
+    try { return new Intl.DisplayNames(['en'], { type: 'region' }).of(c.toUpperCase()) || c; } catch { return c; }
+  }
+  return c;
+};
 const starText = (s: number | null) => (s == null ? '' : s > 5 ? '5+★' : `${s}★`);
 
 function Spark({ series, color }: { series: Point[]; color: string }) {
@@ -145,6 +153,9 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
   const [err, setErr] = useState<string | null>(null);
   const [sort, setSort] = useState<Sort>('change');
   const [q, setQ] = useState('');
+  const [coll, setColl] = useState('');
+  const [country, setCountry] = useState('');
+  const [stars, setStars] = useState('');
   const [all, setAll] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
 
@@ -162,19 +173,41 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
     return () => { live = false; };
   }, [span]);
 
-  const rows = useMemo(() => {
+  const options = useMemo(() => {
+    const hs = data?.hotels || [];
+    const colls = [...new Set(hs.flatMap(h => h.collections || []))].sort();
+    const countries = [...new Set(hs.map(h => countryName(h.country)).filter(Boolean))].sort();
+    const starSet = [...new Set(hs.map(h => (h.stars == null ? '' : h.stars > 5 ? '5+' : String(h.stars))).filter(Boolean))].sort().reverse();
+    return { colls, countries, starSet };
+  }, [data]);
+
+  const filtered = useMemo(() => {
     if (!data) return [];
     const needle = q.trim().toLowerCase();
-    const list = data.hotels.filter(h => !needle || `${h.name || ''} ${h.city || ''}`.toLowerCase().includes(needle));
+    return data.hotels.filter(h =>
+      (!needle || `${h.name || ''} ${h.city || ''} ${countryName(h.country)}`.toLowerCase().includes(needle))
+      && (!coll || (coll === '__none' ? !(h.collections || []).length : (h.collections || []).includes(coll)))
+      && (!country || countryName(h.country) === country)
+      && (!stars || (h.stars != null && (h.stars > 5 ? '5+' : String(h.stars)) === stars)));
+  }, [data, q, coll, country, stars]);
+
+  const rows = useMemo(() => {
     const by: Record<Sort, (a: Hotel, b: Hotel) => number> = {
       change: (a, b) => Math.abs(b.changePct || 0) - Math.abs(a.changePct || 0),
       week: (a, b) => Math.abs(b.change7Pct || 0) - Math.abs(a.change7Pct || 0),
       often: (a, b) => b.moveDays / (b.daysTracked || 1) - a.moveDays / (a.daysTracked || 1) || (b.typicalMovePct || 0) - (a.typicalMovePct || 0),
       name: (a, b) => (a.name || '').localeCompare(b.name || ''),
     };
-    return [...list].sort(by[sort]);
-  }, [data, q, sort]);
-  const shown = all || q ? rows : rows.slice(0, 25);
+    return [...filtered].sort(by[sort]);
+  }, [filtered, sort]);
+  const narrowed = Boolean(q || coll || country || stars);
+  const flat = data?.movePct ?? 1;
+  const counts = {
+    up: filtered.filter(h => (h.changePct || 0) > flat).length,
+    down: filtered.filter(h => (h.changePct || 0) < -flat).length,
+    steady: filtered.filter(h => Math.abs(h.changePct || 0) <= flat).length,
+  };
+  const shown = all || narrowed ? rows : rows.slice(0, 25);
 
   return (
     <section style={{ marginTop: 28 }}>
@@ -191,13 +224,27 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
       {data && (
         <>
           <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <Tile label="Got dearer" value={data.up} color={UP} />
-            <Tile label="Got cheaper" value={data.down} color={DOWN} />
-            <Tile label={`Steady (within ${data.movePct}%)`} value={data.steady} color={FLAT} />
+            <Tile label="Got dearer" value={counts.up} color={UP} />
+            <Tile label="Got cheaper" value={counts.down} color={DOWN} />
+            <Tile label={`Steady (within ${flat}%)`} value={counts.steady} color={FLAT} />
           </div>
 
           <div style={{ marginTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <input className="c-input" placeholder="Find a hotel or city" value={q} onChange={e => setQ(e.target.value)} style={{ width: 220 }} />
+            <select className="c-input" value={coll} onChange={e => setColl(e.target.value)} aria-label="Collection">
+              <option value="">All collections</option>
+              {options.colls.map(c => <option key={c} value={c}>{c}</option>)}
+              <option value="__none">Not in a collection (Load More)</option>
+            </select>
+            <select className="c-input" value={country} onChange={e => setCountry(e.target.value)} aria-label="Country">
+              <option value="">All countries</option>
+              {options.countries.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select className="c-input" value={stars} onChange={e => setStars(e.target.value)} aria-label="Stars">
+              <option value="">All stars</option>
+              {options.starSet.map(st => <option key={st} value={st}>{st}★</option>)}
+            </select>
+            {narrowed && <button className="c-btn" onClick={() => { setQ(''); setColl(''); setCountry(''); setStars(''); }}>Clear</button>}
             <label style={{ fontSize: 13 }}>
               Sort by{' '}
               <select className="c-input" value={sort} onChange={e => setSort(e.target.value as Sort)}>
@@ -209,6 +256,7 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
             </label>
           </div>
 
+          {narrowed && <div style={{ marginTop: 8, fontSize: 12.5, color: FLAT }}>{rows.length} of {data.hotels.length} hotels</div>}
           <table className="c-table" style={{ marginTop: 10 }}>
             <thead>
               <tr><th>Hotel</th><th>Price line</th><th>{span} days</th><th>Last 7 days</th><th>Last change</th><th>Now, a night</th></tr>
@@ -223,7 +271,7 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
                       <td>
                         <div style={{ fontWeight: 600 }}>{h.name || `Hotel #${h.hotelId}`}</div>
                         <div style={{ fontSize: 11.5, color: 'var(--c-fg-muted)' }}>
-                          {[h.city, starText(h.stars)].filter(Boolean).join(' · ')}
+                          {[h.city, countryName(h.country), starText(h.stars)].filter(Boolean).join(' · ')}
                           {differed.has(h.hotelId) && <span style={{ marginLeft: 6, color: UP, fontWeight: 600 }}>card differed</span>}
                         </div>
                       </td>
@@ -248,7 +296,7 @@ export default function PriceMoves({ days, differed }: { days: number; differed:
               })}
             </tbody>
           </table>
-          {!all && !q && rows.length > 25 && (
+          {!all && !narrowed && rows.length > 25 && (
             <button className="c-btn" style={{ marginTop: 10 }} onClick={() => setAll(true)}>Show all {rows.length} hotels</button>
           )}
         </>
