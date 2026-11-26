@@ -7,7 +7,8 @@
  * from a fault in our card (Tina and Murali, 26 Nov 2026).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import PriceMoves from './PriceMoves';
 
 type Cause = 'match' | 'card_supplier_price_up' | 'card_supplier_price_down' | 'card_supplier_no_rooms'
   | 'other_supplier_cheaper' | 'page_no_rooms' | 'unchecked';
@@ -63,6 +64,7 @@ export default function CardChecksPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const differed = useMemo(() => new Set((data?.byHotel || []).filter(h => h.mismatches > 0).map(h => h.hotel_id)), [data]);
   const counted = (data?.byCause || []).filter(c => c.cause !== 'unchecked');
   const total = counted.reduce((n, c) => n + c.n, 0);
   const matched = counted.find(c => c.cause === 'match')?.n || 0;
@@ -137,6 +139,8 @@ export default function CardChecksPage() {
               </table>
             </section>
           )}
+
+          <PriceMoves days={days} differed={differed} />
 
           {data.byHotel.length > 0 && (
             <section style={{ marginTop: 24 }}>
