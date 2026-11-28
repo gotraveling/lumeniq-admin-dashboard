@@ -235,7 +235,7 @@ type AdminRate = {
     markup?: {
       type: string; value: number; amount: number; ruleName?: string;
       // What the rule that priced this rate reaches (engine ruleScopeOf).
-      ruleScope?: { kind: 'global' | 'hotel' | 'narrowed'; ratePlans?: string[]; roomName?: string | null; other?: boolean } | null;
+      ruleScope?: { kind: 'global' | 'hotel' | 'narrowed'; ratePlans?: string[]; roomName?: string | null; roomNameContains?: string | null; other?: boolean } | null;
     };
   };
   // Promotional OFFER metadata (Hummingbird deal.offers[]). Structured as
@@ -2256,6 +2256,7 @@ export default function ConsoleSearchPage() {
               userEmail={user?.email || ''}
               cheapestNetAud={drawerCheapest?.net ?? detailHotel.priced?.netTotalAud ?? null}
               cheapestSellAud={drawerCheapest?.sell ?? detailHotel.priced?.sellTotalAud ?? null}
+              roomRates={rates}
               onSaved={(row, opts) => {
                 refreshControl(detailHotel.id, row);
                 // Markup changed → re-fetch rates bypassing the backend cache so
@@ -2925,6 +2926,8 @@ type ScopedMarkup = {
   // price in the rate list. Null on a markup that covers a board at the whole
   // hotel.
   room_name?: string | null;
+  // Set on a room-type markup: every room whose name contains this phrase.
+  room_name_contains?: string | null;
   rule_name?: string;
 };
 
@@ -2937,12 +2940,13 @@ const MEAL_PLAN_CHOICES: Array<{ value: string; label: string }> = [
 ];
 
 // Short name for the markup that priced a rate, shown under its %.
-function markupScopeLabel(scope: { kind: string; ratePlans?: string[]; roomName?: string | null; other?: boolean } | null | undefined): string | null {
+function markupScopeLabel(scope: { kind: string; ratePlans?: string[]; roomName?: string | null; roomNameContains?: string | null; other?: boolean } | null | undefined): string | null {
   if (!scope) return null;
   if (scope.kind === 'global') return 'default markup';
   if (scope.kind === 'hotel') return 'hotel markup';
   const plans = (scope.ratePlans || []).map((pl) => MEAL_PLAN_CHOICES.find((c) => c.value === pl)?.label || pl);
   if (scope.roomName) return `${scope.roomName}${plans.length ? `, ${plans.join(', ')}` : ''} markup`;
+  if (scope.roomNameContains) return `"${scope.roomNameContains}" rooms${plans.length ? `, ${plans.join(', ')}` : ''} markup`;
   if (plans.length) return `${plans.join(', ')} markup`;
   return 'special markup';
 }
@@ -3201,8 +3205,277 @@ function InlineNote({ hotelId, note, userEmail, onSaved }: {
   );
 }
 
-function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNetAud, cheapestSellAud, onSaved, onCloseDrawer }: {
+// Room name reduced to plain lowercase words, accents dropped. Mirrors the
+// engine's roomPhraseWords so the preview reaches exactly the rooms the saved
+// markup will.
+function roomWords(v?: string | null): string {
+  return String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function nameHasPhrase(name: string | null | undefined, phrase: string): boolean {
+  const want = roomWords(phrase);
+  const got = roomWords(name);
+  return !!want && !!got && (` ${got} `).includes(` ${want} `);
+}
+function rateHasPhrase(r: AdminRate, phrase: string): boolean {
+  return [r.roomTypeName, r.roomGroupName, r.displayRoomName].some((n) => nameHasPhrase(n, phrase));
+}
+
+// Words two or more rooms share but not every room, e.g. "canal view" at
+// All'Angelo. Offered as one-click picks for the "Room name contains" field.
+function sharedRoomPhrases(names: string[]): string[] {
+  const STOP = new Set(['room', 'with', 'and', 'the', 'a', 'of', 'bed', 'beds', 'or', 'in']);
+  const distinct = Array.from(new Set(names.map(roomWords).filter(Boolean)));
+  if (distinct.length < 2) return [];
+  const counts = new Map<string, number>();
+  for (const n of distinct) {
+    const w = n.split(' ');
+    const seen = new Set<string>();
+    for (let len = 1; len <= 3; len++) {
+      for (let i = 0; i + len <= w.length; i++) {
+        const part = w.slice(i, i + len);
+        if (STOP.has(part[0]) || STOP.has(part[part.length - 1]) || /^\d+$/.test(part.join(''))) continue;
+        seen.add(part.join(' '));
+      }
+    }
+    seen.forEach((p) => counts.set(p, (counts.get(p) || 0) + 1));
+  }
+  return Array.from(counts.entries())
+    .filter(([p, c]) => c >= 2 && c < distinct.length && p.length >= 3)
+    // Longer phrases first ("canal view" before "canal"), then the more common.
+    .sort((a, b) => b[0].split(' ').length - a[0].split(' ').length || b[1] - a[1])
+    .filter(([p], i, arr) => !arr.slice(0, i).some(([q]) => q.includes(p) && counts.get(q) === counts.get(p)))
+    .slice(0, 8)
+    .map(([p]) => p);
+}
+
+/**
+ * "By room type" markups (Tina, 2026-11-28: "i really need the ability to mark
+ * up individual room type"). One figure for every room whose name contains a
+ * phrase, whatever bed type or meal plan the supplier names it with. A room
+ * priced on its own (Price beside a rate) still keeps that price.
+ */
+function RoomTypeMarkups({ hotelId, hotelName, userEmail, rates, rules, onChanged, onRemove }: {
   hotelId: number;
+  hotelName: string;
+  userEmail: string;
+  rates: AdminRate[];
+  rules: ScopedMarkup[];
+  onChanged: () => void;
+  onRemove: (ruleId: number) => void;
+}) {
+  const [phrase, setPhrase] = useState('');
+  const [pct, setPct] = useState('');
+  const [plans, setPlans] = useState<string[]>([]);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const suggestions = useMemo(
+    () => sharedRoomPhrases(rates.map((r) => r.roomTypeName || '')),
+    [rates]
+  );
+
+  // Cheapest loaded rate per room + meal plan, for the preview.
+  const preview = useMemo(() => {
+    const p = phrase.trim();
+    if (roomWords(p).length < 3) return null;
+    const pctNum = Number(pct);
+    const best = new Map<string, AdminRate>();
+    let others = 0;
+    const otherNames = new Set<string>();
+    for (const r of rates) {
+      const sell = Number(r.pricing?.aud?.totalAmount);
+      if (!(sell > 0)) continue;
+      const onPlan = !plans.length || plans.includes(String(r.ratePlan || '').toLowerCase());
+      if (!rateHasPhrase(r, p) || !onPlan) { otherNames.add(r.roomTypeName); continue; }
+      const key = `${r.roomTypeName}|${r.ratePlan}`;
+      const cur = best.get(key);
+      if (!cur || sell < Number(cur.pricing?.aud?.totalAmount)) best.set(key, r);
+    }
+    others = otherNames.size;
+    const rows = Array.from(best.values())
+      .sort((a, b) => (a.roomTypeName || '').localeCompare(b.roomTypeName || '') || Number(a.pricing?.aud?.totalAmount) - Number(b.pricing?.aud?.totalAmount))
+      .map((r) => {
+        const before = Number(r.pricing?.aud?.totalAmount);
+        const net = Number(r.pricing?.net?.aud?.totalAmount);
+        // A room priced on its own keeps that price; this markup sits under it.
+        const ownPrice = !!r.pricing?.markup?.ruleScope?.roomName;
+        const after = !ownPrice && Number.isFinite(pctNum) && pct !== '' && net > 0
+          ? Math.round(net * (1 + pctNum / 100))
+          : null;
+        return { r, before, after, ownPrice };
+      });
+    return { rows, others };
+  }, [phrase, pct, plans, rates]);
+
+  function startEdit(rule: ScopedMarkup) {
+    setEditingId(rule.id);
+    setPhrase(rule.room_name_contains || '');
+    setPct(String(rule.markup_percentage));
+    setPlans(rule.rate_plans || []);
+    setErr(null);
+  }
+  function reset() {
+    setEditingId(null); setPhrase(''); setPct(''); setPlans([]);
+  }
+
+  async function save() {
+    const n = Number(pct);
+    if (!Number.isFinite(n) || roomWords(phrase).length < 3) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/pricing/markup?hotelId=${hotelId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(userEmail ? { 'X-Consultant-Email': userEmail } : {}),
+        },
+        body: JSON.stringify({
+          markup_percentage: n,
+          hotel_name: hotelName || undefined,
+          room_name_contains: phrase.trim(),
+          ...(plans.length ? { rate_plans: plans } : {}),
+          ...(editingId != null ? { replaces_rule_id: editingId } : {}),
+        }),
+      });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(j?.details || j?.message || j?.error || `HTTP ${res.status}`);
+      reset();
+      onChanged();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Could not save');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const planLabel = (pl: string) => MEAL_PLAN_CHOICES.find((c) => c.value === pl)?.label || pl;
+  const canSave = !busy && pct !== '' && Number.isFinite(Number(pct)) && roomWords(phrase).length >= 3;
+
+  return (
+    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--c-line)' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--c-fg-muted)', marginBottom: 4 }}>
+        By room type
+      </div>
+
+      {rules.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 6, fontSize: 12 }}>
+          {rules.map((rule) => (
+            <div key={rule.id} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span>
+                <strong>{fmtPct(rule.markup_percentage)}</strong>{' — rooms with '}
+                <strong>&ldquo;{rule.room_name_contains}&rdquo;</strong>{' in the name, '}
+                {rule.rate_plans.length ? rule.rate_plans.map(planLabel).join(', ') : 'any meal plan'}
+              </span>
+              <button type="button" className="c-btn" style={{ padding: '1px 7px', fontSize: 10.5 }} onClick={() => startEdit(rule)}>
+                Edit
+              </button>
+              <button type="button" className="c-btn" style={{ padding: '1px 7px', fontSize: 10.5 }}
+                onClick={() => { if (editingId === rule.id) reset(); onRemove(rule.id); }}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input className="c-input" type="text" style={{ flex: '1 1 180px', minWidth: 160, maxWidth: 260 }}
+          aria-label="Room name contains"
+          value={phrase} onChange={(e) => setPhrase(e.target.value)} placeholder="Room name contains, e.g. canal view" />
+        <input className="c-input" type="number" step="0.1" style={{ maxWidth: 96 }}
+          aria-label="Markup %"
+          value={pct} onChange={(e) => setPct(e.target.value)} placeholder="%" />
+      </div>
+
+      {suggestions.length > 0 && (
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>This hotel&apos;s rooms:</span>
+          {suggestions.map((s) => {
+            const on = roomWords(phrase) === s;
+            return (
+              <button key={s} type="button" className="c-btn"
+                style={{ fontSize: 11, padding: '2px 8px', background: on ? 'var(--c-accent)' : undefined, color: on ? '#fff' : undefined }}
+                onClick={() => setPhrase(s)}>
+                {s}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
+        <span style={{ fontSize: 11, color: 'var(--c-fg-muted)' }}>Only these meal plans (optional):</span>
+        {MEAL_PLAN_CHOICES.map((c) => {
+          const on = plans.includes(c.value);
+          return (
+            <button key={c.value} type="button" className="c-btn"
+              style={{ fontSize: 11, padding: '2px 8px', background: on ? 'var(--c-accent)' : undefined, color: on ? '#fff' : undefined }}
+              onClick={() => setPlans((prev) => on ? prev.filter((x) => x !== c.value) : [...prev, c.value])}>
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {preview && (
+        <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 6, border: '1px solid var(--c-line)', background: 'var(--c-bg-soft)', fontSize: 12 }}>
+          {preview.rows.length === 0 ? (
+            <div style={{ color: 'var(--c-fg-muted)' }}>
+              {rates.length ? 'No room on these dates has that in its name.' : 'Search dates to see which rooms this covers.'}
+            </div>
+          ) : (
+            <>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                {preview.rows.length === 1 ? '1 rate on these dates' : `${preview.rows.length} rates on these dates`} (cheapest per room and meal plan, AUD total)
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {preview.rows.map(({ r, before, after, ownPrice }) => (
+                  <div key={r.rateKey} style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                    <span style={{ minWidth: 0 }}>{r.roomTypeName} <span style={{ color: 'var(--c-fg-muted)' }}>· {planLabel(r.ratePlan)}</span></span>
+                    <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                      {fmtMoney(Math.round(before))}
+                      {ownPrice
+                        ? <span style={{ color: 'var(--c-fg-muted)' }}> · keeps its own price</span>
+                        : after != null && <> → <strong>{fmtMoney(after)}</strong></>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {preview.others > 0 && (
+            <div style={{ marginTop: 4, color: 'var(--c-fg-muted)' }}>
+              {preview.others === 1 ? '1 other room keeps' : `${preview.others} other rooms keep`} the markup above.
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
+        <button type="button" className="c-btn c-btn-primary" style={{ fontSize: 11, padding: '3px 10px' }}
+          disabled={!canSave} onClick={save}>
+          {busy ? 'Saving…' : editingId != null ? 'Save changes' : 'Save room type'}
+        </button>
+        {editingId != null && (
+          <button type="button" className="c-btn" style={{ fontSize: 11, padding: '3px 10px' }} onClick={reset}>Cancel</button>
+        )}
+      </div>
+      <div style={{ marginTop: 4, fontSize: 11, color: 'var(--c-fg-muted)' }}>
+        Covers every room with these words in its name, whatever the bed type. A rate you price on its own keeps its price.
+      </div>
+      {err && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--c-warning, #b45309)' }}>{err}</div>}
+    </div>
+  );
+}
+
+function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNetAud, cheapestSellAud, roomRates, onSaved, onCloseDrawer }: {
+  hotelId: number;
+  /** Rates loaded in the drawer, so a room-type markup can show which rooms
+      it reaches and what they would sell for. */
+  roomRates?: AdminRate[];
   hotelName: string;
   /** What the supplier says, so the star override can show what it overrules. */
   supplierStars?: number | null;
@@ -3918,9 +4191,9 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNet
                     <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--c-fg-muted)', marginBottom: 4 }}>
                       By meal plan
                     </div>
-                    {scopedMarkups.length > 0 && (
+                    {scopedMarkups.some((sm) => !sm.room_name_contains) && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 6, fontSize: 12 }}>
-                        {scopedMarkups.map((sm) => (
+                        {scopedMarkups.filter((sm) => !sm.room_name_contains).map((sm) => (
                           <div key={sm.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <span>
                               <strong>{fmtPct(sm.markup_percentage)}</strong>{' — '}
@@ -3974,6 +4247,15 @@ function ManagePanel({ hotelId, hotelName, supplierStars, userEmail, cheapestNet
                     </div>
                     {scopedErr && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--c-warning, #b45309)' }}>{scopedErr}</div>}
                   </div>
+                  <RoomTypeMarkups
+                    hotelId={hotelId}
+                    hotelName={hotelName}
+                    userEmail={userEmail}
+                    rates={roomRates || []}
+                    rules={scopedMarkups.filter((sm) => !!sm.room_name_contains)}
+                    onChanged={() => { loadMarkupHistory(); onSaved(null, { pricingChanged: true }); }}
+                    onRemove={removeScopedMarkup}
+                  />
                   {markupHistory.length > 0 && (
                     <div style={{ marginTop: 6, fontSize: 11, color: 'var(--c-fg-muted)', display: 'flex', flexDirection: 'column', gap: 2 }}>
                       {markupHistory.slice(0, 5).map((h) => (
