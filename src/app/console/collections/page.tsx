@@ -147,6 +147,9 @@ interface CollectionFull {
   /** Load More list under the curated hotels (null = off). Absent when the
    *  hotel-api predates it, and then never sent back on save. */
   moreRule?: MoreRule | null;
+  /** Team-only note (never on the website; the AI assistant reads it).
+   *  Absent until the hotel-api has the column, and then never sent on save. */
+  internalNotes?: string | null;
   status: 'draft' | 'published'; hotels: CollectionHotel[];
   sections?: CollectionSection[];
   tags?: string[];
@@ -355,7 +358,13 @@ export default function CollectionsPage() {
       const r = await fetch(`${HOTEL_API}/api/collections/${encodeURIComponent(slug)}?includeHidden=true`, { cache: 'no-store' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      setEditing({ ...BLANK, ...d, intro: d.intro || [], hotels: keepSistersTogether(d.hotels || []), tags: d.tags || [] });
+      // The internal note is not on the public read; it comes from the
+      // key-guarded admin endpoint, and only once the column exists.
+      const adm = d.id
+        ? await fetch(`/api/admin/collections/${d.id}/admin`, { cache: 'no-store' }).then((x) => x.json()).catch(() => ({}))
+        : {};
+      const notes = adm && 'internalNotes' in adm ? { internalNotes: adm.internalNotes ?? '' } : {};
+      setEditing({ ...BLANK, ...d, ...notes, intro: d.intro || [], hotels: keepSistersTogether(d.hotels || []), tags: d.tags || [] });
       setOriginalSlug(d.slug || slug);
       syncUrl(d.slug || slug);
     } catch (e) {
@@ -396,6 +405,7 @@ export default function CollectionsPage() {
         // Only when the API sent it: an older hotel-api would otherwise have
         // its rule cleared by a save that never saw it.
         ...('moreRule' in editing ? { moreRule: editing.moreRule ?? null } : {}),
+        ...('internalNotes' in editing ? { internalNotes: editing.internalNotes || null } : {}),
       };
       const renamed = !!editing.id && !!originalSlug && slugify(editing.slug) !== originalSlug;
       if (renamed && !confirm(
@@ -979,6 +989,14 @@ function CollectionEditor({ value, onChange, onSave, onCancel, onDelete, busy, o
         <Field label="Travel guide button — URL (opens in a new tab)"><input className="c-input" value={value.travelGuideUrl || ''} onChange={(e) => set({ travelGuideUrl: e.target.value })} placeholder="https://firstclass.com.au/destination/…" /></Field>
         <Field label="Quote / reference"><input className="c-input" value={value.quoteRef || ''} onChange={(e) => set({ quoteRef: e.target.value })} /></Field>
       </div>
+      )}
+
+      {'internalNotes' in value && (
+        <Field label="Internal note — team and AI assistant only, never shown on the website (e.g. properties we sell but that are not online yet)">
+          <textarea className="c-input" rows={3} value={value.internalNotes || ''}
+            onChange={(e) => set({ internalNotes: e.target.value })}
+            placeholder="Pinetrees Lodge — not on RateHawk yet, we can book it direct." />
+        </Field>
       )}
 
       {/* Named groups on the page. Most collections have none; Istanbul has
